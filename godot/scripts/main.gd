@@ -130,11 +130,7 @@ func open_lobby() -> void:
 
 # 입장 시 소지품은 위험에 노출됨 (탈출해야 돌아옴)
 func _take_loadout() -> Dictionary:
-	var s: Dictionary = SaveData.data
-	var lo := {"cls": s.cls, "equipment": s.equipment.duplicate(), "bag": s.bag.duplicate()}
-	s.equipment = {"weapon": null, "head": null, "chest": null, "trinket": null}
-	s.bag = []
-	s.stats.raids += 1
+	var lo := Account.take_loadout(SaveData.data)
 	SaveData.save()
 	return lo
 
@@ -143,15 +139,7 @@ func _take_loadout() -> Dictionary:
 func _restore_loadout() -> void:
 	if pending_loadout == null:
 		return
-	var s: Dictionary = SaveData.data
-	for k in pending_loadout.equipment:
-		if pending_loadout.equipment[k] != null:
-			if s.equipment[k] == null:
-				s.equipment[k] = pending_loadout.equipment[k]
-			else:
-				s.stash.append(pending_loadout.equipment[k])
-	s.bag.append_array(pending_loadout.bag)
-	s.stats.raids = maxi(0, s.stats.raids - 1)
+	Account.restore_loadout(SaveData.local_data, pending_loadout)
 	SaveData.save()
 	pending_loadout = null
 
@@ -198,7 +186,8 @@ func _create_game() -> void:
 
 # ------------------------------------------------------------------ 함께하기
 func _on_net_prepare() -> void:
-	if mode != "lobby":
+	# 온라인 서버 계정이면 서버가 계정에서 직접 장비를 꺼낸다
+	if mode != "lobby" or SaveData.online:
 		return
 	pending_loadout = _take_loadout()
 	Net.send_loadout(pending_loadout)
@@ -251,7 +240,7 @@ func _on_net_disconnected(reason: String) -> void:
 	UI.toast(reason)
 	if mode == "raid" and game != null and game.net == "client":
 		# 레이드 중 끊기면 사망과 같음 (소지품 손실)
-		if game.result == null:
+		if game.result == null and not SaveData.online:
 			SaveData.data.stats.deaths += 1
 			SaveData.save()
 		Net.game = null
@@ -271,14 +260,20 @@ func _run_dedicated(args: PackedStringArray) -> void:
 	var port := Net.PORT
 	if args.has("--port"):
 		port = int(args[args.find("--port") + 1])
-	var err := Net.host(port, "서버", true)
+	# 계정 DB 위치 (기본: user://accounts). --no-accounts 면 각자 PC 저장 파일 사용
+	var acc_dir := ProjectSettings.globalize_path("user://accounts")
+	if args.has("--accounts"):
+		acc_dir = args[args.find("--accounts") + 1]
+	if args.has("--no-accounts"):
+		acc_dir = ""
+	var err := Net.host(port, "서버", true, acc_dir)
 	if err != "":
 		printerr(err)
 		get_tree().quit(1)
 		return
 	if args.has("--pvp"):
 		Net.pvp = true
-	print("[server] Dungeon Reborn 전용 서버 - UDP 포트 %d. 가장 먼저 접속한 사람이 레이드를 시작합니다." % port)
+	print("[server] Dungeon Reborn 전용 서버 - UDP 포트 %d, 계정 %s. 가장 먼저 접속한 사람이 레이드를 시작합니다." % [port, "서버 저장" if acc_dir != "" else "각자 PC 저장"])
 
 
 func _on_setting(key: String, value) -> void:
@@ -410,25 +405,11 @@ func _on_raid_ended(r: Dictionary) -> void:
 
 func _on_results_continue() -> void:
 	var r = last_result
-	var s: Dictionary = SaveData.data
-	if r != null:
-		s.stats.kills += r.kills
-		s.stats.pvp_kills += r.pvp_kills
-		if r.success:
-			s.stats.extracts += 1
-			s.stats.best_haul = maxi(int(s.stats.best_haul), int(r.value))
-			s.equipment = r.equipment.duplicate()
-			var sold := 0
-			for it in r.bag:
-				if s.stash.size() < SaveData.STASH_SIZE:
-					s.stash.append(it)
-				else:
-					s.gold += it.value
-					sold += it.value
-			if sold > 0:
-				UI.toast("보관함이 가득 차 남은 물건을 %dg에 판매했습니다" % sold)
-		else:
-			s.stats.deaths += 1
+	# 온라인 서버 계정은 서버가 이미 결과를 반영해 보내 줌
+	if r != null and not SaveData.online:
+		var msg := Account.apply_result(SaveData.data, r)
+		if msg != "":
+			UI.toast(msg)
 		SaveData.save()
 	last_result = null
 	if game:
@@ -576,6 +557,15 @@ func _skill_shots(dir: String, g, p, m) -> void:
 func _autotest() -> void:
 	print("[autotest] 시작")
 	var out := []
+	# 데이터 검사: 상점/기본 무기가 모두 존재하는 아이템인지 (상점 진입 오류 방지)
+	var missing := []
+	for e in Account.SHOP:
+		if not Data.ITEM_BASES.has(e[0]):
+			missing.append(e[0])
+	for c in Data.STARTER_WEAPON:
+		if not Data.ITEM_BASES.has(Data.STARTER_WEAPON[c]):
+			missing.append(Data.STARTER_WEAPON[c])
+	out.append("데이터 검사: 없는 아이템 %s" % (str(missing) if missing.size() else "없음"))
 	for cls in Data.CLASS_ORDER:
 		SaveData.data.cls = cls
 		SaveData.data.equipment.weapon = Data.make_item(Data.STARTER_WEAPON[cls])
@@ -716,6 +706,8 @@ func _mptest(role: String) -> void:
 	SaveData.data.bag = [Data.make_item("health_potion")]
 	if role == "host":
 		await _mptest_host(port)
+	elif role == "account":
+		await _mptest_account(port)
 	else:
 		await _mptest_client(port)
 	print("[mptest] 완료")
@@ -899,3 +891,49 @@ func _mptest_client(port: int) -> void:
 	_on_results_continue()
 	print("[mptest] 보관함 %d -> %d" % [stash0, SaveData.data.stash.size()])
 	await _wait(1.0)
+
+
+# 온라인 서버 계정 테스트 (전용 서버: --server --port 7790 --accounts <폴더>)
+func _mptest_account(port: int) -> void:
+	if OS.get_cmdline_user_args().has("--port"):
+		port = int(OS.get_cmdline_user_args()[OS.get_cmdline_user_args().find("--port") + 1])
+	var nm := "계정테스트%d" % (randi() % 1000)
+	var login := func(pin: String) -> bool:
+		Net.join("127.0.0.1", port, nm, pin)
+		var t := 0.0
+		while not SaveData.online and Net.online() and t < 8.0:
+			await _wait(0.1)
+			t += 0.1
+		return SaveData.online
+	var local_gold: int = SaveData.local_data.gold
+	var ok: bool = await login.call("1234")
+	print("[mptest] 로그인(새 계정) %s, 서버 골드 %d, 장비 무기 %s" % [ok, SaveData.data.gold, SaveData.data.equipment.weapon != null])
+	var g0: int = SaveData.data.gold
+	SaveData.op("buy", ["health_potion"])
+	SaveData.op("buy", ["short_bow"]) # 없는 물건: 서버가 거부해야 함
+	await _wait(1.0)
+	print("[mptest] 서버 상점 구매: 골드 %d -> %d (로컬 저장 골드 %d 그대로: %s)" % [g0, SaveData.data.gold, local_gold, SaveData.local_data.gold == local_gold])
+	# 레이드 시작 후 접속 끊기 -> 서버가 사망 처리, 장비 손실
+	start_raid()
+	var t := 0.0
+	while (game == null or not game.running) and t < 10.0:
+		await _wait(0.1)
+		t += 0.1
+	print("[mptest] 레이드 입장 %s, 입장 후 서버 계정 무기 %s (서버가 꺼냄)" % [game != null, SaveData.data.equipment.weapon])
+	await _wait(1.0)
+	Net.leave()
+	if game:
+		Net.game = null
+		game.queue_free()
+		game = null
+		hud.queue_free()
+		hud = null
+	open_lobby()
+	await _wait(1.0)
+	ok = await login.call("9999")
+	print("[mptest] 틀린 PIN 로그인 거부: %s (%s)" % [not ok, Net.status])
+	await _wait(0.5)
+	ok = await login.call("1234")
+	print("[mptest] 재로그인 %s: 사망 %d, 입장 %d, 무기 %s, 골드 %d" % [ok, SaveData.data.stats.deaths, SaveData.data.stats.raids, SaveData.data.equipment.weapon, SaveData.data.gold])
+	Net.leave()
+	await _wait(0.5)

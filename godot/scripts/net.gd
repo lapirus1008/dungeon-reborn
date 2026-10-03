@@ -12,7 +12,7 @@ signal server_begin(loadouts: Dictionary) # 서버: 모든 장비가 모였으�
 signal disconnected(reason: String)
 
 const PORT := 7777
-const VERSION := "dr-mp-1"
+const VERSION := "dr-mp-2"
 const MAX_PLAYERS := 8
 
 var mode := "offline" # offline | host | server(전용) | client
@@ -24,6 +24,11 @@ var status := ""
 var loadouts := {}
 var preparing := false
 var prepare_left := 0.0
+# 온라인 서버 계정 (전용 서버가 계정 DB를 가지고 있을 때)
+var accounts: AccountStore = null # 서버: 계정 DB
+var peer_acct := {} # 서버: peer_id -> 계정 이름
+var pin := "" # 클라이언트: 로그인 PIN
+var account_mode := false # 클라이언트: 접속한 서버가 계정 서버
 
 
 func _ready() -> void:
@@ -70,7 +75,7 @@ func _set_status(t: String) -> void:
 
 
 # ------------------------------------------------------------------ 접속
-func host(port: int, pname: String, dedicated := false) -> String:
+func host(port: int, pname: String, dedicated := false, accounts_dir := "") -> String:
 	leave()
 	var peer := ENetMultiplayerPeer.new()
 	var err := peer.create_server(port, MAX_PLAYERS)
@@ -81,6 +86,10 @@ func host(port: int, pname: String, dedicated := false) -> String:
 	mode = "server" if dedicated else "host"
 	my_name = pname
 	roster = {}
+	peer_acct = {}
+	accounts = AccountStore.new(accounts_dir) if accounts_dir != "" else null
+	if accounts != null:
+		print("[net] 계정 DB: ", accounts_dir)
 	if not dedicated:
 		roster[1] = {"name": pname, "cls": SaveData.data.cls, "state": "lobby"}
 	_set_status("포트 %d 에서 %s 대기 중" % [port, "전용 서버" if dedicated else "호스트"])
@@ -88,7 +97,7 @@ func host(port: int, pname: String, dedicated := false) -> String:
 	return ""
 
 
-func join(address: String, port: int, pname: String) -> String:
+func join(address: String, port: int, pname: String, pin_code := "") -> String:
 	leave()
 	var peer := ENetMultiplayerPeer.new()
 	var err := peer.create_client(address, port)
@@ -98,6 +107,7 @@ func join(address: String, port: int, pname: String) -> String:
 	multiplayer.multiplayer_peer = peer
 	mode = "client"
 	my_name = pname
+	pin = pin_code
 	roster = {}
 	_set_status("%s:%d 에 접속 중..." % [address, port])
 	return ""
@@ -111,6 +121,12 @@ func leave() -> void:
 	mode = "offline"
 	roster = {}
 	preparing = false
+	account_mode = false
+	if accounts != null:
+		for id in peer_acct:
+			accounts.unload(peer_acct[id])
+	peer_acct = {}
+	SaveData.leave_account()
 	if was != "offline":
 		_set_status("오프라인")
 		roster_changed.emit()
@@ -118,7 +134,7 @@ func leave() -> void:
 
 func _on_connected() -> void:
 	_set_status("접속 완료 - 호스트가 레이드를 시작하길 기다리는 중")
-	hello.rpc_id(1, my_name, SaveData.data.cls, VERSION)
+	hello.rpc_id(1, my_name, SaveData.data.cls, VERSION, pin)
 
 
 func _on_failed() -> void:
@@ -141,26 +157,45 @@ func _on_peer_disconnected(id: int) -> void:
 	if not is_server():
 		return
 	var nm: String = roster.get(id, {}).get("name", "?")
+	if game != null and is_instance_valid(game):
+		game.on_peer_left(id) # 계정 결과(사망) 반영 후 정리
 	roster.erase(id)
 	loadouts.erase(id)
-	if game != null and is_instance_valid(game):
-		game.on_peer_left(id)
+	if peer_acct.has(id):
+		accounts.unload(peer_acct[id])
+		peer_acct.erase(id)
 	_set_status("%s 님이 나갔습니다" % nm)
 	push_roster()
 
 
 # ------------------------------------------------------------------ 대기실
 @rpc("any_peer", "reliable")
-func hello(pname: String, cls: String, ver: String) -> void:
+func hello(pname: String, cls: String, ver: String, pin_code: String) -> void:
 	if not is_server():
 		return
 	var id := multiplayer.get_remote_sender_id()
 	if ver != VERSION:
-		kicked.rpc_id(id, "게임 버전이 다릅니다 (서버 %s)" % VERSION)
+		kicked.rpc_id(id, "게임 버전이 다릅니다 (서버 %s). 최신 버전으로 업데이트하세요" % VERSION)
 		return
 	var nm := pname.strip_edges().left(16)
 	if nm == "":
 		nm = "모험가%d" % (roster.size() + 1)
+	if accounts != null:
+		# 온라인 서버: 이름 + PIN 으로 로그인 (없으면 새 계정)
+		for other in peer_acct:
+			if AccountStore.key_of(peer_acct[other]) == AccountStore.key_of(nm):
+				kicked.rpc_id(id, "이미 접속 중인 계정입니다")
+				return
+		var r := accounts.login(nm, pin_code)
+		if not r.ok:
+			kicked.rpc_id(id, r.msg)
+			return
+		nm = r.name
+		peer_acct[id] = nm
+		cls = r.data.cls
+		account_sync.rpc_id(id, nm, r.data, {"msg": "새 계정을 만들었습니다 (서버에 저장됩니다)" if r.created else "%s 계정으로 로그인했습니다" % nm})
+	elif not Data.CLASSES.has(cls):
+		cls = "fighter"
 	roster[id] = {"name": nm, "cls": cls, "state": "lobby"}
 	_set_status("%s 님이 들어왔습니다" % nm)
 	push_roster()
@@ -189,6 +224,8 @@ func set_roster(r: Dictionary, pvp_flag: bool) -> void:
 
 # 로비에서 직업을 바꾸면 대기실 목록에 반영
 func update_class(cls: String) -> void:
+	if account_mode:
+		return # 계정 서버는 select_class 조작으로 반영
 	if mode == "host":
 		if roster.has(1):
 			roster[1].cls = cls
@@ -200,7 +237,7 @@ func update_class(cls: String) -> void:
 @rpc("any_peer", "reliable")
 func set_class(cls: String) -> void:
 	var id := multiplayer.get_remote_sender_id()
-	if is_server() and roster.has(id) and Data.CLASSES.has(cls):
+	if is_server() and accounts == null and roster.has(id) and Data.CLASSES.has(cls):
 		roster[id].cls = cls
 		push_roster()
 
@@ -235,6 +272,17 @@ func req_start() -> void:
 
 func server_prepare(local_loadout) -> void:
 	if preparing or raid_running():
+		return
+	if accounts != null:
+		# 온라인 서버: 서버가 각 계정에서 직접 장비를 꺼낸다 (클라이언트가 보낸 장비를 믿지 않음)
+		loadouts = {}
+		for id in roster:
+			if roster[id].state == "lobby" and peer_acct.has(id):
+				var d: Dictionary = accounts.get_data(peer_acct[id])
+				loadouts[id] = Account.take_loadout(d)
+				accounts.save(peer_acct[id])
+				_sync_account(id, {})
+		_begin()
 		return
 	preparing = true
 	loadouts = {}
@@ -408,3 +456,50 @@ func s_ev(n: String, args: Array) -> void:
 func s_evu(n: String, args: Array) -> void:
 	if game != null and is_instance_valid(game):
 		game.net_event(n, args)
+
+
+# ------------------------------------------------------------------ 온라인 서버 계정
+func _sync_account(id: int, res: Dictionary) -> void:
+	if peer_acct.has(id) and _alive(id):
+		account_sync.rpc_id(id, peer_acct[id], accounts.get_data(peer_acct[id]), res)
+
+
+@rpc("authority", "reliable")
+func account_sync(nm: String, d: Dictionary, res: Dictionary) -> void:
+	account_mode = true
+	SaveData.use_account(nm, d)
+	SaveData.show_result(res)
+
+
+# 클라이언트: 로비 조작을 서버로
+func account_op(op: String, args: Array) -> void:
+	if is_client():
+		c_account_op.rpc_id(1, op, args)
+
+
+@rpc("any_peer", "reliable")
+func c_account_op(op: String, args: Array) -> void:
+	var id := multiplayer.get_remote_sender_id()
+	if not is_server() or accounts == null or not peer_acct.has(id) or not roster.has(id):
+		return
+	if roster[id].state == "raid" or op.length() > 32 or args.size() > 4:
+		return
+	var nm: String = peer_acct[id]
+	var d: Dictionary = accounts.get_data(nm)
+	var res := Account.apply(d, op, args)
+	if res.ok:
+		accounts.save(nm)
+		if op == "select_class":
+			roster[id].cls = d.cls
+			push_roster()
+	_sync_account(id, res)
+
+
+# 서버: 레이드 결과를 계정에 반영 (탈출 전리품 / 사망 손실)
+func on_player_result(id: int, r: Dictionary) -> void:
+	if accounts == null or not peer_acct.has(id):
+		return
+	var d: Dictionary = accounts.get_data(peer_acct[id])
+	var msg := Account.apply_result(d, r)
+	accounts.save(peer_acct[id])
+	_sync_account(id, {"msg": msg})

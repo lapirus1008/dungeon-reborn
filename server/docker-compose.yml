@@ -1,0 +1,13 @@
+# 클라우드 서버(AWS Lightsail/EC2 등)에서: docker compose -f server/docker-compose.yml up -d --build
+services:
+  dungeon-reborn:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "7777:7777/udp"
+    volumes:
+      - ./data:/data
+    # 개인전 서버로 열려면 아래 주석을 풀기
+    # command: ["godot", "--headless", "--path", "/game", "--", "--server", "--port", "7777", "--accounts", "/data/accounts", "--pvp"]

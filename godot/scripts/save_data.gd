@@ -1,12 +1,19 @@
 # 저장 데이터: 보관함, 골드, 장비, 통계, 설정 (autoload: SaveData)
+# - 오프라인/호스트: 내 PC의 user://save.json
+# - 온라인 서버 로그인 중: 서버 계정 DB가 원본. 로비 조작은 서버로 보내고 결과를 받아 표시 (설정만 로컬)
 extends Node
+
+signal changed
+
+const STASH_SIZE := Account.STASH_SIZE
+const BAG_SIZE := Account.BAG_SIZE
 
 # 한 PC에서 여러 개 실행해 함께하기를 시험할 때: -- --profile 이름  (저장 파일 분리)
 var PATH := "user://save.json"
-const STASH_SIZE := 60
-const BAG_SIZE := 16
-
 var data: Dictionary = {}
+var local_data: Dictionary = {}
+var online := false # 온라인 서버 계정 사용 중
+var account_name := ""
 
 
 func _ready() -> void:
@@ -17,78 +24,71 @@ func _ready() -> void:
 
 
 func fresh() -> Dictionary:
-	return {
-		"cls": "fighter",
-		"gold": 150,
-		"equipment": {"weapon": Data.make_item("rusty_sword"), "head": null, "chest": Data.make_item("padded_tunic"), "trinket": null},
-		"bag": [Data.make_item("health_potion"), Data.make_item("health_potion")],
-		"stash": [Data.make_item("rusty_dagger"), Data.make_item("oak_staff"), Data.make_item("iron_mace"), Data.make_item("leather_cap"), Data.make_item("bandage"), Data.make_item("bandage")],
-		"stats": {"raids": 0, "extracts": 0, "deaths": 0, "kills": 0, "pvp_kills": 0, "best_haul": 0},
-		"settings": {"sensitivity": 1.0, "quality": "mid"},
-	}
+	return Account.fresh()
 
 
 func load_save() -> void:
-	var f := fresh()
+	var parsed = null
 	if FileAccess.file_exists(PATH):
-		var txt := FileAccess.get_file_as_string(PATH)
-		var parsed = JSON.parse_string(txt)
-		if parsed is Dictionary:
-			for k in f:
-				if parsed.has(k):
-					if f[k] is Dictionary and parsed[k] is Dictionary:
-						f[k].merge(parsed[k], true)
-					else:
-						f[k] = parsed[k]
-	# JSON은 정수를 float로 읽으므로 희귀도를 정수로 정리
-	for it in _all_items(f):
-		it["rarity"] = int(it["rarity"])
-		it["value"] = int(it["value"])
-		# 이전 버전 아이템(활 등)을 새 무기로 변환
-		if Data.LEGACY_ITEM.has(it["base"]):
-			it["base"] = Data.LEGACY_ITEM[it["base"]]
-	if Data.LEGACY_CLASS.has(f["cls"]):
-		f["cls"] = Data.LEGACY_CLASS[f["cls"]]
-	if not Data.CLASSES.has(f["cls"]):
-		f["cls"] = "fighter"
-	# 현재 직업이 쓸 수 없는 무기를 들고 있으면 보관함으로
-	var w = f["equipment"]["weapon"]
-	if w != null and not Data.can_equip(w, f["cls"]):
-		f["stash"].append(w)
-		f["equipment"]["weapon"] = null
-	# 알 수 없는 아이템 제거
-	f["stash"] = f["stash"].filter(func(it): return Data.ITEM_BASES.has(it["base"]))
-	f["bag"] = f["bag"].filter(func(it): return Data.ITEM_BASES.has(it["base"]))
-	data = f
-
-
-func _all_items(d: Dictionary) -> Array:
-	var out := []
-	for it in d["stash"]:
-		out.append(it)
-	for it in d["bag"]:
-		out.append(it)
-	for s in d["equipment"]:
-		if d["equipment"][s] != null:
-			out.append(d["equipment"][s])
-	return out
+		parsed = JSON.parse_string(FileAccess.get_file_as_string(PATH))
+	local_data = Account.normalize(parsed)
+	if not online:
+		data = local_data
 
 
 func save() -> void:
+	# 온라인 계정 데이터는 서버가 저장. 내 PC에는 로컬 저장만 기록
 	var f := FileAccess.open(PATH, FileAccess.WRITE)
 	if f:
-		f.store_string(JSON.stringify(data))
+		f.store_string(JSON.stringify(local_data))
 
 
 func reset() -> void:
-	data = fresh()
-	save()
+	op("reset", [])
+
+
+# 로비 조작 (Account.apply 규칙). 온라인이면 서버가 처리 후 계정 데이터를 돌려준다
+func op(name: String, args: Array = []) -> void:
+	if online:
+		Net.account_op(name, args)
+		return
+	var r := Account.apply(data, name, args)
+	if r.ok:
+		save()
+	show_result(r)
+	changed.emit()
+
+
+func show_result(r: Dictionary) -> void:
+	if r.get("msg", "") != "":
+		UI.toast(r.msg)
+	if r.get("sfx", "") != "":
+		Sfx.play(r.sfx)
+
+
+# 서버 계정으로 전환 / 서버가 보낸 최신 계정 데이터 반영
+func use_account(nm: String, d: Dictionary) -> void:
+	var settings: Dictionary = local_data.settings
+	data = Account.normalize(d)
+	data.settings = settings
+	online = true
+	account_name = nm
+	changed.emit()
+
+
+func leave_account() -> void:
+	if not online:
+		return
+	online = false
+	account_name = ""
+	data = local_data
+	changed.emit()
 
 
 func setting(key: String, default_value = null):
-	return data["settings"].get(key, default_value)
+	return local_data["settings"].get(key, default_value)
 
 
 func set_setting(key: String, value) -> void:
-	data["settings"][key] = value
+	local_data["settings"][key] = value
 	save()

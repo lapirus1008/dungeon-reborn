@@ -4,10 +4,7 @@ extends Control
 
 signal start_raid
 
-const SHOP := [
-	["health_potion", 30], ["bandage", 12], ["rusty_sword", 40], ["short_bow", 40],
-	["oak_staff", 40], ["leather_cap", 30], ["padded_tunic", 40],
-]
+const SHOP := Account.SHOP
 
 var tab := "stash"
 var class_box: VBoxContainer
@@ -24,6 +21,7 @@ var mp_name := ""
 var mp_addr := "127.0.0.1"
 var mp_port := Net.PORT
 var mp_msg := ""
+var mp_pin := ""
 
 
 func _ready() -> void:
@@ -171,6 +169,7 @@ func _ready() -> void:
 	mp_name = SaveData.setting("mp_name", "모험가%d" % randi_range(10, 99))
 	mp_addr = SaveData.setting("mp_addr", "127.0.0.1")
 	Net.roster_changed.connect(func(): if visible: refresh())
+	SaveData.changed.connect(func(): if visible: refresh())
 	Net.status_changed.connect(func(_t): if visible: refresh())
 	refresh()
 
@@ -185,7 +184,7 @@ func persist() -> void:
 
 func refresh() -> void:
 	var s := save()
-	gold_label.text = "💰 %d 골드" % s.gold
+	gold_label.text = ("☁ %s · " % SaveData.account_name if SaveData.online else "") + "💰 %d 골드" % s.gold
 	# 직업 카드: 2열 작은 카드 + 선택한 직업 상세 설명
 	UI.clear(class_box)
 	var grid := GridContainer.new()
@@ -340,9 +339,23 @@ func _render_online() -> void:
 		jh.add_child(addr_edit)
 		jh.add_child(UI.button("🔗 접속", _mp_join))
 		v.add_child(jh)
+		var ph := HBoxContainer.new()
+		ph.add_child(UI.label("PIN", 14, UI.MUTED))
+		var pin_edit := LineEdit.new()
+		pin_edit.secret = true
+		pin_edit.text = mp_pin
+		pin_edit.max_length = 32
+		pin_edit.placeholder_text = "온라인 서버 계정용 (친구 호스트면 비워 두기)"
+		pin_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		pin_edit.text_changed.connect(func(t): mp_pin = t)
+		ph.add_child(pin_edit)
+		v.add_child(ph)
+		v.add_child(UI.label("☁ 온라인 서버(클라우드)에 접속하면 이름+PIN이 계정이 되고, 보관함·골드·장비가 서버에 저장됩니다. 처음 접속하면 새 계정이 만들어집니다. 다른 곳에서 쓰는 비밀번호는 쓰지 마세요.", 12, UI.MUTED))
 	else:
 		var role := "호스트" if Net.mode == "host" else ("전용 서버 운영" if Net.mode == "server" else "접속함")
 		v.add_child(UI.label("%s · %s" % [role, Net.status], 13, Color("#8fd0ff")))
+		if SaveData.online:
+			v.add_child(UI.label("☁ 온라인 계정 '%s' — 보관함/장비/골드는 서버에 저장됩니다 (이 PC의 저장 파일은 그대로)" % SaveData.account_name, 13, Color("#9fe0a0")))
 		v.add_child(UI.title("대기실 (%d명)" % Net.roster.size()))
 		var ids := Net.roster.keys()
 		ids.sort()
@@ -384,7 +397,7 @@ func _mp_join() -> void:
 	if mp_addr == "":
 		mp_msg = "호스트 주소를 입력하세요"
 	else:
-		mp_msg = Net.join(mp_addr, mp_port, mp_name)
+		mp_msg = Net.join(mp_addr, mp_port, mp_name, mp_pin)
 	refresh()
 
 
@@ -422,6 +435,8 @@ func _render_shop() -> void:
 	for entry in SHOP:
 		var base: String = entry[0]
 		var price: int = entry[1]
+		if not Data.ITEM_BASES.has(base):
+			continue
 		var b: Dictionary = Data.ITEM_BASES[base]
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 10)
@@ -457,154 +472,46 @@ func _confirm_reset() -> void:
 	dlg.dialog_text = "모든 진행 상황을 삭제할까요?"
 	dlg.ok_button_text = "삭제"
 	dlg.cancel_button_text = "취소"
-	dlg.confirmed.connect(func():
-		SaveData.reset()
-		refresh())
+	dlg.confirmed.connect(func(): SaveData.reset())
 	add_child(dlg)
 	dlg.popup_centered()
 
 
+# 로비 조작은 SaveData.op -> Account 규칙 (온라인 서버면 서버가 처리)
 func _select_class(cid: String) -> void:
-	var s := save()
-	if s.cls == cid:
+	if save().cls == cid:
 		return
-	s.cls = cid
-	var w = s.equipment.weapon
-	if w != null and not Data.can_equip(w, cid):
-		s.stash.append(w)
-		s.equipment.weapon = null
-		UI.toast("무기가 보관함으로 이동했습니다")
-	# 보관함에 맞는 무기가 있고 무기 칸이 비었으면 자동 장착
-	if s.equipment.weapon == null:
-		for i in s.stash.size():
-			if Data.base_of(s.stash[i]).slot == "weapon" and Data.can_equip(s.stash[i], cid):
-				s.equipment.weapon = s.stash[i]
-				s.stash.remove_at(i)
-				break
-	Sfx.play("ui")
-	persist()
+	SaveData.op("select_class", [cid])
 	Net.update_class(cid)
-	refresh()
 
 
 func _unequip(slot: String) -> void:
-	var s := save()
-	var it = s.equipment[slot]
-	if it == null:
-		return
-	if s.stash.size() >= SaveData.STASH_SIZE:
-		UI.toast("보관함이 가득 찼습니다")
-		return
-	s.stash.append(it)
-	s.equipment[slot] = null
-	persist()
-	refresh()
+	SaveData.op("unequip", [slot])
 
 
 func _bag_to_stash(i: int) -> void:
-	var s := save()
-	if i >= s.bag.size():
-		return
-	if s.stash.size() >= SaveData.STASH_SIZE:
-		UI.toast("보관함이 가득 찼습니다")
-		return
-	s.stash.append(s.bag[i])
-	s.bag.remove_at(i)
-	persist()
-	refresh()
+	SaveData.op("bag_to_stash", [i])
 
 
 func _stash_click(i: int) -> void:
-	var s := save()
-	if i >= s.stash.size():
-		return
-	var it: Dictionary = s.stash[i]
-	var b := Data.base_of(it)
-	if Data.can_equip(it, s.cls):
-		var prev = s.equipment[b.slot]
-		s.equipment[b.slot] = it
-		s.stash.remove_at(i)
-		if prev != null:
-			s.stash.append(prev)
-	elif b.slot == "weapon":
-		UI.toast("%s 전용 무기입니다" % Data.class_names(b.classes))
-		return
-	else:
-		if s.bag.size() >= SaveData.BAG_SIZE:
-			UI.toast("가방이 가득 찼습니다")
-			return
-		s.stash.remove_at(i)
-		s.bag.append(it)
-	persist()
-	refresh()
+	SaveData.op("stash_click", [i])
 
 
 func _sell(i: int) -> void:
-	var s := save()
-	if i >= s.stash.size():
-		return
-	var it: Dictionary = s.stash[i]
-	s.stash.remove_at(i)
-	s.gold += it.value
-	Sfx.play("coin")
-	UI.toast("%s 판매: +%dg" % [Data.base_of(it).name, it.value])
-	persist()
-	refresh()
+	SaveData.op("sell", [i])
 
 
 func _sell_treasure() -> void:
-	var s := save()
-	var sum := 0
-	var keep := []
-	for it in s.stash:
-		if Data.base_of(it).slot == "treasure":
-			sum += it.value
-		else:
-			keep.append(it)
-	if sum == 0:
-		UI.toast("판매할 보물이 없습니다")
-		return
-	s.stash = keep
-	s.gold += sum
-	Sfx.play("coin")
-	UI.toast("보물 판매: +%dg" % sum)
-	persist()
-	refresh()
+	SaveData.op("sell_treasure")
 
 
 func _sort_stash() -> void:
-	var order := {"weapon": 0, "head": 1, "chest": 2, "trinket": 3, "consumable": 4, "treasure": 5}
-	save().stash.sort_custom(func(a, b):
-		var oa: int = order[Data.base_of(a).slot]
-		var ob: int = order[Data.base_of(b).slot]
-		if oa != ob:
-			return oa < ob
-		if a.rarity != b.rarity:
-			return a.rarity > b.rarity
-		return a.value > b.value)
-	persist()
-	refresh()
+	SaveData.op("sort_stash")
 
 
-func _buy(base: String, price: int) -> void:
-	var s := save()
-	if s.gold < price:
-		return
-	if s.stash.size() >= SaveData.STASH_SIZE:
-		UI.toast("보관함이 가득 찼습니다")
-		return
-	s.gold -= price
-	s.stash.append(Data.make_item(base, 0))
-	Sfx.play("coin")
-	UI.toast("%s 구매" % Data.ITEM_BASES[base].name)
-	persist()
-	refresh()
+func _buy(base: String, _price: int) -> void:
+	SaveData.op("buy", [base])
 
 
 func _on_relief() -> void:
-	var s := save()
-	s.stash.append(Data.make_item(Data.STARTER_WEAPON[s.cls]))
-	s.stash.append(Data.make_item("health_potion"))
-	UI.toast("구호 물자를 받았습니다")
-	persist()
-	refresh()
+	SaveData.op("relief")

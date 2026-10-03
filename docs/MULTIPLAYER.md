@@ -32,9 +32,16 @@ godot --path godot -- --profile a
 godot --path godot -- --profile b
 ```
 
-## 방법 2. 전용 서버 (VPS/항상 켜 둔 PC)
+## 방법 2. 온라인(클라우드) 서버 — 계정·저장이 서버에
 
-화면 없이 서버만 띄웁니다. 가장 먼저 접속한 사람이 리더(👑)가 되어 레이드를 시작합니다.
+AWS 같은 클라우드에 서버를 하나 띄워 두면 포트포워딩 없이 누구나 주소만 입력해 접속하고, 보관함/골드/장비가 **서버 계정**에 저장됩니다.
+설정 방법은 **[ONLINE_SERVER.md](ONLINE_SERVER.md)** (AWS Lightsail/EC2 + Docker).
+
+접속: 함께하기 탭 → 서버 주소 + 이름 + **PIN** → 접속 (처음이면 계정 생성)
+
+## 방법 3. 전용 서버를 직접 실행 (VPS/항상 켜 둔 PC)
+
+화면 없이 서버만 띄웁니다. 가장 먼저 접속한 사람이 리더(👑)가 되어 레이드를 시작합니다. 전용 서버는 기본으로 계정 DB를 사용합니다 (`--no-accounts` 면 각자 PC 저장).
 
 ```bash
 godot --headless --path godot -- --server --port 7777          # 파티 (서로 아군)

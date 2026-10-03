@@ -1,0 +1,98 @@
+# 온라인(클라우드) 서버 운영 — AWS 기준
+
+친구 PC를 호스트로 쓰는 방식(포트포워딩/Tailscale 필요) 대신, **클라우드에 항상 켜진 서버**를 두는 방식입니다.
+
+```
+ [플레이어 PC] ──UDP 7777──▶ [클라우드 서버: Godot 전용 서버 (Docker)]
+ [플레이어 PC] ──UDP 7777──▶        │  레이드 시뮬레이션 (서버 권한)
+                                    └─ 계정 DB  /data/accounts  (디스크/볼륨)
+```
+
+- **계정**: 이름 + PIN으로 로그인. 처음 접속하면 계정이 생깁니다.
+- **서버 저장**: 보관함·골드·장비·통계는 서버 계정 DB가 원본입니다. 상점 구매/판매/장착 같은 로비 조작도 서버가 검사해서 처리합니다 (클라이언트가 장비나 골드를 조작할 수 없음).
+- **레이드**: 입장할 때 서버가 계정에서 장비를 꺼내고, 탈출/사망 결과도 서버가 계정에 기록합니다. 레이드 중 접속이 끊기면 사망 처리됩니다.
+- 내 PC의 오프라인 저장 파일은 건드리지 않습니다 (혼자 하기/친구 호스트용으로 그대로 남음).
+
+## 1. AWS Lightsail로 서버 만들기 (가장 쉬움)
+
+1. [AWS Lightsail](https://lightsail.aws.amazon.com/) → **인스턴스 생성**
+   - 지역: 서울 (ap-northeast-2)
+   - 플랫폼: Linux/Unix → **OS 전용** → **Ubuntu 24.04 LTS**
+   - 요금제: **메모리 1GB 이상** (서버는 CPU 1개, 메모리 수백 MB 정도 사용). 정확한 가격은 Lightsail 화면에서 확인하세요.
+2. 인스턴스 → **네트워킹** 탭
+   - **고정 IP 생성** 후 인스턴스에 연결 (재시작해도 주소가 안 바뀌게)
+   - **IPv4 방화벽 → 규칙 추가**: 애플리케이션 `사용자 지정`, 프로토콜 **UDP**, 포트 **7777**
+3. **SSH를 사용하여 연결** (브라우저 터미널) 후:
+
+```bash
+# Docker 설치
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER && newgrp docker
+
+# 게임 코드 받기 (작업 브랜치)
+git clone -b claude/youthful-davinci-idnz60 https://github.com/lapirus1008/dungeon-reborn.git
+cd dungeon-reborn
+
+# 서버 빌드 + 실행 (재부팅 시 자동 시작)
+docker compose -f server/docker-compose.yml up -d --build
+
+# 로그 확인: "[server] ... UDP 포트 7777, 계정 서버 저장" 이 보이면 성공
+docker compose -f server/docker-compose.yml logs -f
+```
+
+> 저장소가 비공개(private)라면 `git clone` 할 때 GitHub 개인 액세스 토큰이 필요합니다.
+
+4. 게임에서: 로비 → **함께하기** → 주소에 **고정 IP**, 포트 7777, 이름과 **PIN** 입력 → **🔗 접속**
+   - 처음 접속한 사람(👑)이 **⚔ 함께 입장**으로 레이드를 시작합니다.
+   - 오른쪽 위 골드 옆에 `☁ 이름` 이 보이면 서버 계정을 쓰는 중입니다.
+
+### EC2를 쓰는 경우
+
+Lightsail 대신 EC2(t3.micro/t3.small 등, Ubuntu)도 같습니다. **보안 그룹 인바운드 규칙**에 `UDP 7777 / 0.0.0.0/0` 을 추가하고 Elastic IP를 연결한 뒤 위 3번 명령을 그대로 실행하세요.
+
+## 2. 업데이트
+
+게임 코드를 고친 뒤 (모든 플레이어도 같은 버전이어야 접속됩니다):
+
+```bash
+cd dungeon-reborn
+git pull
+docker compose -f server/docker-compose.yml up -d --build
+```
+
+계정 데이터는 `server/data/accounts/` (컨테이너 안 `/data`)에 있어 업데이트해도 유지됩니다.
+
+## 3. 백업
+
+- 간단: `server/data/accounts/` 폴더를 주기적으로 복사 (`tar czf accounts-$(date +%F).tgz server/data`)
+- AWS: Lightsail **스냅샷** 자동 생성 켜기 (인스턴스 → 스냅샷 → 자동 스냅샷), EC2면 EBS 스냅샷/AWS Backup
+- S3로 보내기 (선택): `aws s3 cp accounts-*.tgz s3://내-버킷/` 를 cron으로
+
+## 4. 서버 옵션
+
+| 옵션 | 뜻 |
+|---|---|
+| `--port 7777` | UDP 포트 |
+| `--accounts /data/accounts` | 계정 DB 폴더 (기본: Godot user:// 아래 accounts) |
+| `--no-accounts` | 계정 없이 각자 PC 저장 파일 사용 (예전 방식) |
+| `--pvp` | 개인전 서버 (같이 들어간 사람도 적) |
+
+Docker 없이 실행: `godot --headless --path godot -- --server --port 7777 --accounts ~/dr-accounts`
+
+## 5. 확장 / 다른 DB로 옮기기
+
+지금 계정 DB는 **계정별 JSON 파일**(서버 디스크)입니다. 서버 한 대에 친구~수십 명 규모면 이걸로 충분하고 비용도 서버 한 대 값뿐입니다.
+
+더 커지면 `godot/scripts/account_store.gd` 의 `_read` / `_write` 두 함수만 바꾸면 됩니다.
+
+| 단계 | 구성 |
+|---|---|
+| 지금 | Lightsail/EC2 한 대 + Docker + 디스크(JSON) + 스냅샷 백업 |
+| 서버 여러 대 | 계정 저장소를 공용 DB로: **DynamoDB**(키 = 계정 키, 값 = JSON) 또는 **RDS PostgreSQL**(jsonb 컬럼). 서버는 IAM 역할로 접근 |
+| 매치메이킹 | 로비 서버(접속·계정) + 레이드 서버(ECS/GameLift로 필요할 때 띄움)로 분리 |
+
+## 보안 참고
+
+- PIN은 서버에 **솔트 + 반복 해시**로만 저장됩니다. 다만 게임 통신(ENet UDP)은 암호화되지 않으므로 **다른 곳에서 쓰는 비밀번호를 PIN으로 쓰지 마세요.**
+- 같은 계정으로 동시에 두 번 접속할 수 없습니다.
+- 서버가 레이드와 로비 조작을 모두 검사하므로, 클라이언트를 고쳐도 아이템/골드를 만들어 낼 수 없습니다. 단, 이동은 반응성을 위해 클라이언트 위치를 거리 검사 후 받아들입니다.

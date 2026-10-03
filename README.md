@@ -33,6 +33,8 @@
 파티(아군) / 개인전(서로 적)을 고를 수 있고, 화면 없는 전용 서버(`-- --server`)도 지원합니다.
 주소 고르는 법(같은 와이파이, Tailscale, 포트포워딩 UDP 7777)과 규칙은 **[docs/MULTIPLAYER.md](docs/MULTIPLAYER.md)** 를 보세요.
 
+**☁ 온라인(클라우드) 서버**: AWS Lightsail/EC2에 Docker로 서버를 띄우면 이름+PIN 계정으로 접속하고 보관함·골드·장비가 서버에 저장됩니다 → **[docs/ONLINE_SERVER.md](docs/ONLINE_SERVER.md)**
+
 ## 게임 흐름
 
 1. **로비**: 직업 선택, 보관함 장비 장착, 상인에게 물약과 장비 구매, 가방에 가져갈 물건 넣기
@@ -95,7 +97,9 @@ godot/                     Godot 4.5 프로젝트 (현재 버전)
   scripts/
     main.gd                진입점, 입력, 로비↔레이드↔결과, 그래픽 설정, 자동 테스트, 전용 서버
     game.gd                레이드 진행: 전투, 투사체, 이펙트, 상자, 포탈, 붕괴 + 멀티 서버/클라이언트 모드
-    net.gd                 함께하기: ENet 접속, 대기실, RPC (오토로드 Net)
+    net.gd                 함께하기: ENet 접속, 대기실, RPC, 서버 계정 로그인 (오토로드 Net)
+    account.gd             계정 규칙 (로비 조작/입장/결과) - 로컬 저장과 서버 계정이 공용
+    account_store.gd       온라인 서버 계정 DB (계정별 JSON, 교체 가능)
     input_state.gd         입력 추상화 (로컬/네트워크)
     net_actor.gd           멀티 대리 액터 (스냅샷 보간)
     player.gd              1인칭 조작, 스킬 입력, 스태미나
@@ -113,6 +117,7 @@ godot/                     Godot 4.5 프로젝트 (현재 버전)
   shaders/                 체력바, 보호막, 화면 가장자리 효과
   fonts/                   Noto Sans KR, Noto Emoji (SIL OFL)
   assets/                  실제 3D 모델을 넣는 곳 (비어 있으면 블록 모델 사용) - docs/ART_PIPELINE.md
+server/                    클라우드 서버용 Dockerfile, docker-compose.yml
 web-prototype/             초기 브라우저(Three.js) 시제품
 ```
 

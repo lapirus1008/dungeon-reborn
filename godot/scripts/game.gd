@@ -1401,6 +1401,7 @@ func finish_player(p, success: bool, killer := "") -> void:
 			Sfx.play("portal")
 	elif p.peer_id > 1:
 		Net.send_ev(p.peer_id, "result", [r])
+		Net.on_player_result(p.peer_id, r)
 		Net.player_left_raid(p.peer_id)
 	var all_done := true
 	for h in players:
