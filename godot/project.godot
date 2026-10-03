@@ -16,6 +16,7 @@ config/icon="res://icon.svg"
 Data="*res://scripts/data.gd"
 SaveData="*res://scripts/save_data.gd"
 Sfx="*res://scripts/sfx.gd"
+Net="*res://scripts/net.gd"
 
 [display]
 

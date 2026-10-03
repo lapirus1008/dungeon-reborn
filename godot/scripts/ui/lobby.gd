@@ -18,6 +18,12 @@ var right_box: VBoxContainer
 var gold_label: Label
 var relief_btn: Button
 var tab_btns := {}
+var start_btn: Button
+var start_hint: Label
+var mp_name := ""
+var mp_addr := "127.0.0.1"
+var mp_port := Net.PORT
+var mp_msg := ""
 
 
 func _ready() -> void:
@@ -126,7 +132,11 @@ func _ready() -> void:
 	var sp2 := Control.new()
 	sp2.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	cv.add_child(sp2)
-	cv.add_child(UI.big_button("⚔ 던전 입장", func(): start_raid.emit()))
+	start_btn = UI.big_button("⚔ 던전 입장", func(): start_raid.emit())
+	cv.add_child(start_btn)
+	start_hint = UI.label("", 13, Color("#8fd0ff"))
+	start_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cv.add_child(start_hint)
 	var warn := UI.label("탈출하지 못하면 장착한 장비와 가방 속 물건을 모두 잃습니다.", 13, Color("#c98a6a"))
 	warn.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cv.add_child(warn)
@@ -141,7 +151,7 @@ func _ready() -> void:
 	rv.add_theme_constant_override("separation", 10)
 	right.add_child(rv)
 	var tabs := HBoxContainer.new()
-	for t in [["stash", "보관함"], ["shop", "상인"], ["records", "기록"]]:
+	for t in [["stash", "보관함"], ["shop", "상인"], ["online", "함께하기"], ["records", "기록"]]:
 		var b := UI.button(t[1], func():
 			tab = t[0]
 			refresh())
@@ -158,6 +168,10 @@ func _ready() -> void:
 	scroll.add_child(right_box)
 	rv.add_child(scroll)
 	body.add_child(right)
+	mp_name = SaveData.setting("mp_name", "모험가%d" % randi_range(10, 99))
+	mp_addr = SaveData.setting("mp_addr", "127.0.0.1")
+	Net.roster_changed.connect(func(): if visible: refresh())
+	Net.status_changed.connect(func(_t): if visible: refresh())
 	refresh()
 
 
@@ -259,6 +273,8 @@ func refresh() -> void:
 			_render_stash()
 		"shop":
 			_render_shop()
+		"online":
+			_render_online()
 		_:
 			_render_records()
 
@@ -267,6 +283,109 @@ func refresh() -> void:
 		if Data.base_of(it).slot == "weapon" and Data.can_equip(it, s.cls):
 			has_weapon_option = true
 	relief_btn.visible = not has_weapon_option and s.gold < 40
+	_update_start()
+
+
+# 던전 입장 버튼: 함께하기 중에는 리더만 시작
+func _update_start() -> void:
+	start_hint.text = ""
+	start_btn.disabled = false
+	if not Net.online():
+		start_btn.text = "⚔ 던전 입장"
+		return
+	if Net.raid_running():
+		start_btn.text = "⏳ 레이드 진행 중"
+		start_btn.disabled = true
+		start_hint.text = "진행 중인 레이드가 끝나면 다시 시작할 수 있습니다"
+	elif Net.is_leader():
+		start_btn.text = "⚔ 함께 입장 (%d명)" % Net.roster.size()
+		start_hint.text = "누르면 대기실의 모두가 함께 입장합니다"
+	else:
+		start_btn.text = "⏳ 리더의 시작을 기다리는 중"
+		start_btn.disabled = true
+		start_hint.text = "리더가 시작하면 자동으로 입장합니다 (현재 장비/가방을 가지고)"
+
+
+func _render_online() -> void:
+	var v := right_box
+	v.add_child(UI.title("친구와 함께하기"))
+	if not Net.online():
+		var info := RichTextLabel.new()
+		info.bbcode_enabled = true
+		info.fit_content = true
+		info.text = "[font_size=13][color=#9a8e7a]한 명이 [b]호스트[/b]가 되고, 나머지는 호스트의 주소로 [b]접속[/b]합니다.\n같은 와이파이/공유기면 호스트 PC의 내부 IP(예: 192.168.0.x), 인터넷이면 공인 IP + 포트포워딩(UDP %d) 또는 Tailscale 같은 가상 LAN 주소를 쓰세요.[/color][/font_size]" % Net.PORT
+		v.add_child(info)
+		var nh := HBoxContainer.new()
+		nh.add_child(UI.label("이름", 14, UI.MUTED))
+		var name_edit := LineEdit.new()
+		name_edit.text = mp_name
+		name_edit.max_length = 16
+		name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_edit.text_changed.connect(func(t): mp_name = t)
+		nh.add_child(name_edit)
+		nh.add_child(UI.label("포트", 14, UI.MUTED))
+		var port_edit := LineEdit.new()
+		port_edit.text = str(mp_port)
+		port_edit.custom_minimum_size = Vector2(80, 0)
+		port_edit.text_changed.connect(func(t): mp_port = int(t) if t.is_valid_int() else Net.PORT)
+		nh.add_child(port_edit)
+		v.add_child(nh)
+		v.add_child(UI.button("🏠 호스트 열기 (내 PC가 서버)", _mp_host))
+		var jh := HBoxContainer.new()
+		var addr_edit := LineEdit.new()
+		addr_edit.text = mp_addr
+		addr_edit.placeholder_text = "호스트 주소 (예: 192.168.0.10)"
+		addr_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		addr_edit.text_changed.connect(func(t): mp_addr = t.strip_edges())
+		jh.add_child(addr_edit)
+		jh.add_child(UI.button("🔗 접속", _mp_join))
+		v.add_child(jh)
+	else:
+		var role := "호스트" if Net.mode == "host" else ("전용 서버 운영" if Net.mode == "server" else "접속함")
+		v.add_child(UI.label("%s · %s" % [role, Net.status], 13, Color("#8fd0ff")))
+		v.add_child(UI.title("대기실 (%d명)" % Net.roster.size()))
+		var ids := Net.roster.keys()
+		ids.sort()
+		for id in ids:
+			var r: Dictionary = Net.roster[id]
+			var c: Dictionary = Data.CLASSES.get(r.cls, Data.CLASSES["fighter"])
+			var tag := " 👑" if id == Net.leader() else ""
+			var me := " (나)" if id == Net.my_id() else ""
+			var st := "  ⚔ 레이드 중" if r.state == "raid" else ""
+			v.add_child(UI.label("%s %s%s%s — %s%s" % [c.icon, r.name, me, tag, c.name, st], 15, UI.GOLD if id == Net.my_id() else UI.TEXT))
+		var pv := CheckBox.new()
+		pv.text = "개인전 (함께 들어간 친구도 적) — 끄면 파티(아군)"
+		pv.button_pressed = Net.pvp
+		pv.disabled = not Net.is_server()
+		pv.focus_mode = Control.FOCUS_NONE
+		pv.toggled.connect(func(on): Net.set_pvp(on))
+		v.add_child(pv)
+		v.add_child(UI.label("탈출하지 못하면 소지품을 잃는 규칙은 같습니다. 쓰러진 친구의 소지품은 시체 가방으로 떨어집니다.", 12, UI.MUTED))
+		v.add_child(UI.button("나가기 (연결 종료)", func():
+			Net.leave()
+			refresh(), 13))
+	if mp_msg != "":
+		v.add_child(UI.label(mp_msg, 13, Color("#ff8a6a")))
+
+
+func _mp_save_settings() -> void:
+	SaveData.set_setting("mp_name", mp_name)
+	SaveData.set_setting("mp_addr", mp_addr)
+
+
+func _mp_host() -> void:
+	_mp_save_settings()
+	mp_msg = Net.host(mp_port, mp_name)
+	refresh()
+
+
+func _mp_join() -> void:
+	_mp_save_settings()
+	if mp_addr == "":
+		mp_msg = "호스트 주소를 입력하세요"
+	else:
+		mp_msg = Net.join(mp_addr, mp_port, mp_name)
+	refresh()
 
 
 func _render_stash() -> void:
@@ -364,6 +483,7 @@ func _select_class(cid: String) -> void:
 				break
 	Sfx.play("ui")
 	persist()
+	Net.update_class(cid)
 	refresh()
 
 

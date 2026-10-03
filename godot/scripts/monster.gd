@@ -27,6 +27,13 @@ func _init(g, t: String, p: Vector3, room: Dictionary, depth_mul := 1.0) -> void
 	home = room
 	home_pos = p
 	wander_t = randf() * 4.0
+	attach_rig(build_rig(t))
+	if d.boss:
+		hp_bar.scale = Vector3(2, 2, 2)
+
+
+# 몬스터 모델 (멀티플레이 클라이언트의 대리 액터도 사용)
+static func build_rig(t: String) -> CharacterRig:
 	var m: Node3D
 	match t:
 		"skeleton":
@@ -39,11 +46,10 @@ func _init(g, t: String, p: Vector3, room: Dictionary, depth_mul := 1.0) -> void
 			m = Models.humanoid({"skin": Color(0.48, 0.54, 0.42), "body": Color(0.29, 0.31, 0.25), "legs": Color(0.23, 0.25, 0.19), "weapon": "claws", "scale": 1.1, "eyes": Color(1, 0, 0), "hunch": 0.5})
 		_:
 			m = Models.humanoid({"skin": Color(0.13, 0.13, 0.2), "body": Color(0.11, 0.11, 0.15), "legs": Color(0.08, 0.08, 0.11), "helmet": Color(0.16, 0.16, 0.21), "weapon": "boss_sword", "scale": 1.55, "eyes": Color(1, 0.13, 0), "metal": 0.6})
-	attach_rig(CharacterRig.create(t, func(): return m))
-	if not rig.procedural:
-		rig.node.scale = Vector3.ONE * d.scale
-	if d.boss:
-		hp_bar.scale = Vector3(2, 2, 2)
+	var r := CharacterRig.create(t, func(): return m)
+	if not r.procedural:
+		r.node.scale = Vector3.ONE * Data.MONSTERS[t].scale
+	return r
 
 
 func on_hurt(src) -> void:
@@ -74,7 +80,7 @@ func update(dt: float) -> void:
 		if t != null and (target == null or not target.alive):
 			target = t
 			if randf() < 0.5:
-				Sfx.play("growl", game.dist_to_player(pos))
+				game.sfx("growl", pos)
 		if target != null and (not target.alive or target.extracted or (target.stealth > 0.0 and target.pos.distance_to(pos) > 3.0)):
 			target = null
 	if target != null:
@@ -156,5 +162,5 @@ func release_attack() -> void:
 			game.explode(pos, 5.5, dmg * 1.3, self, "slam")
 		_:
 			atk_cd = def.cd
-			Sfx.play("swing", game.dist_to_player(pos))
+			game.sfx("swing", pos)
 			game.melee_hit(self, dmg, def.range + 0.3, 1.4, {"knock": 9.0 if def.boss else 3.0})

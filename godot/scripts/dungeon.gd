@@ -20,10 +20,14 @@ var torches: Array = [] # Dictionary: tx, tz, pos(Vector3), n(Vector3), light
 var props: Array = []
 var root: Node3D
 var flame_mm: MultiMesh
+var rng := RandomNumberGenerator.new() # 멀티플레이: 같은 시드면 모든 접속자에게 같은 던전
+var seed_value := 0
 
 
-func _init(d: int = 1) -> void:
+func _init(d: int = 1, seed_v: int = 0) -> void:
 	depth = d
+	seed_value = seed_v if seed_v != 0 else randi()
+	rng.seed = seed_value
 	W = 46 if d == 1 else 50
 	H = W
 	grid.resize(W * H)
@@ -75,10 +79,10 @@ func generate() -> void:
 	while rooms.size() < target and attempts < 600:
 		attempts += 1
 		var big := rooms.is_empty()
-		var w := randi_range(8, 10) if big else randi_range(4, 8)
-		var h := randi_range(8, 10) if big else randi_range(4, 8)
-		var x := randi_range(2, W - w - 3)
-		var z := randi_range(2, H - h - 3)
+		var w := rng.randi_range(8, 10) if big else rng.randi_range(4, 8)
+		var h := rng.randi_range(8, 10) if big else rng.randi_range(4, 8)
+		var x := rng.randi_range(2, W - w - 3)
+		var z := rng.randi_range(2, H - h - 3)
 		var ok := true
 		for r in rooms:
 			if x < r.x + r.w + 2 and x + w + 2 > r.x and z < r.z + r.h + 2 and z + h + 2 > r.z:
@@ -111,7 +115,7 @@ func generate() -> void:
 		in_tree[best[1]] = true
 		edges.append(best)
 	for k in n / 3:
-		var a := randi_range(0, n - 1)
+		var a := rng.randi_range(0, n - 1)
 		var b := -1
 		var bd := 1e9
 		for j in n:
@@ -139,31 +143,31 @@ func generate() -> void:
 
 	# 횃불: 방 둘레 벽면
 	for r in rooms:
-		var count := 6 if r.boss else randi_range(2, 3)
+		var count := 6 if r.boss else rng.randi_range(2, 3)
 		var placed := 0
 		var tries := 0
 		while placed < count and tries < 40:
 			tries += 1
-			var side := randi_range(0, 3)
+			var side := rng.randi_range(0, 3)
 			var tx := 0
 			var tz := 0
 			var nrm := Vector3.ZERO
 			match side:
 				0:
-					tx = randi_range(r.x, r.x + r.w - 1)
+					tx = rng.randi_range(r.x, r.x + r.w - 1)
 					tz = r.z
 					nrm = Vector3(0, 0, -1)
 				1:
-					tx = randi_range(r.x, r.x + r.w - 1)
+					tx = rng.randi_range(r.x, r.x + r.w - 1)
 					tz = r.z + r.h - 1
 					nrm = Vector3(0, 0, 1)
 				2:
 					tx = r.x
-					tz = randi_range(r.z, r.z + r.h - 1)
+					tz = rng.randi_range(r.z, r.z + r.h - 1)
 					nrm = Vector3(-1, 0, 0)
 				_:
 					tx = r.x + r.w - 1
-					tz = randi_range(r.z, r.z + r.h - 1)
+					tz = rng.randi_range(r.z, r.z + r.h - 1)
 					nrm = Vector3(1, 0, 0)
 			if get_t(tx + int(nrm.x), tz + int(nrm.z)) != EMPTY:
 				continue
@@ -179,16 +183,16 @@ func generate() -> void:
 
 	# 소품: 통, 뼈 더미
 	for r in rooms:
-		for i in randi_range(1, 3):
-			var tx := randi_range(r.x, r.x + r.w - 1)
-			var top := randf() < 0.5
+		for i in rng.randi_range(1, 3):
+			var tx := rng.randi_range(r.x, r.x + r.w - 1)
+			var top := rng.randf() < 0.5
 			var tz: int = r.z if top else r.z + r.h - 1
 			if get_t(tx, tz) != ROOM:
 				continue
 			var c := center(tx, tz)
-			c.x += randf_range(-1.0, 1.0)
+			c.x += rng.randf_range(-1.0, 1.0)
 			c.z += -1.2 if top else 1.2
-			props.append({"type": "barrel" if randf() < 0.6 else "bones", "pos": c})
+			props.append({"type": "barrel" if rng.randf() < 0.6 else "bones", "pos": c})
 
 
 func _carve(a: Dictionary, b: Dictionary) -> void:
@@ -196,7 +200,7 @@ func _carve(a: Dictionary, b: Dictionary) -> void:
 	var z := int(a.cz)
 	var x2 := int(b.cx)
 	var z2 := int(b.cz)
-	var horiz_first := randf() < 0.5
+	var horiz_first := rng.randf() < 0.5
 	if horiz_first:
 		while x != x2:
 			_carve_tile(x, z)
@@ -330,12 +334,12 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 						continue
 					var n := Vector3(d.x, 0, d.y)
 					var rot := Basis(Vector3.UP, PI / 2 if d.x != 0 else 0.0)
-					var path: String = faces.pick_random()
+					var path: String = faces[rng.randi() % faces.size()]
 					if not by_mesh.has(path):
 						by_mesh[path] = []
 					by_mesh[path].append(Transform3D(rot, c + n * (T / 2.0 + 0.45)))
 					# 방 안쪽 벽에 가끔 깃발
-					if room_id[idx(x, z)] >= 0 and randf() < 0.07:
+					if room_id[idx(x, z)] >= 0 and rng.randf() < 0.07:
 						var face_rot := Basis(Vector3.UP, atan2(-n.x, -n.z))
 						banner_x.append(Transform3D(face_rot, c + n * (T / 2.0 + 0.33)))
 		for path in by_mesh:
@@ -355,12 +359,12 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 			"pillar":
 				pillar_x.append(Transform3D(Basis(), p.pos + Vector3(0, WALL_H / 2.0, 0)))
 			"barrel":
-				barrel_x.append(Transform3D(Basis(Vector3.UP, randf() * TAU), p.pos + Vector3(0, 0.6, 0)))
+				barrel_x.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU), p.pos + Vector3(0, 0.6, 0)))
 			"bones":
 				for k in 5:
-					var bb := Basis(Vector3.UP, randf() * TAU) * Basis(Vector3.RIGHT, PI / 2)
-					bone_x.append(Transform3D(bb, p.pos + Vector3(randf_range(-0.5, 0.5), 0.05, randf_range(-0.5, 0.5))))
-				skull_x.append(Transform3D(Basis(Vector3.UP, randf() * TAU), p.pos + Vector3(0, 0.18, 0)))
+					var bb := Basis(Vector3.UP, rng.randf() * TAU) * Basis(Vector3.RIGHT, PI / 2)
+					bone_x.append(Transform3D(bb, p.pos + Vector3(rng.randf_range(-0.5, 0.5), 0.05, rng.randf_range(-0.5, 0.5))))
+				skull_x.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU), p.pos + Vector3(0, 0.18, 0)))
 	if pillar_x.size() and tm.call("pillar") != null:
 		var ps: Array = th.get("pillar_scale", [1.0, 1.0, 1.0])
 		var sc := Vector3(ps[0], ps[1], ps[2])
@@ -391,10 +395,10 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		if crates != null:
 			var cx := []
 			for r in rooms:
-				if randf() < 0.35 and not r.boss:
+				if rng.randf() < 0.35 and not r.boss:
 					var corner := center(r.x, r.z) + Vector3(-0.6, 0, -0.6)
 					if get_t(r.x, r.z) == ROOM:
-						cx.append(Transform3D(Basis(Vector3.UP, randf() * TAU), corner))
+						cx.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU), corner))
 			if cx.size():
 				root.add_child(_multimesh(crates, cx))
 	elif barrel_x.size() and AssetRegistry.mesh("dungeon", "barrel") != null:
@@ -641,11 +645,11 @@ func path(a: Vector3, b: Vector3) -> Array:
 
 func random_point_in_room(room: Dictionary, margin: int = 1) -> Vector3:
 	for k in 30:
-		var tx := randi_range(room.x + margin, room.x + room.w - 1 - margin)
-		var tz := randi_range(room.z + margin, room.z + room.h - 1 - margin)
+		var tx := rng.randi_range(room.x + margin, room.x + room.w - 1 - margin)
+		var tz := rng.randi_range(room.z + margin, room.z + room.h - 1 - margin)
 		if get_t(tx, tz) == ROOM:
 			var c := center(tx, tz)
-			c.x += randf_range(-1.0, 1.0)
-			c.z += randf_range(-1.0, 1.0)
+			c.x += rng.randf_range(-1.0, 1.0)
+			c.z += rng.randf_range(-1.0, 1.0)
 			return c
 	return center(int(room.cx), int(room.cz))

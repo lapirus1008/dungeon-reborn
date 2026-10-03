@@ -27,6 +27,12 @@
 2. **프로젝트 → 내보내기** → `Windows Desktop` 프리셋 → **프로젝트 내보내기**.
 3. `godot/export/DungeonReborn.exe` 하나만 있으면 어디서든 실행됩니다.
 
+## 친구와 함께하기 (온라인)
+
+로비의 **함께하기** 탭에서 한 명이 **호스트 열기**, 친구들은 호스트 주소로 **접속** → 호스트가 **⚔ 함께 입장**.
+파티(아군) / 개인전(서로 적)을 고를 수 있고, 화면 없는 전용 서버(`-- --server`)도 지원합니다.
+주소 고르는 법(같은 와이파이, Tailscale, 포트포워딩 UDP 7777)과 규칙은 **[docs/MULTIPLAYER.md](docs/MULTIPLAYER.md)** 를 보세요.
+
 ## 게임 흐름
 
 1. **로비**: 직업 선택, 보관함 장비 장착, 상인에게 물약과 장비 구매, 가방에 가져갈 물건 넣기
@@ -87,8 +93,11 @@ godot/                     Godot 4.5 프로젝트 (현재 버전)
   project.godot
   scenes/main.tscn
   scripts/
-    main.gd                진입점, 입력, 로비↔레이드↔결과, 그래픽 설정, 자동 테스트
-    game.gd                레이드 진행: 전투, 투사체, 이펙트, 상자, 포탈, 붕괴
+    main.gd                진입점, 입력, 로비↔레이드↔결과, 그래픽 설정, 자동 테스트, 전용 서버
+    game.gd                레이드 진행: 전투, 투사체, 이펙트, 상자, 포탈, 붕괴 + 멀티 서버/클라이언트 모드
+    net.gd                 함께하기: ENet 접속, 대기실, RPC (오토로드 Net)
+    input_state.gd         입력 추상화 (로컬/네트워크)
+    net_actor.gd           멀티 대리 액터 (스냅샷 보간)
     player.gd              1인칭 조작, 스킬 입력, 스태미나
     skills.gd              8직업 스킬 규칙 (플레이어와 AI가 공용)
     summon.gd              드루이드 트렌트
@@ -114,6 +123,7 @@ godot --path godot --headless --fixed-fps 60 -- --autotest
 ```
 
 8개 직업으로 각각 기본 공격, Q/E 스킬, 탈출을 실행하고, 스태미나 연속 달리기 검사와 150초 레이드 시뮬레이션을 돌려 결과를 출력합니다.
+멀티플레이 테스트는 [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md#자동-테스트)를 참고하세요.
 
 ## 그래픽
 

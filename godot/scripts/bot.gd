@@ -218,7 +218,7 @@ func combat(dt: float) -> void:
 		move(dx / d * speed * 0.4, dz / d * speed * 0.4, dt)
 		if windup <= 0.0 and pending_prof != null:
 			attack_anim = 0.25
-			Sfx.play("swing", game.dist_to_player(pos))
+			game.sfx("swing", pos)
 			Skills.melee_strike(self, pending_prof)
 			atk_cd = pending_prof.cd + randf_range(0.35, 0.7)
 			pending_prof = null

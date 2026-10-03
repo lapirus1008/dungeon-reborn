@@ -3,6 +3,7 @@ class_name Game
 extends Node3D
 
 signal raid_ended(result: Dictionary)
+signal raid_over # 서버: 모든 플레이어가 탈출/사망해 레이드가 완전히 끝남
 
 const RAID_TIME := 900.0 # 15분
 
@@ -42,6 +43,23 @@ var flash_mat: StandardMaterial3D
 var base_fog := 0.03
 var cull_t := 0.0
 var interact_target = null
+# 멀티플레이
+var net := "offline" # offline | host | server(전용, 로컬 플레이어 없음) | client
+var players: Array = [] # 사람 플레이어 (서버/오프라인)
+var humans: Array = [] # 서버: 참가자 [{peer, name, cls, equipment, bag}]
+var pvp := false
+var level_seed := 0
+var nid_seq := 0
+var bag_seq := 0
+var portal_seq := 0
+var proj_seq := 0
+var zone_seq := 0
+var snap_t := 0.0
+var input_t := 0.0
+var over := false
+var net_actors := {} # 클라이언트: nid -> 액터
+var net_proj := {} # 클라이언트: 투사체 id -> {node, pos, vel, gravity, kind, stuck}
+var net_zones := {} # 클라이언트: 구역 id -> zone
 
 
 func _ready() -> void:
@@ -62,8 +80,92 @@ func start(lo: Dictionary, hud_node) -> void:
 	player = null
 	build_level(1)
 	running = true
-	hud.start(self)
-	hud.announce("던전에 입장했습니다", "보물을 모아 탈출 포탈로 살아 나가세요")
+	if hud != null:
+		hud.start(self)
+		hud.announce("던전에 입장했습니다", "보물을 모아 탈출 포탈로 살아 나가세요" if not online() else "%d명이 함께 입장했습니다 · %s" % [players.size(), "개인전 (서로 적)" if pvp else "파티 (서로 아군)"])
+
+
+# 서버: 참가자 목록으로 레이드 생성 (host면 peer 1이 로컬 플레이어)
+func start_server(mode: String, hs: Array, is_pvp: bool, hud_node) -> void:
+	net = mode
+	humans = hs
+	pvp = is_pvp
+	level_seed = randi() % 2000000000 + 1
+	Net.game = self
+	start({}, hud_node)
+	for p in players:
+		if p.peer_id > 1:
+			Net.send_begin(p.peer_id, client_info(p))
+
+
+func online() -> bool:
+	return net != "offline"
+
+
+func is_auth() -> bool:
+	return net != "client"
+
+
+func is_human(a) -> bool:
+	return a != null and a.kind == "player" and a is Player
+
+
+# ------------------------------------------------------------------ 이벤트 라우팅
+# 위치가 있는 소리: 로컬은 거리 감쇠로 재생, 접속자에게도 전달
+func sfx(n: String, p: Vector3, v := 0.06) -> void:
+	if player != null and hud != null:
+		Sfx.play(n, player.pos.distance_to(p), v)
+	_bc("sfx", [n, p, v], false)
+
+
+# 특정 플레이어의 HUD에 표시 (토스트, 피해 숫자, 피격 효과 등)
+func notify(a, m: String, args: Array = []) -> void:
+	if not is_human(a):
+		return
+	if a == player:
+		if hud != null:
+			hud.callv(m, args)
+	elif a.peer_id > 1 and is_auth():
+		Net.send_ev(a.peer_id, "hud", [m, args])
+
+
+func notify_all(m: String, args: Array = []) -> void:
+	if hud != null:
+		hud.callv(m, args)
+	_bc("hud", [m, args])
+
+
+# 서버 -> 레이드 중인 모든 클라이언트
+func _bc(n: String, args: Array, reliable := true) -> void:
+	if net != "host" and net != "server":
+		return
+	for p in players:
+		if p.peer_id > 1 and not p.done:
+			Net.send_ev(p.peer_id, n, args, reliable)
+
+
+func add_actor(a) -> void:
+	nid_seq += 1
+	a.nid = nid_seq
+	actors.append(a)
+	if running and online() and is_auth():
+		_bc("actor_add", [describe(a)])
+	if net == "host" and is_human(a) and a != player:
+		a.puppet = NetActor.new(self, describe(a))
+
+
+# 클라이언트가 대리 액터를 만들 때 필요한 정보
+func describe(a) -> Dictionary:
+	var d := {"id": a.nid, "k": a.kind, "n": a.name if a.kind == "player" else a.display_name(), "f": a.faction,
+		"p": a.pos, "y": a.yaw, "mh": a.max_hp, "r": a.radius, "h": a.height}
+	match a.kind:
+		"monster":
+			d["t"] = a.type
+		"player", "bot":
+			d["c"] = a.cls
+			d["w"] = Data.weapon_model(a.cls, a.equipment)
+			d["hm"] = a.equipment.head != null
+	return d
 
 
 func shadows_enabled() -> bool:
@@ -86,7 +188,150 @@ func build_level(d: int) -> void:
 	world.name = "World"
 	add_child(world)
 	var deep := d > 1
+	_make_env(deep)
 
+	if online():
+		seed(level_seed + d)
+	dungeon = Dungeon.new(d, level_seed + d if online() else 0)
+	dungeon.build(world, false)
+	_reset_lists(d)
+
+	var rooms: Array = dungeon.rooms
+	var boss_room: Dictionary
+	var normal := []
+	for r in rooms:
+		if r.boss:
+			boss_room = r
+		else:
+			normal.append(r)
+	var dist_boss := func(r): return Vector2(r.cx - boss_room.cx, r.cz - boss_room.cz).length()
+	normal.sort_custom(func(a, b): return dist_boss.call(a) > dist_boss.call(b))
+	var start_room: Dictionary = normal[randi_range(0, mini(3, normal.size() - 1))]
+	# 경쟁 모험가/개인전 상대는 시작 방에서 먼 방
+	var others := []
+	for r in normal:
+		if r != start_room:
+			others.append(r)
+	others.sort_custom(func(a, b): return Vector2(a.cx - start_room.cx, a.cz - start_room.cz).length() > Vector2(b.cx - start_room.cx, b.cz - start_room.cz).length())
+	var used_rooms := [start_room]
+
+	if players.is_empty():
+		if humans.is_empty():
+			player = Player.new(self, dungeon.random_point_in_room(start_room, 1), loadout.cls, loadout.equipment, loadout.bag)
+			players = [player]
+		else:
+			var i := 0
+			for h in humans:
+				var room: Dictionary = start_room
+				if pvp and i > 0:
+					room = others[mini(others.size() - 1, i * 2 - 1)]
+					used_rooms.append(room)
+				var fac: String = ("player_%d" % h.peer) if pvp else "player"
+				var p := Player.new(self, dungeon.random_point_in_room(room, 1), h.cls, h.equipment, h.bag, h.name, fac, h.peer)
+				players.append(p)
+				if h.peer == 1 and net == "host":
+					player = p
+				i += 1
+	else:
+		player.pos = dungeon.random_point_in_room(start_room, 1)
+	for p in players:
+		p.yaw = randf() * TAU
+		add_actor(p)
+	if player != null:
+		_make_view()
+
+	var bot_count := 3 if deep else 4
+	if online():
+		bot_count = maxi(1, bot_count - (players.size() - 1))
+	var bot_rooms := []
+	var bi := 0
+	for r in others:
+		if bot_rooms.size() >= bot_count:
+			break
+		if r in used_rooms or bi % 2 == 1:
+			bi += 1
+			continue
+		bi += 1
+		bot_rooms.append(r)
+		used_rooms.append(r)
+		add_actor(Bot.new(self, dungeon.random_point_in_room(r, 1), d))
+
+	# 몬스터와 상자
+	var mul := 1.5 if deep else 1.0
+	var luck := 1.2 if deep else 0.0
+	for r in rooms:
+		if r == start_room:
+			spawn_chest(r, 0, luck)
+			continue
+		if r.boss:
+			add_actor(Monster.new(self, "wraith_knight", dungeon.center(int(r.cx), int(r.cz)), r, mul))
+			for i in 2:
+				add_actor(Monster.new(self, "skeleton", dungeon.random_point_in_room(r), r, mul))
+			spawn_chest(r, 2, luck + 2.5)
+			spawn_chest(r, 1, luck + 1.0)
+			continue
+		var area: int = r.w * r.h
+		var n := 0 if r in used_rooms else mini(4, 1 + area / 18 + (1 if deep else 0))
+		for i in n:
+			var roll := randf()
+			var type := "skeleton" if roll < 0.35 else ("skeleton_archer" if roll < 0.55 else ("goblin" if roll < 0.8 else "ghoul"))
+			add_actor(Monster.new(self, type, dungeon.random_point_in_room(r), r, mul))
+		spawn_chest(r, 1 if randf() < 0.25 else 0, luck)
+		if area > 30 and randf() < 0.5:
+			spawn_chest(r, 0, luck)
+	if online():
+		randomize()
+
+
+func _reset_lists(d: int) -> void:
+	explored = PackedByteArray()
+	explored.resize(dungeon.W * dungeon.H)
+	actors = []
+	projectiles = []
+	zones = []
+	effects = []
+	chests = []
+	loot_bags = []
+	portals = []
+	if d > 1:
+		portal_schedule = [{"at": 45.0, "kind": "exit", "n": 2}, {"at": 200.0, "kind": "exit", "n": 2}]
+	elif online():
+		# 함께하기: 심연 포탈 없이 탈출 포탈만
+		portal_schedule = [{"at": 120.0, "kind": "exit", "n": 2}, {"at": 330.0, "kind": "exit", "n": 2}, {"at": 600.0, "kind": "exit", "n": 2}]
+	else:
+		portal_schedule = [
+			{"at": 120.0, "kind": "exit", "n": 2},
+			{"at": 210.0, "kind": "descend", "n": 1},
+			{"at": 400.0, "kind": "exit", "n": 2},
+			{"at": 640.0, "kind": "exit", "n": 1},
+		]
+
+
+# 카메라, 손전등, 1인칭 뷰모델 (로컬 플레이어가 있을 때만)
+func _make_view() -> void:
+	camera = Camera3D.new()
+	camera.fov = 75.0
+	camera.near = 0.05
+	camera.far = 90.0
+	world.add_child(camera)
+	camera.make_current()
+	# 플레이어 횃불(손전등 역할) - 그림자로 입체감
+	player_light = OmniLight3D.new()
+	player_light.light_color = Color(1.0, 0.72, 0.45)
+	player_light.light_energy = 1.3
+	player_light.omni_range = 16.0
+	player_light.omni_attenuation = 1.3
+	player_light.shadow_enabled = shadows_enabled()
+	player_light.shadow_bias = 0.08
+	world.add_child(player_light)
+	view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment), player.panther)
+	camera.add_child(view_model)
+	shield_bubble = Models.shield_bubble(0.75)
+	shield_bubble.visible = false
+	camera.add_child(shield_bubble)
+
+
+func _make_env(deep: bool) -> void:
 	# 환경: 어두운 배경, 안개, 글로우, 톤매핑
 	env = WorldEnvironment.new()
 	var e := Environment.new()
@@ -111,105 +356,6 @@ func build_level(d: int) -> void:
 	env.environment = e
 	world.add_child(env)
 
-	dungeon = Dungeon.new(d)
-	dungeon.build(world, false)
-	explored = PackedByteArray()
-	explored.resize(dungeon.W * dungeon.H)
-	actors = []
-	projectiles = []
-	zones = []
-	effects = []
-	chests = []
-	loot_bags = []
-	portals = []
-	if deep:
-		portal_schedule = [{"at": 45.0, "kind": "exit", "n": 2}, {"at": 200.0, "kind": "exit", "n": 2}]
-	else:
-		portal_schedule = [
-			{"at": 120.0, "kind": "exit", "n": 2},
-			{"at": 210.0, "kind": "descend", "n": 1},
-			{"at": 400.0, "kind": "exit", "n": 2},
-			{"at": 640.0, "kind": "exit", "n": 1},
-		]
-
-	var rooms: Array = dungeon.rooms
-	var boss_room: Dictionary
-	var normal := []
-	for r in rooms:
-		if r.boss:
-			boss_room = r
-		else:
-			normal.append(r)
-	var dist_boss := func(r): return Vector2(r.cx - boss_room.cx, r.cz - boss_room.cz).length()
-	normal.sort_custom(func(a, b): return dist_boss.call(a) > dist_boss.call(b))
-	var start_room: Dictionary = normal[randi_range(0, mini(3, normal.size() - 1))]
-	var spawn := dungeon.random_point_in_room(start_room, 1)
-
-	if player == null:
-		player = Player.new(self, spawn, loadout.cls, loadout.equipment, loadout.bag)
-	else:
-		player.pos = spawn
-	player.yaw = randf() * TAU
-	actors.append(player)
-
-	camera = Camera3D.new()
-	camera.fov = 75.0
-	camera.near = 0.05
-	camera.far = 90.0
-	world.add_child(camera)
-	camera.make_current()
-	# 플레이어 횃불(손전등 역할) - 그림자로 입체감
-	player_light = OmniLight3D.new()
-	player_light.light_color = Color(1.0, 0.72, 0.45)
-	player_light.light_energy = 1.3
-	player_light.omni_range = 16.0
-	player_light.omni_attenuation = 1.3
-	player_light.shadow_enabled = shadows_enabled()
-	player_light.shadow_bias = 0.08
-	world.add_child(player_light)
-	view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment), player.panther)
-	camera.add_child(view_model)
-	shield_bubble = Models.shield_bubble(0.75)
-	shield_bubble.visible = false
-	camera.add_child(shield_bubble)
-
-	# 경쟁 모험가 스폰 (플레이어와 먼 방)
-	var others := []
-	for r in normal:
-		if r != start_room:
-			others.append(r)
-	others.sort_custom(func(a, b): return Vector2(a.cx - start_room.cx, a.cz - start_room.cz).length() > Vector2(b.cx - start_room.cx, b.cz - start_room.cz).length())
-	var bot_count := 3 if deep else 4
-	var bot_rooms := []
-	for i in mini(bot_count, others.size()):
-		var room: Dictionary = others[mini(others.size() - 1, i * 2)]
-		bot_rooms.append(room)
-		actors.append(Bot.new(self, dungeon.random_point_in_room(room, 1), d))
-
-	# 몬스터와 상자
-	var mul := 1.5 if deep else 1.0
-	var luck := 1.2 if deep else 0.0
-	for r in rooms:
-		if r == start_room:
-			spawn_chest(r, 0, luck)
-			continue
-		if r.boss:
-			actors.append(Monster.new(self, "wraith_knight", dungeon.center(int(r.cx), int(r.cz)), r, mul))
-			for i in 2:
-				actors.append(Monster.new(self, "skeleton", dungeon.random_point_in_room(r), r, mul))
-			spawn_chest(r, 2, luck + 2.5)
-			spawn_chest(r, 1, luck + 1.0)
-			continue
-		var area: int = r.w * r.h
-		var n := 0 if r in bot_rooms else mini(4, 1 + area / 18 + (1 if deep else 0))
-		for i in n:
-			var roll := randf()
-			var type := "skeleton" if roll < 0.35 else ("skeleton_archer" if roll < 0.55 else ("goblin" if roll < 0.8 else "ghoul"))
-			actors.append(Monster.new(self, type, dungeon.random_point_in_room(r), r, mul))
-		spawn_chest(r, 1 if randf() < 0.25 else 0, luck)
-		if area > 30 and randf() < 0.5:
-			spawn_chest(r, 0, luck)
-
 
 func spawn_chest(room: Dictionary, tier: int, luck: float) -> void:
 	var p := Vector3.ZERO
@@ -227,7 +373,7 @@ func spawn_chest(room: Dictionary, tier: int, luck: float) -> void:
 	world.add_child(node)
 	var count := 6 if tier == 2 else (randi_range(3, 4) if tier == 1 else randi_range(1, 3))
 	var nm := "황금 보물상자" if tier == 2 else ("장식된 상자" if tier == 1 else "나무 상자")
-	chests.append({"pos": p, "node": node, "tier": tier, "room": room, "opened": false, "items": Data.roll_loot(count, luck + tier), "name": nm, "claimed_by": null, "kind": "chest"})
+	chests.append({"id": chests.size(), "pos": p, "rot": node.rotation.y, "node": node, "tier": tier, "room": room, "opened": false, "items": Data.roll_loot(count, luck + tier), "name": nm, "claimed_by": null, "kind": "chest"})
 
 
 # ------------------------------------------------------------------ 관계/검색
@@ -255,7 +401,7 @@ func exit_portals() -> Array:
 
 
 func dist_to_player(p: Vector3) -> float:
-	return player.pos.distance_to(p) if player else 0.0
+	return player.pos.distance_to(p) if player else 999.0
 
 
 func nearest_adventurer_dist(p: Vector3) -> float:
@@ -296,7 +442,7 @@ func melee_hit(attacker, dmg: float, rng: float, arc: float, opts: Dictionary = 
 		a.take_damage(dmg, attacker, info)
 		hits += 1
 	if hits:
-		Sfx.play("hit", dist_to_player(attacker.pos))
+		sfx("hit", attacker.pos)
 	return hits
 
 
@@ -323,20 +469,43 @@ const PROJ_COLORS := {
 
 # extra: homing(선회 강도), slow(초), aoe(반경), root(초), dot(초당 피해), pull, heal_owner, gravity, life
 func spawn_projectile(owner, kind: String, p: Vector3, dir: Vector3, speed: float, dmg: float, extra: Dictionary = {}) -> void:
-	var node: Node3D
 	var gravity: float = extra.get("gravity", 0.0)
 	var rad := 0.15
+	match kind:
+		"arrow":
+			gravity = 5.0
+			sfx("bow", p)
+		"knife":
+			gravity = 3.0
+			sfx("swing", p)
+		"blade":
+			pass
+		"pyroblast", "fireball":
+			rad = 0.45
+			sfx("fire", p)
+		"poison":
+			pass
+		_:
+			sfx("magic", p)
+	var node := _proj_node(kind)
+	node.position = p
+	world.add_child(node)
+	proj_seq += 1
+	var pr := {"id": proj_seq, "owner": owner, "kind": kind, "node": node, "pos": p, "vel": dir * speed, "speed": speed, "dmg": dmg,
+		"gravity": gravity, "radius": rad, "life": extra.get("life", 4.0), "stuck": 0.0, "tgt": null, "retarget": 0.0}
+	pr.merge(extra)
+	projectiles.append(pr)
+
+
+func _proj_node(kind: String) -> Node3D:
+	var node: Node3D
 	var color: Color = PROJ_COLORS.get(kind, Color.WHITE)
 	match kind:
 		"arrow":
 			node = Models.arrow()
-			gravity = 5.0
-			Sfx.play("bow", dist_to_player(p))
 		"knife":
 			node = Models.weapon("dagger")
 			node.scale = Vector3.ONE * 0.8
-			gravity = 3.0
-			Sfx.play("swing", dist_to_player(p))
 		"blade":
 			node = Models.weapon("longsword")
 			node.scale = Vector3.ONE * 0.6
@@ -344,19 +513,18 @@ func spawn_projectile(owner, kind: String, p: Vector3, dir: Vector3, speed: floa
 				(m as GeometryInstance3D).material_overlay = Models.glow_mat(Color(0.4, 0.6, 1.0, 0.5), 1.5)
 		"pyroblast", "fireball":
 			node = Models.orb(color, 0.42)
-			rad = 0.45
-			Sfx.play("fire", dist_to_player(p))
 		"poison":
 			node = Models.orb(color, 0.16, false)
 		_:
 			node = Models.orb(color, 0.13, kind != "thorn")
-			Sfx.play("magic", dist_to_player(p))
-	node.position = p
-	world.add_child(node)
-	var pr := {"owner": owner, "kind": kind, "node": node, "pos": p, "vel": dir * speed, "speed": speed, "dmg": dmg,
-		"gravity": gravity, "radius": rad, "life": extra.get("life", 4.0), "stuck": 0.0, "tgt": null, "retarget": 0.0}
-	pr.merge(extra)
-	projectiles.append(pr)
+	return node
+
+
+func _orient_proj(node: Node3D, kind: String, p: Vector3, vel: Vector3) -> void:
+	if kind in ["arrow", "knife", "blade"] and vel.length_squared() > 0.01:
+		node.look_at(p + vel, Vector3.UP if absf(vel.normalized().y) < 0.95 else Vector3.RIGHT)
+		if kind != "arrow":
+			node.rotate_object_local(Vector3.RIGHT, -PI / 2)
 
 
 # 유도 투사체의 표적 (전방, 시야 내, 은신 제외)
@@ -409,7 +577,7 @@ func _projectile_impact(p: Dictionary, pp: Vector3, hit) -> void:
 	a.take_damage(p.dmg * (1.5 if head else 1.0), owner, info)
 	if p.get("heal_owner", 0.0) > 0.0 and owner != null:
 		owner.heal_now(p.heal_owner)
-	Sfx.play("hit", dist_to_player(a.pos))
+	sfx("hit", a.pos)
 	if p.kind != "arrow" and p.kind != "knife":
 		spark(pp, PROJ_COLORS.get(p.kind, Color(0.55, 0.48, 1.0)))
 
@@ -478,10 +646,8 @@ func update_projectiles(dt: float) -> void:
 			i -= 1
 			continue
 		p.node.position = p.pos
-		if p.kind in ["arrow", "knife", "blade"] and vel.length_squared() > 0.01 and p.stuck <= 0.0:
-			p.node.look_at(p.pos + vel, Vector3.UP if absf(vel.normalized().y) < 0.95 else Vector3.RIGHT)
-			if p.kind != "arrow":
-				p.node.rotate_object_local(Vector3.RIGHT, -PI / 2)
+		if p.stuck <= 0.0:
+			_orient_proj(p.node, p.kind, p.pos, vel)
 		i -= 1
 
 
@@ -512,13 +678,16 @@ func explode(p: Vector3, rad: float, dmg: float, owner, kind: String, extra: Dic
 		"poison":
 			color = Color(0.35, 0.9, 0.2)
 	explode_fx(p if kind != "slam" else Vector3(p.x, 0.2, p.z), rad, color)
-	Sfx.play("fire" if kind != "poison" else "magic", dist_to_player(p))
-	if dist_to_player(p) < 10.0 and kind != "poison":
-		player.shake = 0.3
+	sfx("fire" if kind != "poison" else "magic", p)
+	if kind != "poison":
+		for h in players:
+			if h.pos.distance_to(p) < 10.0:
+				notify(h, "shake", [0.3])
 
 
 # 폭발 시각 효과만 (피해 없음)
 func explode_fx(p: Vector3, rad: float, color: Color) -> void:
+	_bc("explode_fx", [p, rad, color])
 	var m := MeshInstance3D.new()
 	var sm := SphereMesh.new()
 	sm.radius = 1.0
@@ -562,8 +731,18 @@ var zones: Array = []
 func add_zone(z: Dictionary) -> void:
 	z["t"] = z.get("dur", 3.0)
 	z["tick_t"] = 0.0
+	zone_seq += 1
+	z["id"] = zone_seq
 	if not z.has("pos"):
 		z["pos"] = z.follow.pos
+	var node := _zone_node(z)
+	node.position = z.pos
+	world.add_child(node)
+	z["node"] = node
+	zones.append(z)
+
+
+func _zone_node(z: Dictionary) -> Node3D:
 	var node := Node3D.new()
 	match z.kind:
 		"ice_storm":
@@ -648,10 +827,7 @@ func add_zone(z: Dictionary) -> void:
 				(m as GeometryInstance3D).material_overlay = Models.glow_mat(Color(0.4, 0.6, 1.0, 0.5), 1.5)
 			pivot.add_child(blade)
 			node.add_child(pivot)
-	node.position = z.pos
-	world.add_child(node)
-	z["node"] = node
-	zones.append(z)
+	return node
 
 
 func update_zones(dt: float) -> void:
@@ -685,7 +861,7 @@ func update_zones(dt: float) -> void:
 					a.add_slow(z.slow, 0.5)
 				hits += 1
 			if hits and z.kind == "orbit_blade":
-				Sfx.play("hit", dist_to_player(z.pos), 0.2)
+				sfx("hit", z.pos, 0.2)
 		if z.t <= 0.0:
 			node.queue_free()
 			zones.remove_at(i)
@@ -695,7 +871,7 @@ func update_zones(dt: float) -> void:
 # ------------------------------------------------------------------ 직업 스킬 연동
 func spawn_summon(owner, p: Vector3) -> void:
 	var s := Summon.new(self, owner, p)
-	actors.append(s)
+	add_actor(s)
 	spawn_ring_burst(p + Vector3(0, 0.2, 0), Skills.NATURE, 2.5)
 
 
@@ -703,14 +879,18 @@ func spawn_summon(owner, p: Vector3) -> void:
 func on_shapeshift(c) -> void:
 	if c == player:
 		_rebuild_view_model()
-	spawn_ring_burst(c.pos + Vector3(0, 0.5, 0), Skills.NATURE, 2.0)
+	if is_auth():
+		spawn_ring_burst(c.pos + Vector3(0, 0.5, 0), Skills.NATURE, 2.0)
 
 
-func on_weapon_changed() -> void:
-	_rebuild_view_model()
+func on_weapon_changed(c = null) -> void:
+	if c == null or c == player:
+		_rebuild_view_model()
 
 
 func _rebuild_view_model() -> void:
+	if camera == null or player == null:
+		return
 	if view_model != null and is_instance_valid(view_model):
 		view_model.queue_free()
 	view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment), player.panther)
@@ -719,6 +899,7 @@ func _rebuild_view_model() -> void:
 
 # 서리 장벽: 얼음 덩어리를 시전자 위치에 3초간 표시
 func on_frozen(c) -> void:
+	_bc("frozen_fx", [c.nid, c.frozen])
 	var ice := Models.ice_block(c.height + 0.4)
 	var holder := Node3D.new()
 	holder.add_child(ice)
@@ -728,6 +909,7 @@ func on_frozen(c) -> void:
 
 
 func spark(p: Vector3, color: Color) -> void:
+	_bc("spark", [p, color], false)
 	var m := Models.sphere(0.3, Models.glow_mat(color, 3.0), 6)
 	m.position = p
 	world.add_child(m)
@@ -736,6 +918,7 @@ func spark(p: Vector3, color: Color) -> void:
 
 # 스킬 사용 시 퍼지는 고리 (보호막/치유 시각 효과)
 func spawn_ring_burst(p: Vector3, color: Color, rad: float) -> void:
+	_bc("spawn_ring_burst", [p, color, rad])
 	var m := MeshInstance3D.new()
 	var tm := TorusMesh.new()
 	tm.inner_radius = 0.9
@@ -756,6 +939,7 @@ func spawn_ring_burst(p: Vector3, color: Color, rad: float) -> void:
 
 
 func spawn_telegraph(p: Vector3, rad: float, dur: float) -> void:
+	_bc("spawn_telegraph", [p, rad, dur])
 	var m := MeshInstance3D.new()
 	var cm := CylinderMesh.new()
 	cm.top_radius = 1.0
@@ -804,7 +988,10 @@ func update_effects(dt: float) -> void:
 			"telegraph":
 				n.scale = Vector3(maxf(0.01, k) * e.rad, 1.0, maxf(0.01, k) * e.rad)
 			"ice":
-				n.position = e.follow.pos
+				if e.follow == null:
+					k = 1.0
+				else:
+					n.position = e.follow.pos
 				if not e.follow.alive or e.follow.frozen <= 0.0:
 					k = 1.0
 		if k >= 1.0:
@@ -817,15 +1004,17 @@ func update_effects(dt: float) -> void:
 		i -= 1
 
 
+
+
 func on_damage(target, dmg: float, src, blocked: bool, info: Dictionary) -> void:
-	if src == player and target != player and dmg > 0.0:
+	if is_human(src) and target != src and dmg > 0.0:
 		var col := Color(0.6, 0.67, 0.67) if blocked else (Color(1.0, 0.82, 0.23) if info.get("headshot", false) else Color.WHITE)
-		hud.damage_number(target.center(), dmg, col)
-		hud.hit_marker(target.hp <= 0.0)
-	if target == player and dmg > 0.0:
-		hud.hurt(dmg / player.max_hp)
-		Sfx.play("hurt")
-		player.interact_t = 0.0
+		notify(src, "damage_number", [target.center(), dmg, col])
+		notify(src, "hit_marker", [target.hp <= 0.0])
+	if is_human(target) and dmg > 0.0:
+		notify(target, "hurt", [dmg / target.max_hp])
+		notify(target, "sfx", ["hurt"])
+		target.interact_t = 0.0
 
 
 func on_death(actor, src) -> void:
@@ -833,38 +1022,51 @@ func on_death(actor, src) -> void:
 		spawn_ring_burst(actor.pos + Vector3(0, 0.3, 0), Skills.NATURE, 2.0)
 		return
 	var sname: String = src.display_name() if src != null else "어둠"
-	if actor.kind != "monster" or src == player:
-		hud.killfeed("%s ➜ %s" % [sname, actor.display_name()], src == player or actor == player)
-	Sfx.play("death", dist_to_player(actor.pos))
+	if actor.kind != "monster" or is_human(src):
+		for h in players:
+			if actor.kind != "monster" or src == h:
+				notify(h, "killfeed", ["%s ➜ %s" % [sname if src != h else "당신", actor.display_name() if actor != h else "당신"], src == h or actor == h])
+	sfx("death", actor.pos)
 	actor.windup = 0.0
 	if actor.kind == "monster":
-		if src == player:
-			player.kills += 1
+		if is_human(src):
+			src.kills += 1
 		var is_boss: bool = actor.def.boss
 		var luck := (1.2 if depth > 1 else 0.0) + (3.0 if is_boss else 0.0)
 		if is_boss:
 			boss_dead = true
-			hud.announce("망령 기사가 쓰러졌습니다", "황금 보물상자를 차지하세요")
+			notify_all("announce", ["망령 기사가 쓰러졌습니다", "황금 보물상자를 차지하세요"])
 			drop_bag(actor.pos, Data.roll_loot(5, luck), "망령 기사의 유해", Color(1, 0.8, 0.2))
 		elif randf() < 0.4:
 			drop_bag(actor.pos, Data.roll_loot(randi_range(1, 2), luck), actor.name + "의 유해", Color(0.42, 0.31, 0.19))
 	elif actor.kind == "bot":
-		if src == player:
-			player.pvp_kills += 1
+		if is_human(src):
+			src.pvp_kills += 1
 		drop_bag(actor.pos, actor.all_items(), actor.name + "의 시체", Color(0.2, 0.33, 0.67))
 		actor.hp_bar.visible = false
-	elif actor == player:
-		end_raid(false, src.display_name() if src != null else "어둠")
+	elif is_human(actor):
+		if is_human(src) and src != actor:
+			src.pvp_kills += 1
+		finish_player(actor, false, src.display_name() if src != null else "어둠")
 
 
 func drop_bag(p: Vector3, items: Array, nm: String, color := Color(0.42, 0.31, 0.19)) -> void:
 	if items.is_empty():
 		return
-	var node := Models.loot_bag(color)
 	var pp := Vector3(p.x, 0, p.z)
+	bag_seq += 1
+	var b := _add_bag_node(bag_seq, pp, color, nm)
+	b["items"] = items
+	_bc("bag_add", [bag_seq, pp, color, nm, items.size()])
+
+
+func _add_bag_node(id: int, pp: Vector3, color: Color, nm: String) -> Dictionary:
+	var node := Models.loot_bag(color)
 	node.position = pp
 	world.add_child(node)
-	loot_bags.append({"pos": pp, "node": node, "items": items, "name": nm, "kind": "bag"})
+	var b := {"id": id, "pos": pp, "node": node, "items": [], "name": nm, "kind": "bag", "n": 0}
+	loot_bags.append(b)
+	return b
 
 
 func refresh_bag(bag: Dictionary) -> void:
@@ -872,15 +1074,24 @@ func refresh_bag(bag: Dictionary) -> void:
 		if is_instance_valid(bag.node):
 			bag.node.queue_free()
 		loot_bags.erase(bag)
-		if hud.container == bag:
-			hud.close_container()
+		for p in players:
+			if p.container == bag:
+				close_container_for(p)
+		_bc("bag_del", [bag.id])
+	else:
+		_bc("bag_n", [bag.id, bag.items.size()])
 
 
 func open_chest(chest: Dictionary, _by) -> void:
 	if chest.opened:
 		return
 	chest.opened = true
-	Sfx.play("chest", dist_to_player(chest.pos))
+	sfx("chest", chest.pos)
+	_bc("chest_open", [chest.id])
+	_chest_lid(chest)
+
+
+func _chest_lid(chest: Dictionary) -> void:
 	var lid: Node3D = chest.node.get_meta("lid")
 	var tw := create_tween()
 	tw.tween_property(lid, "rotation:x", -1.9, 0.35).set_trans(Tween.TRANS_BACK)
@@ -890,7 +1101,158 @@ func bot_extract(bot) -> void:
 	bot.extracted = true
 	bot.alive = false
 	bot.remove_from_world()
-	hud.killfeed("%s 이(가) 탈출했습니다" % bot.display_name(), false, true)
+	_bc("actor_del", [bot.nid])
+	for h in players:
+		notify(h, "killfeed", ["%s 이(가) 탈출했습니다" % bot.display_name(), false, true])
+
+
+# ------------------------------------------------------------------ 상자/전리품 창 (서버 측, 플레이어별)
+func cont_view(o: Dictionary) -> Dictionary:
+	return {"cid": ("c%d" if o.kind == "chest" else "b%d") % o.id, "id": o.id, "name": o.name, "items": o.items, "pos": o.pos, "kind": o.kind}
+
+
+func open_container_for(p, o: Dictionary) -> void:
+	p.container = o
+	if p == player:
+		if hud != null:
+			hud.open_container(o)
+	elif p.peer_id > 1:
+		Net.send_ev(p.peer_id, "cont_open", [cont_view(o)])
+
+
+func close_container_for(p) -> void:
+	if p.container == null:
+		return
+	p.container = null
+	if p == player:
+		if hud != null:
+			hud.close_container(false)
+	elif p.peer_id > 1:
+		Net.send_ev(p.peer_id, "cont_close", [])
+
+
+func container_changed(o: Dictionary) -> void:
+	for p in players:
+		if p.container == o:
+			if p == player:
+				if hud != null:
+					hud.refresh_panels()
+			elif p.peer_id > 1:
+				Net.send_ev(p.peer_id, "cont_upd", [cont_view(o)])
+	if o.kind == "bag":
+		refresh_bag(o)
+
+
+func inv_changed(p) -> void:
+	if p == player:
+		if hud != null:
+			hud.refresh_panels()
+	elif p.peer_id > 1 and is_auth():
+		Net.send_ev(p.peer_id, "inv", [p.equipment, p.bag])
+
+
+# HUD의 인벤토리 조작 요청 (클라이언트는 서버로 보냄)
+func request_inv(op: String, args: Array = []) -> void:
+	if is_auth():
+		if player != null:
+			inv_op(player, op, args)
+	else:
+		Net.send_inv(op, args)
+
+
+func inv_op(p, op: String, args: Array) -> void:
+	if p.done and op != "close":
+		return
+	match op:
+		"close":
+			close_container_for(p)
+		"abandon":
+			if not p.done:
+				p.hp = 0.0
+				p.alive = false
+				finish_player(p, false, "포기")
+		"unequip":
+			var slot: String = args[0]
+			if not p.equipment.has(slot) or p.equipment[slot] == null:
+				return
+			if p.bag.size() >= SaveData.BAG_SIZE:
+				notify(p, "toast", ["가방이 가득 찼습니다"])
+				return
+			p.bag.append(p.equipment[slot])
+			p.equipment[slot] = null
+			p.recalc()
+			inv_changed(p)
+		"use":
+			var i: int = args[0]
+			if i < 0 or i >= p.bag.size():
+				return
+			var it: Dictionary = p.bag[i]
+			var b := Data.base_of(it)
+			if b.slot == "consumable":
+				if p.hp >= p.max_hp:
+					notify(p, "toast", ["체력이 가득 찼습니다"])
+				elif p.alive:
+					p.use_consumable(i)
+				return
+			if Data.can_equip(it, p.cls):
+				var prev = p.equipment[b.slot]
+				p.equipment[b.slot] = it
+				p.bag.remove_at(i)
+				if prev != null:
+					p.bag.append(prev)
+				p.recalc()
+				inv_changed(p)
+			elif b.slot == "weapon":
+				notify(p, "toast", ["%s 전용 무기입니다" % Data.class_names(b.classes)])
+		"drop":
+			var i: int = args[0]
+			if i < 0 or i >= p.bag.size():
+				return
+			var it = p.bag[i]
+			p.bag.remove_at(i)
+			if p.container != null:
+				p.container.items.append(it)
+				container_changed(p.container)
+			else:
+				drop_bag(p.pos + Actor.fwd(p.yaw) * 1.2, [it], "버려진 물건")
+			inv_changed(p)
+		"take":
+			var c = p.container
+			var i: int = args[0]
+			if c == null or i < 0 or i >= c.items.size():
+				return
+			_take_item(p, c, i)
+			container_changed(c)
+			inv_changed(p)
+		"take_all":
+			var c = p.container
+			if c == null:
+				return
+			var order := range(c.items.size())
+			order.sort_custom(func(a, b): return c.items[a].value > c.items[b].value)
+			var taken := []
+			for i in order:
+				if p.bag.size() >= SaveData.BAG_SIZE:
+					notify(p, "toast", ["가방이 가득 찼습니다"])
+					break
+				taken.append(c.items[i])
+				p.bag.append(c.items[i])
+			for it in taken:
+				c.items.erase(it)
+			if taken.size():
+				notify(p, "sfx", ["coin"])
+			container_changed(c)
+			inv_changed(p)
+
+
+func _take_item(p, c: Dictionary, i: int) -> void:
+	if p.bag.size() >= SaveData.BAG_SIZE:
+		notify(p, "toast", ["가방이 가득 찼습니다"])
+		return
+	var it: Dictionary = c.items[i]
+	c.items.remove_at(i)
+	p.bag.append(it)
+	notify(p, "sfx", ["coin" if Data.base_of(it).slot == "treasure" else "pickup"])
 
 
 # ------------------------------------------------------------------ 포탈
@@ -911,10 +1273,42 @@ func spawn_portal(kind: String) -> void:
 	var p := dungeon.center(int(room.cx), int(room.cz))
 	if dungeon.is_solid(p.x, p.z):
 		p = dungeon.random_point_in_room(room)
+	portal_seq += 1
+	_add_portal_node(portal_seq, kind, p)
+	_bc("portal_add", [portal_seq, kind, p])
+
+
+func _add_portal_node(id: int, kind: String, p: Vector3) -> void:
 	var node := Models.portal(kind)
 	node.position = p
 	world.add_child(node)
-	portals.append({"kind": kind, "pos": p, "node": node, "life": 150.0 if kind == "descend" else INF})
+	portals.append({"id": id, "kind": kind, "pos": p, "node": node, "life": 150.0 if kind == "descend" else INF})
+
+
+func _animate_portals(dt: float) -> void:
+	var i := portals.size() - 1
+	while i >= 0:
+		var p: Dictionary = portals[i]
+		p.life -= dt
+		var spin: Node3D = p.node.get_meta("spin")
+		if camera != null:
+			var cp := camera.global_position
+			var sp := spin.global_position
+			# 카메라 쪽을 바라보게 (포탈 정중앙에 서 있으면 방향을 유지)
+			if Vector2(cp.x - sp.x, cp.z - sp.z).length() > 0.2:
+				spin.look_at(Vector3(cp.x, sp.y, cp.z), Vector3.UP)
+				spin.rotate_object_local(Vector3.FORWARD, time)
+		var dm: StandardMaterial3D = p.node.get_meta("disc")
+		dm.albedo_color.a = 0.35 + sin(time * 3.0) * 0.1
+		var pl: OmniLight3D = p.node.get_meta("light")
+		pl.light_energy = 3.5 + sin(time * 4.0) * 0.6
+		if p.life <= 0.0 and is_auth():
+			p.node.queue_free()
+			portals.remove_at(i)
+			_bc("portal_del", [p.id])
+			if hud != null:
+				hud.toast("심연의 포탈이 닫혔습니다")
+		i -= 1
 
 
 func update_portals(dt: float) -> void:
@@ -923,51 +1317,42 @@ func update_portals(dt: float) -> void:
 			s["done"] = true
 			for i in s.n:
 				spawn_portal(s.kind)
-			Sfx.play("bell")
+			notify_all("sfx", ["bell"])
 			if s.kind == "exit":
-				hud.announce("탈출 포탈이 열렸습니다", "지도(M)에서 파란 포탈 위치를 확인하세요")
+				notify_all("announce", ["탈출 포탈이 열렸습니다", "지도(M)에서 파란 포탈 위치를 확인하세요"])
 			else:
-				hud.announce("심연의 포탈이 열렸습니다", "붉은 포탈: 더 깊은 층으로 (더 강한 적, 더 좋은 보물)")
-	var i := portals.size() - 1
-	while i >= 0:
-		var p: Dictionary = portals[i]
-		p.life -= dt
-		var spin: Node3D = p.node.get_meta("spin")
-		var cp := camera.global_position
-		var sp := spin.global_position
-		# 카메라 쪽을 바라보게 (포탈 정중앙에 서 있으면 방향을 유지)
-		if Vector2(cp.x - sp.x, cp.z - sp.z).length() > 0.2:
-			spin.look_at(Vector3(cp.x, sp.y, cp.z), Vector3.UP)
-			spin.rotate_object_local(Vector3.FORWARD, time)
-		var dm: StandardMaterial3D = p.node.get_meta("disc")
-		dm.albedo_color.a = 0.35 + sin(time * 3.0) * 0.1
-		var pl: OmniLight3D = p.node.get_meta("light")
-		pl.light_energy = 3.5 + sin(time * 4.0) * 0.6
-		if p.life <= 0.0:
-			p.node.queue_free()
-			portals.remove_at(i)
-			hud.toast("심연의 포탈이 닫혔습니다")
-		i -= 1
+				notify_all("announce", ["심연의 포탈이 열렸습니다", "붉은 포탈: 더 깊은 층으로 (더 강한 적, 더 좋은 보물)"])
+	_animate_portals(dt)
 	# 플레이어 탈출 채널링 (피격돼도 끊기지 않음)
-	if not player.alive or result != null:
-		return
-	var portal = null
-	for p in portals:
-		if Vector2(p.pos.x - player.pos.x, p.pos.z - player.pos.z).length() < 1.8:
-			portal = p
-	if portal != null:
-		if player.extract_t == 0.0:
-			Sfx.play("portal")
-		player.extract_t += dt
-		hud.channel("탈출 중..." if portal.kind == "exit" else "심연으로 내려가는 중...", player.extract_t / 3.0)
-		if player.extract_t >= 3.0:
-			player.extract_t = 0.0
-			if portal.kind == "exit":
-				end_raid(true)
-			else:
-				descend()
+	for pl in players:
+		if pl.done or not pl.alive:
+			continue
+		var portal = null
+		for p in portals:
+			if Vector2(p.pos.x - pl.pos.x, p.pos.z - pl.pos.z).length() < 1.8:
+				portal = p
+		if portal != null:
+			if pl.extract_t == 0.0:
+				notify(pl, "sfx", ["portal"])
+			pl.extract_t += dt
+			channel_for(pl, "탈출 중..." if portal.kind == "exit" else "심연으로 내려가는 중...", pl.extract_t / 3.0)
+			if pl.extract_t >= 3.0:
+				pl.extract_t = 0.0
+				if portal.kind == "exit" or online():
+					finish_player(pl, true)
+				else:
+					descend()
+					return
+		else:
+			pl.extract_t = 0.0
+
+
+func channel_for(p, text: String, k: float) -> void:
+	if p == player:
+		if hud != null:
+			hud.channel(text, k)
 	else:
-		player.extract_t = 0.0
+		p.ch = [text, k]
 
 
 func descend() -> void:
@@ -980,49 +1365,84 @@ func descend() -> void:
 
 
 # ------------------------------------------------------------------ 종료
-func end_raid(success: bool, killer := "") -> void:
-	if result != null:
+# 플레이어 한 명의 레이드 종료 (탈출 성공 / 사망). 모두 끝나면 레이드 종료
+func finish_player(p, success: bool, killer := "") -> void:
+	if p.done:
 		return
+	p.done = true
 	var items := []
 	for s in Data.GEAR_SLOTS:
-		if player.equipment[s] != null:
-			items.append(player.equipment[s])
-	items.append_array(player.bag)
-	result = {
+		if p.equipment[s] != null:
+			items.append(p.equipment[s])
+	items.append_array(p.bag)
+	var r := {
 		"success": success, "killer": killer, "items": items, "value": Data.items_value(items),
-		"kills": player.kills, "pvp_kills": player.pvp_kills, "depth": depth, "time": time,
-		"equipment": player.equipment, "bag": player.bag,
+		"kills": p.kills, "pvp_kills": p.pvp_kills, "depth": depth, "time": time,
+		"equipment": p.equipment, "bag": p.bag,
 	}
-	end_timer = 0.3 if success else 2.5
-	hud.close_container()
+	close_container_for(p)
 	if success:
-		Sfx.play("portal")
+		p.extracted = true
+		if p.puppet != null:
+			p.puppet.remove_from_world()
+		_bc("actor_del", [p.nid])
+		for h in players:
+			if h != p:
+				notify(h, "killfeed", ["%s 이(가) 탈출했습니다" % p.name, false, true])
+	elif online() and items.size():
+		# 함께하기: 쓰러진 자리에 소지품이 떨어져 다른 사람이 주울 수 있음
+		drop_bag(p.pos, items.duplicate(true), "%s의 시체" % p.name, Color(0.55, 0.25, 0.2))
+	if p == player:
+		result = r
+		end_timer = 0.3 if success else 2.5
+		if hud != null:
+			hud.close_container(false)
+		if success:
+			Sfx.play("portal")
+	elif p.peer_id > 1:
+		Net.send_ev(p.peer_id, "result", [r])
+		Net.player_left_raid(p.peer_id)
+	var all_done := true
+	for h in players:
+		if not h.done:
+			all_done = false
+	if all_done:
+		over = true
+
+
+func end_raid(success: bool, killer := "") -> void:
+	if player != null:
+		finish_player(player, success, killer)
+
+
+# 접속이 끊긴 친구는 사망 처리
+func on_peer_left(id: int) -> void:
+	for p in players:
+		if p.peer_id == id and not p.done:
+			p.hp = 0.0
+			p.alive = false
+			finish_player(p, false, "연결 끊김")
 
 
 # ------------------------------------------------------------------ 입력
 func _unhandled_input(event: InputEvent) -> void:
-	if not running or player == null:
+	if not running or player == null or hud == null:
 		return
-	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and player.alive:
+	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and player.alive and not player.done:
 		player.look(event.relative, sensitivity)
 
 
-func fire_player_projectile(kind: String, speed: float, dmg: float, yaw_off: float) -> void:
-	var b := Basis.from_euler(Vector3(camera.rotation.x, camera.rotation.y + yaw_off, 0.0), EULER_ORDER_YXZ)
-	var dir := -b.z
-	var from := camera.position + dir * 0.5 + Vector3(0, -0.12, 0)
-	spawn_projectile(player, kind, from, dir, speed, dmg)
-
-
 # 상호작용 대상 (상자, 전리품)
-func find_interactable():
-	var f := Actor.fwd(player.yaw)
+func find_interactable(pl = null):
+	if pl == null:
+		pl = player
+	var f := Actor.fwd(pl.yaw)
 	var best = null
 	var bs := -1e9
 	for list in [chests, loot_bags]:
 		for o in list:
-			var dx: float = o.pos.x - player.pos.x
-			var dz: float = o.pos.z - player.pos.z
+			var dx: float = o.pos.x - pl.pos.x
+			var dz: float = o.pos.z - pl.pos.z
 			var d := sqrt(dx * dx + dz * dz)
 			if d > 2.6:
 				continue
@@ -1036,33 +1456,59 @@ func find_interactable():
 	return best
 
 
-func update_interact(dt: float) -> void:
-	var o = find_interactable()
-	interact_target = o
-	if hud.container != null and hud.container.pos.distance_to(player.pos) > 3.5:
-		hud.close_container()
-	if o == null or not player.alive:
-		player.interact_t = 0.0
-		hud.prompt("")
-		return
+func _item_count(o: Dictionary) -> int:
+	return o.items.size() if is_auth() else int(o.get("n", 0))
+
+
+func _prompt_for(o) -> String:
+	if o == null:
+		return ""
 	if o.kind == "chest" and not o.opened:
-		if Input.is_action_pressed("interact") and not hud.is_panel_open() and not menu_open:
-			player.interact_t += dt
-			hud.channel("상자 여는 중...", player.interact_t / 1.2)
-			if player.interact_t >= 1.2:
-				player.interact_t = 0.0
-				open_chest(o, player)
-				hud.open_container(o)
+		return "[F] 길게 눌러 %s 열기" % o.name
+	return "[F] %s 살펴보기 (%d)" % [o.name, _item_count(o)]
+
+
+func update_interact(dt: float) -> void:
+	for p in players:
+		if not p.done:
+			_interact_for(p, dt)
+
+
+func _interact_for(p, dt: float) -> void:
+	var o = find_interactable(p)
+	var local: bool = p == player
+	if local:
+		interact_target = o
+	if p.container != null and p.container.pos.distance_to(p.pos) > 3.5:
+		close_container_for(p)
+	var panel: bool = (hud != null and hud.is_panel_open()) or menu_open if local else p.inp.panel
+	var menu: bool = menu_open if local else false
+	# F: 열린 창이 있으면 닫기
+	if p.inp.just_pressed("interact") and p.container != null and not menu:
+		close_container_for(p)
+		p.interact_t = 0.0
+		if local and hud != null:
+			hud.prompt(_prompt_for(o))
+		return
+	if o == null or not p.alive:
+		p.interact_t = 0.0
+		if local and hud != null:
+			hud.prompt("")
+		return
+	if local and hud != null:
+		hud.prompt(_prompt_for(o))
+	if o.kind == "chest" and not o.opened:
+		if p.inp.pressed("interact") and not panel and not menu:
+			p.interact_t += dt
+			channel_for(p, "상자 여는 중...", p.interact_t / 1.2)
+			if p.interact_t >= 1.2:
+				p.interact_t = 0.0
+				open_chest(o, p)
+				open_container_for(p, o)
 		else:
-			player.interact_t = 0.0
-		hud.prompt("[F] 길게 눌러 %s 열기" % o.name)
-	else:
-		hud.prompt("[F] %s 살펴보기 (%d)" % [o.name, o.items.size()])
-		if Input.is_action_just_pressed("interact") and not menu_open:
-			if hud.container == o:
-				hud.close_container()
-			else:
-				hud.open_container(o)
+			p.interact_t = 0.0
+	elif p.inp.just_pressed("interact") and not menu:
+		open_container_for(p, o)
 
 
 # ------------------------------------------------------------------ 메인 루프
@@ -1070,66 +1516,50 @@ func _process(delta: float) -> void:
 	if not running:
 		return
 	var dt := minf(delta, 0.05)
+	if net == "client":
+		_process_client(dt)
+		return
 	time += dt
 	level_time += dt
-	if result == null:
+	if not over:
 		time_left -= dt
 	if time_left <= 120.0 and not warned:
 		warned = true
-		Sfx.play("bell")
-		hud.announce("던전이 무너지고 있습니다!", "2분 안에 탈출하지 못하면 어둠에 삼켜집니다")
+		notify_all("sfx", ["bell"])
+		notify_all("announce", ["던전이 무너지고 있습니다!", "2분 안에 탈출하지 못하면 어둠에 삼켜집니다"])
 	if time_left <= 120.0:
 		env.environment.fog_density = base_fog + (1.0 - maxf(0.0, time_left) / 120.0) * 0.06
-	if time_left <= 0.0 and player.alive and result == null:
-		player.hp = 0.0
-		player.alive = false
-		end_raid(false, "무너지는 던전")
+	if time_left <= 0.0:
+		for p in players:
+			if not p.done:
+				p.hp = 0.0
+				p.alive = false
+				finish_player(p, false, "무너지는 던전")
 
-	player.update(dt)
+	for p in players:
+		if not p.extracted:
+			p.update(dt)
 	update_interact(dt)
 	for a in actors:
-		if a != player:
+		if a.kind != "player":
 			a.update(dt)
 			a.last_vel = (a.pos - a.last_pos) / dt
 			a.last_vel.y = 0.0
 			a.last_pos = a.pos
 	separate()
-
-	# 보이지 않는 캐릭터는 그리지 않음 (멀거나 벽 너머)
-	cull_t -= dt
-	var do_cull := cull_t <= 0.0
-	if do_cull:
-		cull_t = 0.15
-	var cam_pos := camera.global_position
-	for a in actors:
-		if a == player or a.extracted or a.node == null:
-			continue
-		if do_cull:
-			var d: float = absf(a.pos.x - player.pos.x) + absf(a.pos.z - player.pos.z)
-			a.set_visible(d < 70.0 and (d < 8.0 or dungeon.los(player.pos.x, player.pos.z, a.pos.x, a.pos.z)))
-		if a.visible:
-			a.animate(dt)
-			a.update_hp_bar(cam_pos)
-		else:
-			a.node.position = a.pos
-
+	_draw_actors(dt)
 	update_projectiles(dt)
 	update_zones(dt)
 	update_effects(dt)
 	for b in loot_bags:
 		b.node.rotation.y += dt
 	update_portals(dt)
-	player.update_camera(camera, view_model, shield_bubble, dt)
-	player_light.position = camera.position + Vector3(0, 0.6, 0) - Actor.fwd(player.yaw) * 0.5
-	player_light.light_energy = 1.3 + sin(time * 13.0) * 0.08 + sin(time * 7.3) * 0.1
-	dungeon.animate_torches(time, cam_pos)
-	update_explored()
-	hud.update_hud(dt)
+	_update_view(dt)
 
 	# 죽은 몬스터/봇 정리 (시체는 잠시 남김)
 	var keep := []
 	for a in actors:
-		if a == player or a.alive:
+		if a.kind == "player" or a.alive:
 			keep.append(a)
 		elif a.extracted:
 			continue
@@ -1139,13 +1569,74 @@ func _process(delta: float) -> void:
 			keep.append(a)
 		else:
 			a.remove_from_world()
+			_bc("actor_del", [a.nid])
 	actors = keep
 
-	if result != null:
+	if online():
+		snap_t -= dt
+		if snap_t <= 0.0:
+			snap_t = 0.05
+			_send_snapshots()
+
+	if result != null and end_timer >= 0.0:
 		end_timer -= dt
 		if end_timer <= 0.0:
-			running = false
+			end_timer = -1.0
 			raid_ended.emit(result)
+			if net == "offline":
+				running = false
+	# 함께하기: 모두 끝났고 내 결과 화면도 넘어갔으면 레이드 종료
+	if over and net != "offline" and (player == null or (result != null and end_timer < 0.0)):
+		_finish_raid()
+
+
+func _finish_raid() -> void:
+	if not running:
+		return
+	running = false
+	Net.raid_finished()
+	raid_over.emit()
+
+
+# 캐릭터 표시: 보이지 않는 캐릭터는 그리지 않음 (멀거나 벽 너머)
+func _draw_actors(dt: float) -> void:
+	cull_t -= dt
+	var do_cull := cull_t <= 0.0
+	if do_cull:
+		cull_t = 0.15
+	var cam_pos := camera.global_position if camera != null else Vector3.ZERO
+	var viewer = player
+	for a in actors:
+		if a == player or a.extracted:
+			continue
+		var v = a if a is AIActor else a.puppet
+		if v == null or v.node == null:
+			continue
+		if v != a:
+			v.mirror(a)
+		if viewer == null:
+			if v.visible:
+				v.set_visible(false)
+			continue
+		if do_cull:
+			var d: float = absf(a.pos.x - viewer.pos.x) + absf(a.pos.z - viewer.pos.z)
+			v.set_visible(d < 70.0 and (d < 8.0 or dungeon.los(viewer.pos.x, viewer.pos.z, a.pos.x, a.pos.z)))
+		if v.visible:
+			v.animate(dt)
+			v.update_hp_bar(cam_pos)
+		else:
+			v.node.position = a.pos
+
+
+func _update_view(dt: float) -> void:
+	if player == null or camera == null or hud == null:
+		return
+	player.update_camera(camera, view_model, shield_bubble, dt)
+	player_light.position = camera.position + Vector3(0, 0.6, 0) - Actor.fwd(player.yaw) * 0.5
+	player_light.light_energy = 1.3 + sin(time * 13.0) * 0.08 + sin(time * 7.3) * 0.1
+	dungeon.animate_torches(time, camera.global_position)
+	update_explored()
+	hud.update_hud(dt)
 
 
 func separate() -> void:
@@ -1216,7 +1707,405 @@ func aimed_actor():
 func abandon() -> void:
 	if result != null:
 		return
+	if net == "client":
+		Net.send_inv("abandon", [])
+		return
 	player.hp = 0.0
 	player.alive = false
-	end_raid(false, "포기")
+	finish_player(player, false, "포기")
 	end_timer = 0.0
+
+
+# ------------------------------------------------------------------ 멀티플레이: 서버
+func _player_by_peer(id: int):
+	for p in players:
+		if p.peer_id == id:
+			return p
+	return null
+
+
+func net_input(id: int, p: Vector3, yaw: float, pitch: float, bits: int, can_act_flag: bool, panel: bool) -> void:
+	var pl = _player_by_peer(id)
+	if pl == null or pl.done:
+		return
+	pl.net_pos = p
+	pl.has_net = true
+	if pl.alive and pl.frozen <= 0.0:
+		pl.yaw = yaw
+		pl.pitch = clampf(pitch, -1.5, 1.5)
+	pl.inp.set_held_bits(bits)
+	pl.inp.can_act = can_act_flag
+	pl.inp.panel = panel
+
+
+func net_press(id: int, action: String) -> void:
+	var pl = _player_by_peer(id)
+	if pl != null and action in InputState.PRESS:
+		pl.inp.push_press(action)
+
+
+func net_inv(id: int, op: String, args: Array) -> void:
+	var pl = _player_by_peer(id)
+	if pl != null:
+		inv_op(pl, op, args)
+
+
+# 스냅샷 한 줄 (float 10개): id, x, y, z, yaw, hp, flags, move, windup_k, attack
+const ACT_STRIDE := 10
+const PROJ_STRIDE := 10
+const PROJ_KINDS := ["arrow", "knife", "blade", "bolt", "firebolt", "pyroblast", "icebolt", "thorn", "poison", "grasp", "fireball"]
+
+
+func _pack_actor(out: PackedFloat32Array, a) -> void:
+	var f := 0
+	if a.alive:
+		f |= 1
+	if a.get("aim_anim") == true:
+		f |= 2
+	if a.blocking:
+		f |= 4
+	if a.panther:
+		f |= 8
+	if a.spin_t > 0.0:
+		f |= 16
+	if a.stealth > 0.0:
+		f |= 32
+	if a.hit_flash > 0.0:
+		f |= 64
+	var mv: float = a.move_amt
+	var atk: float = a.attack_anim
+	if a is Player:
+		mv = 1.0 if a.moving else 0.0
+		atk = 0.25 if a.swing != null and a.swing.t < 0.1 else 0.0
+	var wk: float = (1.0 - a.windup / a.windup_max) if a.windup > 0.0 else -1.0
+	out.append_array([a.nid, a.pos.x, a.pos.y, a.pos.z, a.yaw, a.hp, f, mv, wk, atk])
+
+
+# 서버 -> 각 클라이언트 (초당 20회). UDP 한 패킷(MTU)에 들어가도록 액터를 나눠 보냄
+func _send_snapshots() -> void:
+	var zs := []
+	for z in zones:
+		zs.append([z.id, z.kind, z.pos, z.radius])
+	for pl in players:
+		if pl.peer_id <= 1 or pl.done:
+			continue
+		var acts := PackedFloat32Array()
+		for a in actors:
+			if a == pl or a.extracted:
+				continue
+			if absf(a.pos.x - pl.pos.x) + absf(a.pos.z - pl.pos.z) > 75.0 and a.kind != "player":
+				continue
+			_pack_actor(acts, a)
+		var first := ACT_STRIDE * 10
+		var per := ACT_STRIDE * 28
+		# 투사체: 가까운 것부터 최대 28개 (별도 패킷)
+		var near := projectiles.filter(func(p): return absf(p.pos.x - pl.pos.x) + absf(p.pos.z - pl.pos.z) < 70.0)
+		if near.size() > 28:
+			near.sort_custom(func(a, b): return a.pos.distance_squared_to(pl.pos) < b.pos.distance_squared_to(pl.pos))
+			near.resize(28)
+		var projs := PackedFloat32Array()
+		for p in near:
+			projs.append_array([p.id, PROJ_KINDS.find(p.kind), p.pos.x, p.pos.y, p.pos.z, p.vel.x, p.vel.y, p.vel.z, 1.0 if p.stuck > 0.0 else 0.0, p.gravity])
+		Net.send_snap(pl.peer_id, {"t": time_left, "a": acts.slice(0, first), "z": zs}, pl.net_state())
+		Net.send_projs(pl.peer_id, projs)
+		var i := first
+		while i < acts.size():
+			Net.send_acts(pl.peer_id, acts.slice(i, i + per))
+			i += per
+		pl.ch = []
+
+
+# 클라이언트에게 보내는 레이드 시작 정보
+func client_info(p) -> Dictionary:
+	var acts := []
+	for a in actors:
+		if a != p:
+			acts.append(describe(a))
+	var cs := []
+	for c in chests:
+		cs.append([c.id, c.pos, c.rot, c.tier, c.name, c.opened])
+	return {
+		"seed": level_seed, "depth": depth, "time_left": time_left, "pvp": pvp,
+		"me": {"nid": p.nid, "pos": p.pos, "yaw": p.yaw, "cls": p.cls, "equipment": p.equipment, "bag": p.bag, "name": p.name, "faction": p.faction},
+		"actors": acts, "chests": cs, "players": players.size(),
+	}
+
+
+# ------------------------------------------------------------------ 멀티플레이: 클라이언트
+func start_client(info: Dictionary, hud_node) -> void:
+	net = "client"
+	hud = hud_node
+	pvp = info.pvp
+	level_seed = info.seed
+	depth = info.depth
+	time = 0.0
+	level_time = 0.0
+	time_left = info.time_left
+	result = null
+	end_timer = -1.0
+	Net.game = self
+	world = Node3D.new()
+	world.name = "World"
+	add_child(world)
+	_make_env(depth > 1)
+	dungeon = Dungeon.new(depth, level_seed + depth)
+	dungeon.build(world, false)
+	_reset_lists(depth)
+	portal_schedule = []
+	var me: Dictionary = info.me
+	player = Player.new(self, me.pos, me.cls, me.equipment, me.bag, me.name, me.faction, 0)
+	player.nid = me.nid
+	player.yaw = me.yaw
+	players = [player]
+	actors.append(player)
+	net_actors[player.nid] = player
+	for d in info.actors:
+		_net_add_actor(d)
+	for c in info.chests:
+		var node := Models.chest(c[3])
+		node.position = c[1]
+		node.rotation.y = c[2]
+		world.add_child(node)
+		var ch := {"id": c[0], "pos": c[1], "node": node, "tier": c[3], "name": c[4], "opened": c[5], "items": [], "kind": "chest"}
+		chests.append(ch)
+		if c[5]:
+			_chest_lid(ch)
+	_make_view()
+	running = true
+	hud.start(self)
+	hud.announce("던전에 입장했습니다", "%d명이 함께 입장했습니다 · %s" % [info.players, "개인전 (서로 적)" if pvp else "파티 (서로 아군)"])
+
+
+func _net_add_actor(d: Dictionary) -> void:
+	if net_actors.has(d.id):
+		return
+	var a := NetActor.new(self, d)
+	actors.append(a)
+	net_actors[a.nid] = a
+
+
+func _net_del_actor(id: int) -> void:
+	var a = net_actors.get(id)
+	if a == null or a == player:
+		return
+	net_actors.erase(id)
+	actors.erase(a)
+	a.remove_from_world()
+
+
+func _process_client(dt: float) -> void:
+	time += dt
+	level_time += dt
+	time_left -= dt
+	if time_left <= 120.0:
+		warned = true
+		env.environment.fog_density = base_fog + (1.0 - maxf(0.0, time_left) / 120.0) * 0.06
+	player.update(dt)
+	if hud != null and not player.done:
+		interact_target = find_interactable(player) if player.alive else null
+		hud.prompt(_prompt_for(interact_target))
+		# F: 열린 창은 즉시 닫기 (서버도 같은 입력으로 닫음)
+		if Input.is_action_just_pressed("interact") and hud.container != null and not menu_open:
+			hud.close_container(false)
+	_client_send_input(dt)
+	for a in actors:
+		if a != player:
+			a.update(dt)
+	_draw_actors(dt)
+	_client_projectiles(dt)
+	for id in net_zones:
+		var z: Dictionary = net_zones[id]
+		z.node.position = z.pos
+		if z.kind == "orbit_blade":
+			z.node.get_node("Pivot").rotation.y += dt * 9.0
+	update_effects(dt)
+	for b in loot_bags:
+		b.node.rotation.y += dt
+	_animate_portals(dt)
+	_update_view(dt)
+	if result != null and end_timer >= 0.0:
+		end_timer -= dt
+		if end_timer <= 0.0:
+			end_timer = -1.0
+			running = false
+			raid_ended.emit(result)
+
+
+func _client_send_input(dt: float) -> void:
+	var acting := can_act() and player.alive
+	for a in InputState.PRESS:
+		if Input.is_action_just_pressed(a) and (acting or a == "interact" and not menu_open):
+			Net.send_press(a)
+	input_t -= dt
+	if input_t > 0.0:
+		return
+	input_t = 1.0 / 30.0
+	var bits := InputState.pack_held()
+	if not acting:
+		# 메뉴/인벤토리가 열려 있어도 이동은 가능, 공격은 불가
+		bits &= ~((1 << 5) | (1 << 6))
+	var panel: bool = hud.is_panel_open() or menu_open
+	Net.send_input(player.pos, player.yaw, player.pitch, bits, acting, panel)
+
+
+func _client_projectiles(dt: float) -> void:
+	for id in net_proj:
+		var p: Dictionary = net_proj[id]
+		if not p.stuck:
+			p.vel.y -= p.gravity * dt
+			p.pos += p.vel * dt
+		p.node.position = p.pos
+		if not p.stuck:
+			_orient_proj(p.node, p.kind, p.pos, p.vel)
+
+
+func net_snapshot(w: Dictionary, me: Dictionary) -> void:
+	if net != "client" or not running:
+		return
+	time_left = w.t
+	net_actor_chunk(w.a)
+	# 지속 구역
+	var zseen := {}
+	for s in w.z:
+		var id: int = s[0]
+		zseen[id] = true
+		var z = net_zones.get(id)
+		if z == null:
+			z = {"kind": s[1], "pos": s[2], "radius": s[3]}
+			z["node"] = _zone_node(z)
+			z.node.position = z.pos
+			world.add_child(z.node)
+			net_zones[id] = z
+		z.pos = s[2]
+	for id in net_zones.keys():
+		if not zseen.has(id):
+			net_zones[id].node.queue_free()
+			net_zones.erase(id)
+	if player != null:
+		player.apply_net_state(me)
+		if me.ch.size() == 2 and hud != null:
+			hud.channel(me.ch[0], me.ch[1])
+
+
+func net_projs(pr: PackedFloat32Array) -> void:
+	if net != "client" or not running:
+		return
+	var seen := {}
+	for j in range(0, pr.size(), PROJ_STRIDE):
+		var id := int(pr[j])
+		seen[id] = true
+		var ppos := Vector3(pr[j + 2], pr[j + 3], pr[j + 4])
+		var pvel := Vector3(pr[j + 5], pr[j + 6], pr[j + 7])
+		var stuck := pr[j + 8] > 0.5
+		var p = net_proj.get(id)
+		if p == null:
+			var kind: String = PROJ_KINDS[clampi(int(pr[j + 1]), 0, PROJ_KINDS.size() - 1)]
+			var node := _proj_node(kind)
+			node.position = ppos
+			world.add_child(node)
+			p = {"node": node, "kind": kind, "pos": ppos, "vel": pvel, "stuck": stuck, "gravity": pr[j + 9]}
+			net_proj[id] = p
+		else:
+			# 서버 위치 쪽으로 부드럽게 보정
+			p.pos = (p.pos as Vector3).lerp(ppos, 0.5)
+			p.vel = pvel
+			p.stuck = stuck
+	for id in net_proj.keys():
+		if not seen.has(id):
+			var p: Dictionary = net_proj[id]
+			p.node.queue_free()
+			net_proj.erase(id)
+
+
+func net_actor_chunk(acts: PackedFloat32Array) -> void:
+	if net != "client" or not running:
+		return
+	for j in range(0, acts.size(), ACT_STRIDE):
+		var a = net_actors.get(int(acts[j]))
+		if a != null and a != player:
+			a.push_snap(acts.slice(j, j + ACT_STRIDE))
+
+
+func _find_by_id(list: Array, id: int):
+	for o in list:
+		if o.id == id:
+			return o
+	return null
+
+
+func net_event(n: String, args: Array) -> void:
+	if net != "client" or world == null:
+		return
+	match n:
+		"hud":
+			if hud != null and hud.has_method(args[0]):
+				hud.callv(args[0], args[1])
+		"sfx":
+			if player != null:
+				Sfx.play(args[0], player.pos.distance_to(args[1]), args[2])
+		"explode_fx", "spark", "spawn_ring_burst", "spawn_telegraph":
+			callv(n, args)
+		"frozen_fx":
+			var a = net_actors.get(args[0])
+			if a != null:
+				a.frozen = args[1]
+				var ice := Models.ice_block(a.height + 0.4)
+				var holder := Node3D.new()
+				holder.add_child(ice)
+				holder.position = a.pos
+				world.add_child(holder)
+				effects.append({"node": holder, "t": 0.0, "dur": args[1], "kind": "ice", "follow": a})
+		"actor_add":
+			_net_add_actor(args[0])
+		"actor_del":
+			_net_del_actor(args[0])
+		"chest_open":
+			var c = _find_by_id(chests, args[0])
+			if c != null and not c.opened:
+				c.opened = true
+				_chest_lid(c)
+		"bag_add":
+			var b := _add_bag_node(args[0], args[1], args[2], args[3])
+			b.n = args[4]
+		"bag_n":
+			var b = _find_by_id(loot_bags, args[0])
+			if b != null:
+				b.n = args[1]
+		"bag_del":
+			var b = _find_by_id(loot_bags, args[0])
+			if b != null:
+				b.node.queue_free()
+				loot_bags.erase(b)
+		"portal_add":
+			_add_portal_node(args[0], args[1], args[2])
+		"portal_del":
+			var p = _find_by_id(portals, args[0])
+			if p != null:
+				p.node.queue_free()
+				portals.erase(p)
+		"inv":
+			player.equipment = args[0]
+			player.bag = args[1]
+			player.stats = Data.compute_stats(player.cls, player.equipment)
+			player.armor = player.stats.armor
+			_rebuild_view_model()
+			if hud != null:
+				hud.refresh_panels()
+		"cont_open":
+			if hud != null:
+				hud.open_container(args[0])
+		"cont_upd":
+			if hud != null and hud.container != null and hud.container.cid == args[0].cid:
+				hud.container = args[0]
+				hud.refresh_panels()
+		"cont_close":
+			if hud != null:
+				hud.close_container(false)
+		"result":
+			player.done = true
+			result = args[0]
+			end_timer = 0.3 if result.success else 2.5
+			if hud != null:
+				hud.close_container(false)
+			if result.success:
+				Sfx.play("portal")

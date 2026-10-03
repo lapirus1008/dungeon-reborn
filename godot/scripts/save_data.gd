@@ -1,7 +1,8 @@
 # 저장 데이터: 보관함, 골드, 장비, 통계, 설정 (autoload: SaveData)
 extends Node
 
-const PATH := "user://save.json"
+# 한 PC에서 여러 개 실행해 함께하기를 시험할 때: -- --profile 이름  (저장 파일 분리)
+var PATH := "user://save.json"
 const STASH_SIZE := 60
 const BAG_SIZE := 16
 
@@ -9,6 +10,9 @@ var data: Dictionary = {}
 
 
 func _ready() -> void:
+	var args := OS.get_cmdline_user_args()
+	if args.has("--profile"):
+		PATH = "user://save_%s.json" % args[args.find("--profile") + 1].validate_filename()
 	load_save()
 
 

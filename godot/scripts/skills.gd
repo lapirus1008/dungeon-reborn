@@ -60,8 +60,8 @@ static func pay(c, cost: float) -> bool:
 	if cost <= 0.0:
 		return true
 	if c.res < cost:
-		if c.kind == "player":
-			c.game.hud.toast("%s이(가) 부족합니다" % Data.RES_NAMES.get(c.res_type(), "자원"))
+		if true:
+			c.game.notify(c, "toast", ["%s이(가) 부족합니다" % Data.RES_NAMES.get(c.res_type(), "자원")])
 		return false
 	c.res -= cost
 	return true
@@ -117,7 +117,7 @@ static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 		total += a.take_damage(dmg, c, {"knock": Vector3(dx / nd * k, 0, dz / nd * k), "from": c.pos, "crit": stealth_bonus > 1.0})
 		hits += 1
 	if hits:
-		Sfx.play("hit", g.dist_to_player(c.pos))
+		g.sfx("hit", c.pos)
 		if c.cls == "deathknight":
 			c.heal_now(total * 0.1)
 			gain(c, 8.0 * hits)
@@ -168,7 +168,7 @@ static func roar(c) -> bool:
 		if a.alive and g.hostile(c, a) and a.pos.distance_to(c.pos) < 4.5:
 			var dir: Vector3 = (a.pos - c.pos).normalized()
 			a.take_damage(6.0 * c.dmg_mul(), c, {"knock": dir * 14.0, "from": c.pos})
-	Sfx.play("growl", g.dist_to_player(c.pos))
+	g.sfx("growl", c.pos)
 	g.spawn_ring_burst(c.pos + Vector3(0, 0.3, 0), NATURE, 4.5)
 	return true
 
@@ -182,7 +182,7 @@ static func cleanse_heal(c, charge: float) -> bool:
 	c.cd.rmb = skill_def(c, "rmb").cd
 	c.cleanse()
 	c.apply_heal(lerpf(10.0, 30.0, clampf(charge, 0.0, 1.0)), 0.6)
-	Sfx.play("heal", c.game.dist_to_player(c.pos))
+	c.game.sfx("heal", c.pos)
 	c.game.spawn_ring_burst(c.pos + Vector3(0, 0.2, 0), GOLD, 1.6)
 	return true
 
@@ -242,8 +242,8 @@ static func use_e(c, aim: Dictionary) -> bool:
 
 static func _whirlwind(c) -> bool:
 	if c.get("stamina") != null and c.stamina < 20.0:
-		if c.kind == "player":
-			c.game.hud.toast("스태미나가 부족합니다")
+		if true:
+			c.game.notify(c, "toast", ["스태미나가 부족합니다"])
 		return false
 	if c.get("stamina") != null:
 		c.stamina -= 20.0
@@ -261,7 +261,7 @@ static func tick_spin(c, dt: float) -> void:
 	if c.spin_tick <= 0.0:
 		c.spin_tick = 0.25
 		var g = c.game
-		Sfx.play("swing", g.dist_to_player(c.pos), 0.15)
+		g.sfx("swing", c.pos, 0.15)
 		var hits := 0
 		for a in g.actors:
 			if not a.alive or a.extracted or not g.hostile(c, a):
@@ -272,12 +272,12 @@ static func tick_spin(c, dt: float) -> void:
 				a.take_damage(13.0 * c.dmg_mul(), c, {"knock": dir * 2.0, "from": c.pos})
 				hits += 1
 		if hits:
-			Sfx.play("hit", g.dist_to_player(c.pos))
+			g.sfx("hit", c.pos)
 
 
 static func _charge(c) -> bool:
 	c.dash = {"dir": Actor.fwd(c.yaw), "speed": 22.0, "t": 0.32, "hit": 30.0 * c.dmg_mul(), "stun": 0.9, "hit_done": false}
-	Sfx.play("swing", c.game.dist_to_player(c.pos))
+	c.game.sfx("swing", c.pos)
 	return true
 
 
@@ -288,7 +288,7 @@ static func _psionic_blades(c, aim: Dictionary) -> bool:
 		var dir: Vector3 = aim.dir.rotated(Vector3.UP, off)
 		dir.y += 0.08
 		g.spawn_projectile(c, "blade", aim.origin + Vector3(0, 0.15 * (i % 2), 0), dir.normalized(), 24.0 + i * 2.0, 16.0 * c.dmg_mul(), {"homing": 6.0, "heal_owner": 8.0, "life": 3.0})
-	Sfx.play("magic", g.dist_to_player(c.pos))
+	g.sfx("magic", c.pos)
 	return true
 
 
@@ -296,7 +296,7 @@ static func _whirling_blade(c) -> bool:
 	c.game.add_zone({"follow": c, "radius": 2.4, "dur": 8.0, "tick": 0.3, "dmg": 8.0 * c.dmg_mul(), "owner": c, "kind": "orbit_blade"})
 	c.dr = 0.25
 	c.dr_t = 8.0
-	Sfx.play("swing", c.game.dist_to_player(c.pos))
+	c.game.sfx("swing", c.pos)
 	return true
 
 
@@ -311,7 +311,7 @@ static func _vanish(c) -> bool:
 	c.channel_t = 1.5
 	c.break_stealth()
 	if c.kind == "player":
-		c.game.hud.toast("은신 집중 중... (피격 시 취소)")
+		c.game.notify(c, "toast", ["은신 집중 중... (피격 시 취소)"])
 	return true
 
 
@@ -322,22 +322,22 @@ static func tick_channel(c, dt: float) -> void:
 	c.channel_t -= dt
 	if c.channel_t <= 0.0:
 		c.stealth = 15.0
-		Sfx.play("magic", c.game.dist_to_player(c.pos), 0.0)
-		if c.kind == "player":
-			c.game.hud.toast("은신! 첫 공격 2.5배")
+		c.game.sfx("magic", c.pos, 0.0)
+		if true:
+			c.game.notify(c, "toast", ["은신! 첫 공격 2.5배"])
 
 
 static func _soul_shroud(c) -> bool:
 	if not pay(c, 40.0):
 		return false
 	c.game.add_zone({"follow": c, "radius": 4.5, "dur": 5.0, "tick": 0.5, "dmg": 6.0 * c.dmg_mul(), "slow": 0.8, "owner": c, "kind": "soul_shroud"})
-	Sfx.play("growl", c.game.dist_to_player(c.pos))
+	c.game.sfx("growl", c.pos)
 	return true
 
 
 static func _grasp(c, aim: Dictionary) -> bool:
 	c.game.spawn_projectile(c, "grasp", aim.origin, aim.dir, 32.0, 10.0 * c.dmg_mul(), {"pull": true, "life": 0.6})
-	Sfx.play("magic", c.game.dist_to_player(c.pos))
+	c.game.sfx("magic", c.pos)
 	return true
 
 
@@ -346,7 +346,7 @@ static func set_panther(c, on: bool) -> void:
 		return
 	c.panther = on
 	c.game.on_shapeshift(c)
-	Sfx.play("growl", c.game.dist_to_player(c.pos))
+	c.game.sfx("growl", c.pos)
 
 
 static func _toggle_panther(c) -> bool:
@@ -369,7 +369,7 @@ static func _force_of_nature(c) -> bool:
 	p = g.dungeon.resolve_circle(p, 0.6)
 	g.spawn_summon(c, p)
 	c.give_shield(30.0, 8.0, NATURE)
-	Sfx.play("heal", g.dist_to_player(c.pos))
+	g.sfx("heal", c.pos)
 	return true
 
 
@@ -377,7 +377,7 @@ static func _shadow_assault(c) -> bool:
 	if not pay(c, 15.0):
 		return false
 	c.dash = {"dir": Actor.fwd(c.yaw), "speed": 20.0, "t": 0.4, "hit": 28.0 * c.dmg_mul(), "stun": 0.3, "hit_done": false}
-	Sfx.play("growl", c.game.dist_to_player(c.pos))
+	c.game.sfx("growl", c.pos)
 	return true
 
 
@@ -408,7 +408,7 @@ static func _fire_blast(c) -> bool:
 		var nd := maxf(d, 0.001)
 		a.take_damage(28.0 * c.dmg_mul(), c, {"knock": Vector3(dx / nd * 16.0, 0, dz / nd * 16.0), "from": c.pos})
 	g.explode_fx(c.pos + f * 2.5 + Vector3(0, 1.0, 0), 3.0, Color(1.0, 0.42, 0.1))
-	Sfx.play("fire", g.dist_to_player(c.pos))
+	g.sfx("fire", c.pos)
 	return true
 
 
@@ -418,7 +418,7 @@ static func _ice_storm(c, aim: Dictionary) -> bool:
 	var g = c.game
 	var point: Vector3 = aim.get("point", g.aim_point(aim.origin, aim.dir, 18.0))
 	g.add_zone({"pos": point, "radius": 4.0, "dur": 4.0, "tick": 0.5, "dmg": 7.0 * c.dmg_mul(), "slow": 1.0, "owner": c, "kind": "ice_storm"})
-	Sfx.play("magic", g.dist_to_player(point))
+	g.sfx("magic", point)
 	return true
 
 
@@ -429,7 +429,7 @@ static func _frostbite(c) -> bool:
 	c.frozen = 3.0
 	c.apply_heal(40.0, 3.0)
 	c.game.on_frozen(c)
-	Sfx.play("shield", c.game.dist_to_player(c.pos))
+	c.game.sfx("shield", c.pos)
 	return true
 
 
@@ -447,7 +447,7 @@ static func _divine_guidance(c) -> bool:
 		elif g.hostile(c, a) and g.dungeon.los(c.pos.x, c.pos.z, a.pos.x, a.pos.z):
 			a.take_damage(20.0 * c.dmg_mul(), c, {"from": c.pos})
 	g.spawn_ring_burst(c.pos + Vector3(0, 0.2, 0), GOLD, 6.0)
-	Sfx.play("heal", g.dist_to_player(c.pos))
+	g.sfx("heal", c.pos)
 	return true
 
 
@@ -461,7 +461,7 @@ static func _guard(c) -> bool:
 			if a.kind == "player":
 				a.shield_hit_fx = 1.0
 	g.spawn_ring_burst(c.pos + Vector3(0, 1.0, 0), GOLD, 3.0)
-	Sfx.play("shield", g.dist_to_player(c.pos))
+	g.sfx("shield", c.pos)
 	return true
 
 
@@ -479,9 +479,8 @@ static func tick_dash(c, dt: float) -> bool:
 				continue
 			if Vector2(a.pos.x - c.pos.x, a.pos.z - c.pos.z).length() < a.radius + 1.2:
 				a.take_damage(dash.hit, c, {"knock": dash.dir * 12.0, "stun": dash.get("stun", 0.0), "from": c.pos})
-				Sfx.play("hit", g.dist_to_player(c.pos))
-				if c.kind == "player":
-					c.shake = 0.25
+				g.sfx("hit", c.pos)
+				c.game.notify(c, "shake", [0.25])
 				dash.hit_done = true
 				dash.t = 0.0
 				break

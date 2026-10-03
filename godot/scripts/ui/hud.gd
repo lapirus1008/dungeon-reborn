@@ -447,10 +447,12 @@ func open_container(c: Dictionary) -> void:
 	Sfx.play("chest")
 
 
-func close_container() -> void:
+func close_container(send := true) -> void:
 	if container == null:
 		return
 	container = null
+	if send and game != null:
+		game.request_inv("close")
 	cont_panel.visible = false
 	inv_open = false
 	inv_panel.visible = false
@@ -494,55 +496,20 @@ func render_inventory() -> void:
 	inv_stats.text = "❤ %d · 🛡 %d · ⚔ x%.2f · 👟 %d%%" % [p.max_hp, st.armor, st.dmg_mul, roundi(st.speed_mul * 100.0)]
 
 
+# 인벤토리 조작은 서버(오프라인/호스트는 로컬 Game)가 처리
 func _unequip(slot: String) -> void:
-	var p = game.player
-	var it = p.equipment[slot]
-	if it == null:
-		return
-	if p.bag.size() >= SaveData.BAG_SIZE:
-		toast("가방이 가득 찼습니다")
-		return
-	p.equipment[slot] = null
-	p.bag.append(it)
-	p.recalc()
-	refresh_panels()
+	if game.player.equipment[slot] != null:
+		game.request_inv("unequip", [slot])
 
 
 func _bag_click(i: int) -> void:
-	var p = game.player
-	if i >= p.bag.size():
-		return
-	var it: Dictionary = p.bag[i]
-	var b := Data.base_of(it)
-	if b.slot == "consumable":
-		if p.hp >= p.max_hp:
-			toast("체력이 가득 찼습니다")
-			return
-		p.use_consumable(i)
-		return
-	if Data.can_equip(it, p.cls):
-		var prev = p.equipment[b.slot]
-		p.equipment[b.slot] = it
-		p.bag.remove_at(i)
-		if prev != null:
-			p.bag.append(prev)
-		p.recalc()
-		refresh_panels()
-	elif b.slot == "weapon":
-		toast("%s 전용 무기입니다" % Data.class_names(b.classes))
+	if i < game.player.bag.size():
+		game.request_inv("use", [i])
 
 
 func _bag_drop(i: int) -> void:
-	var p = game.player
-	if i >= p.bag.size():
-		return
-	var it = p.bag[i]
-	p.bag.remove_at(i)
-	if container != null:
-		container.items.append(it)
-	else:
-		game.drop_bag(p.pos + Actor.fwd(p.yaw) * 1.2, [it], "버려진 물건")
-	refresh_panels()
+	if i < game.player.bag.size():
+		game.request_inv("drop", [i])
 
 
 func render_container() -> void:
@@ -551,38 +518,22 @@ func render_container() -> void:
 	UI.clear(cont_grid)
 	for i in maxi(10, c.items.size()):
 		var it = c.items[i] if i < c.items.size() else null
-		cont_grid.add_child(UI.slot(it, func(): _take(it), Callable(), {"tip": "클릭: 가져가기"}))
+		var idx := i
+		cont_grid.add_child(UI.slot(it, func(): _take(idx), Callable(), {"tip": "클릭: 가져가기"}))
 
 
-func _take(it) -> bool:
-	if it == null or container == null:
-		return false
-	var p = game.player
-	if p.bag.size() >= SaveData.BAG_SIZE:
+func _take(i: int) -> void:
+	if container == null or i >= container.items.size():
+		return
+	if game.player.bag.size() >= SaveData.BAG_SIZE:
 		toast("가방이 가득 찼습니다")
-		return false
-	container.items.erase(it)
-	p.bag.append(it)
-	Sfx.play("coin" if Data.base_of(it).slot == "treasure" else "pickup")
-	_after_container_change()
-	return true
+		return
+	game.request_inv("take", [i])
 
 
 func _take_all() -> void:
-	if container == null:
-		return
-	var items: Array = container.items.duplicate()
-	items.sort_custom(func(a, b): return a.value > b.value)
-	for it in items:
-		if container == null or not _take(it):
-			break
-
-
-func _after_container_change() -> void:
-	var c = container
-	refresh_panels()
-	if c != null and c.kind == "bag":
-		game.refresh_bag(c)
+	if container != null:
+		game.request_inv("take_all")
 
 
 # ------------------------------------------------------------------ 표시
@@ -654,6 +605,20 @@ func hit_marker(kill: bool) -> void:
 	hitmarker.modulate = Color(1, 0.25, 0.2, 1) if kill else Color(1, 1, 1, 1)
 	var tw := hitmarker.create_tween()
 	tw.tween_property(hitmarker, "modulate:a", 0.0, 0.25)
+
+
+func shake(v: float) -> void:
+	if game.player != null:
+		game.player.shake = maxf(game.player.shake, v)
+
+
+func swing(side: float, bash: bool, dur: float) -> void:
+	if game.player != null:
+		game.player.client_swing(side, bash, dur)
+
+
+func sfx(n: String) -> void:
+	Sfx.play(n)
 
 
 func hurt(frac: float) -> void:

@@ -3,6 +3,7 @@ class_name Actor
 extends RefCounted
 
 var game # Game (순환 참조 방지를 위해 타입 미지정)
+var nid := 0 # 네트워크 식별자
 var kind := "" # "player" | "monster" | "bot" | "summon"
 var name := ""
 var faction := ""
@@ -183,7 +184,7 @@ func take_damage(amount: float, src, info: Dictionary = {}) -> float:
 	var from = info.get("from", src.pos if src != null else null)
 	# 패링: 모든 피해 무효, 가까운 근접 공격자는 기절
 	if parry > 0.0:
-		Sfx.play("block", game.dist_to_player(pos))
+		game.sfx("block", pos)
 		if src != null and src != self and src.pos.distance_to(pos) < 4.0 and not info.get("ranged", false):
 			src.add_stun(1.2)
 		on_parry(src)

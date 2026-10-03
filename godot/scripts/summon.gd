@@ -50,7 +50,7 @@ func update(dt: float) -> void:
 			move_amt = 0.0
 			if windup <= 0.0:
 				attack_anim = 0.25
-				Sfx.play("hit", game.dist_to_player(pos))
+				game.sfx("hit", pos)
 				game.melee_hit(self, 14.0, 3.0, 1.6, {"knock": 6.0})
 				atk_cd = 1.4
 			return

@@ -30,11 +30,23 @@ var sprinting := false
 var moving := false
 var shake := 0.0
 var zoom := false
+# 멀티플레이
+var peer_id := 0 # 0: 오프라인/호스트 본인, 그 외: 접속한 친구의 피어 ID
+var inp: InputState
+var container = null # 서버 측: 이 플레이어가 열어 둔 상자/전리품
+var net_pos := Vector3.ZERO
+var has_net := false
+var forced_t := 0.0 # 넉백/돌진 중에는 서버 위치를 우선
+var done := false # 탈출/사망으로 레이드 종료
+var puppet = null # 호스트 화면에 원격 플레이어를 그리는 NetActor
+var ch: Array = [] # 이번 프레임 진행 바 [문구, 비율] (원격 전송용)
 
 
-func _init(g, p: Vector3, c: String, eq: Dictionary, b: Array) -> void:
+func _init(g, p: Vector3, c: String, eq: Dictionary, b: Array, pname := "당신", fac := "player", peer := 0) -> void:
 	var st := Data.compute_stats(c, eq)
-	super(g, {"kind": "player", "name": "당신", "faction": "player", "pos": p, "hp": st.max_hp, "armor": st.armor, "radius": 0.4})
+	super(g, {"kind": "player", "name": pname, "faction": fac, "pos": p, "hp": st.max_hp, "armor": st.armor, "radius": 0.4})
+	peer_id = peer
+	inp = InputState.new(peer > 1)
 	cls = c
 	equipment = eq
 	bag = b
@@ -44,7 +56,11 @@ func _init(g, p: Vector3, c: String, eq: Dictionary, b: Array) -> void:
 
 
 func display_name() -> String:
-	return "당신"
+	return name if game.online() else "당신"
+
+
+func is_remote() -> bool:
+	return inp.remote
 
 
 func recalc() -> void:
@@ -55,23 +71,23 @@ func recalc() -> void:
 	hp = clampf(ratio * max_hp, 1.0, max_hp)
 	armor = st.armor
 	res = minf(res, st.res_max)
-	game.on_weapon_changed()
+	game.on_weapon_changed(self)
 
 
 func on_block(amount: float) -> void:
 	stamina -= amount * 0.7
 	stamina_delay = 0.8
-	Sfx.play("block")
+	game.sfx("block", pos)
 	if stamina <= 0.0:
 		stamina = 0.0
 		exhausted = true
 		blocking = false
 		add_stun(0.6)
-		game.hud.toast("방어가 무너졌다!")
+		game.notify(self, "toast", ["방어가 무너졌다!"])
 
 
 func on_parry(_src) -> void:
-	game.hud.toast("패링!")
+	game.notify(self, "toast", ["패링!"])
 	shake = 0.15
 
 
@@ -79,17 +95,17 @@ func on_shield_hit(amount: float) -> void:
 	if amount <= 0.0:
 		return
 	shield_hit_fx = 1.0
-	game.hud.damage_number(center() + fwd(yaw) * 1.2, amount, Color(0.45, 0.75, 1.0), "흡수 ")
+	game.notify(self, "damage_number", [center() + fwd(yaw) * 1.2, amount, Color(0.45, 0.75, 1.0), "흡수 "])
 	if shield <= 0.0:
 		shield_t = 0.0
-		Sfx.play("shield_break")
-		game.hud.toast("보호막이 깨졌습니다")
+		game.sfx("shield_break", pos)
+		game.notify(self, "toast", ["보호막이 깨졌습니다"])
 	else:
-		Sfx.play("shield_hit")
+		game.sfx("shield_hit", pos)
 
 
 func on_stealth_end() -> void:
-	game.hud.toast("은신이 풀렸습니다")
+	game.notify(self, "toast", ["은신이 풀렸습니다"])
 
 
 func look(rel: Vector2, sens: float) -> void:
@@ -100,15 +116,23 @@ func look(rel: Vector2, sens: float) -> void:
 	pitch = clampf(pitch - rel.y * k, -1.5, 1.5)
 
 
-# 조준: 카메라 위치와 시선 방향
+func eye_height() -> float:
+	return EYE * (0.7 if panther else 1.0)
+
+
+# 조준: 시선 위치와 방향 (원격 플레이어도 같은 계산)
 func aim() -> Dictionary:
-	var cam: Camera3D = game.camera
-	var b := Basis.from_euler(Vector3(cam.rotation.x, cam.rotation.y, 0.0), EULER_ORDER_YXZ)
+	var b := Basis.from_euler(Vector3(pitch, yaw, 0.0), EULER_ORDER_YXZ)
 	var dir := -b.z
-	return {"origin": cam.position + dir * 0.5 + Vector3(0, -0.12, 0), "dir": dir, "target": null}
+	var eye := Vector3(pos.x, pos.y + eye_height(), pos.z)
+	return {"origin": eye + dir * 0.5 + Vector3(0, -0.12, 0), "dir": dir, "target": null}
 
 
 func update(dt: float) -> void:
+	if game.net == "client":
+		update_client(dt)
+		return
+	inp.begin_frame()
 	tick_common(dt)
 	for k in cd:
 		if cd[k] > 0.0:
@@ -122,14 +146,73 @@ func update(dt: float) -> void:
 	if cast > 0.0:
 		cast -= dt
 
-	var can_act: bool = game.can_act()
+	var can_act: bool = inp.can_act if inp.remote else game.can_act()
 	var locked := incapacitated()
+	_movement(dt, locked, can_act)
+
+	var act := can_act and not locked and channel_t <= 0.0
+	_combat(dt, act)
+
+	# 물약
+	if not locked and can_act and cd.potion <= 0.0:
+		var want := ""
+		if inp.just_pressed("potion1"):
+			want = "health_potion"
+		elif inp.just_pressed("potion2"):
+			want = "bandage"
+		if want != "":
+			var idx := -1
+			for i in bag.size():
+				if bag[i].base == want:
+					idx = i
+					break
+			if idx < 0:
+				game.notify(self, "toast", ["%s이(가) 없습니다" % Data.ITEM_BASES[want].name])
+			elif hp >= max_hp:
+				game.notify(self, "toast", ["체력이 가득 찼습니다"])
+			else:
+				use_consumable(idx)
+
+	# 원격 플레이어: 클라이언트가 보낸 위치를 검증 후 채택 (넉백/돌진 중에는 서버 위치 유지)
+	if inp.remote and has_net:
+		if knock.length_squared() > 0.5 or dash != null:
+			forced_t = 0.35
+		if forced_t > 0.0:
+			forced_t -= dt
+		elif Vector2(net_pos.x - pos.x, net_pos.z - pos.z).length() < 4.0:
+			var np = game.dungeon.resolve_circle(net_pos, radius)
+			pos = Vector3(np.x, maxf(0.0, net_pos.y), np.z)
+
+
+# 클라이언트 본인: 이동은 즉시 로컬에서 처리하고, 전투 결과/상태는 서버(me 패킷)에서 받음
+func update_client(dt: float) -> void:
+	shield_hit_fx = maxf(0.0, shield_hit_fx - dt * 3.0)
+	for k in cd:
+		if cd[k] > 0.0:
+			cd[k] -= dt
+	for k in ["stun", "root", "slow", "parry", "immune", "frozen", "stealth", "shield_t", "channel_t", "spin_t", "hit_flash"]:
+		var v: float = get(k)
+		if v > 0.0:
+			set(k, maxf(0.0, v - dt))
+	if cast > 0.0:
+		cast -= dt
+	if swing != null:
+		swing.t += dt
+		if swing.t >= swing.prof.dur:
+			swing = null
+	swinging = swing != null or spin_t > 0.0
+	if not alive:
+		return
+	_movement(dt, incapacitated(), game.can_act())
+
+
+func _movement(dt: float, locked: bool, can_act: bool) -> void:
 	# 이동 입력 (메뉴/인벤토리가 열려 있어도 이동 가능 - 던전본처럼 게임은 계속 진행)
 	var ix := 0.0
 	var iz := 0.0
 	if not locked and not game.typing:
-		iz = Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
-		ix = Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
+		iz = inp.strength("move_forward") - inp.strength("move_back")
+		ix = inp.strength("move_right") - inp.strength("move_left")
 	var f := fwd(yaw)
 	var r := Vector3(cos(yaw), 0, -sin(yaw))
 	var wish := f * iz + r * ix
@@ -142,7 +225,7 @@ func update(dt: float) -> void:
 		exhausted = true
 	elif exhausted and stamina >= SPRINT_RESUME:
 		exhausted = false
-	var want_sprint := Input.is_action_pressed("sprint") and iz > 0.0 and not locked
+	var want_sprint := inp.pressed("sprint") and iz > 0.0 and not locked
 	var busy := blocking or spin_t > 0.0 or channel_t > 0.0 or charge_t >= 0.0
 	if not want_sprint or busy or exhausted:
 		sprinting = false
@@ -165,7 +248,8 @@ func update(dt: float) -> void:
 	if iz < 0.0:
 		speed *= 0.8
 
-	if not Skills.tick_dash(self, dt):
+	var dashing := forced_t > 0.0 if game.net == "client" else Skills.tick_dash(self, dt)
+	if not dashing:
 		move(wish.x * speed, wish.z * speed, dt)
 	last_vel = wish * speed
 	moving = wl > 0.0 and dash == null and root <= 0.0 and not locked
@@ -174,11 +258,11 @@ func update(dt: float) -> void:
 		step_t -= dt * speed
 		if step_t <= 0.0:
 			step_t = 2.6
-			if stealth <= 0.0:
+			if stealth <= 0.0 and self == game.player:
 				Sfx.play("step", -1.0, 0.15)
 
 	# 점프
-	if can_act and Input.is_action_just_pressed("jump") and pos.y <= 0.001 and stamina > SPRINT_MIN and not locked and root <= 0.0:
+	if can_act and inp.just_pressed("jump") and pos.y <= 0.001 and stamina > SPRINT_MIN and not locked and root <= 0.0:
 		vy = 6.2
 		stamina -= 10.0
 		stamina_delay = 0.6
@@ -197,29 +281,6 @@ func update(dt: float) -> void:
 		stamina = minf(100.0, stamina + (8.0 if blocking else 28.0) * dt)
 	stamina = maxf(0.0, stamina)
 
-	var act := can_act and not locked and channel_t <= 0.0
-	_combat(dt, act)
-
-	# 물약
-	if not locked and can_act and cd.potion <= 0.0:
-		var want := ""
-		if Input.is_action_just_pressed("potion1"):
-			want = "health_potion"
-		elif Input.is_action_just_pressed("potion2"):
-			want = "bandage"
-		if want != "":
-			var idx := -1
-			for i in bag.size():
-				if bag[i].base == want:
-					idx = i
-					break
-			if idx < 0:
-				game.hud.toast("%s이(가) 없습니다" % Data.ITEM_BASES[want].name)
-			elif hp >= max_hp:
-				game.hud.toast("체력이 가득 찼습니다")
-			else:
-				use_consumable(idx)
-
 
 func _start_swing(prof: Dictionary, bash := false) -> void:
 	swing_side = -swing_side
@@ -227,14 +288,16 @@ func _start_swing(prof: Dictionary, bash := false) -> void:
 	stamina -= prof.stamina
 	stamina_delay = 0.6
 	cd.lmb = prof.cd
-	Sfx.play("swing")
+	game.sfx("swing", pos)
+	if inp.remote:
+		game.notify(self, "swing", [swing_side, bash, prof.dur])
 
 
 func _combat(dt: float, act: bool) -> void:
 	var melee := Skills.is_melee(self)
-	var rmb_pressed := act and Input.is_action_just_pressed("secondary")
-	var rmb_held := act and Input.is_action_pressed("secondary")
-	var lmb_held := act and Input.is_action_pressed("attack")
+	var rmb_pressed := act and inp.just_pressed("secondary")
+	var rmb_held := act and inp.pressed("secondary")
+	var lmb_held := act and inp.pressed("attack")
 	var free := swing == null and spin_t <= 0.0 and dash == null
 
 	# 우클릭
@@ -275,10 +338,10 @@ func _combat(dt: float, act: bool) -> void:
 			cast = 0.2
 
 	# Q / E
-	if act and Input.is_action_just_pressed("skill_q"):
+	if act and inp.just_pressed("skill_q"):
 		if Skills.use_q(self, aim()):
 			cast = 0.3
-	if act and Input.is_action_just_pressed("skill_e"):
+	if act and inp.just_pressed("skill_e"):
 		if Skills.use_e(self, aim()):
 			cast = 0.3
 
@@ -299,9 +362,9 @@ func use_consumable(i: int) -> void:
 	apply_heal(b.heal, 3.0 if it.base == "health_potion" else 2.0)
 	cd.potion = 1.2
 	add_slow(1.0, 0.6)
-	Sfx.play("heal")
-	game.hud.toast("%s 사용" % b.name)
-	game.hud.refresh_panels()
+	game.sfx("heal", pos)
+	game.notify(self, "toast", ["%s 사용" % b.name])
+	game.inv_changed(self)
 
 
 # 카메라와 뷰모델 갱신
@@ -315,7 +378,7 @@ func update_camera(cam: Camera3D, vm: Node3D, bubble: MeshInstance3D, dt: float)
 		cam.rotation.x = pitch
 		return
 	var b := sin(bob) * 0.05 if pos.y == 0.0 and moving else 0.0
-	var eye := EYE * (0.7 if panther else 1.0)
+	var eye := eye_height()
 	cam.position = Vector3(pos.x, pos.y + eye + b, pos.z)
 	var sx := 0.0
 	var sy := 0.0
@@ -346,3 +409,69 @@ func update_camera(cam: Camera3D, vm: Node3D, bubble: MeshInstance3D, dt: float)
 		for n in vm.find_children("*", "GeometryInstance3D", true, false):
 			(n as GeometryInstance3D).transparency = tr
 	ViewAnim.animate(self, vm, b, dt)
+
+
+# ------------------------------------------------------------------ 멀티플레이 동기화
+func client_swing(side: float, bash: bool, dur: float) -> void:
+	swing_side = side
+	swing = {"t": 0.0, "prof": {"dur": dur, "hit_at": 99.0}, "done": true, "side": side, "bash": bash}
+
+
+# 서버 -> 해당 클라이언트: 본인 상태 (초당 20회)
+func net_state() -> Dictionary:
+	return {
+		"p": pos, "f": forced_t > 0.0 or dash != null, "a": alive,
+		"hp": hp, "mh": max_hp, "he": heal, "sh": shield, "sm": shield_max, "st": shield_t, "sc": shield_color, "shf": shield_hit_fx,
+		"r": res, "sta": stamina, "ex": exhausted,
+		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion],
+		"s": [stun, slow, root, stealth, frozen, parry, immune, dr, spin_t, channel_t, charge_t, cast],
+		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther,
+		"k": [kills, pvp_kills], "ch": ch,
+	}
+
+
+func apply_net_state(d: Dictionary) -> void:
+	var sp: Vector3 = d.p
+	if d.f or pos.distance_to(sp) > 2.5 or not d.a:
+		pos = pos.lerp(sp, 0.5) if pos.distance_to(sp) < 3.0 else sp
+	forced_t = 0.2 if d.f else 0.0
+	alive = d.a
+	hp = d.hp
+	max_hp = d.mh
+	heal = d.he
+	shield = d.sh
+	shield_max = d.sm
+	shield_t = d.st
+	shield_color = d.sc
+	shield_hit_fx = maxf(shield_hit_fx, d.shf)
+	res = d.r
+	if absf(stamina - d.sta) > 4.0:
+		stamina = d.sta
+	exhausted = d.ex
+	var c: Array = d.cd
+	cd.lmb = c[0]
+	cd.rmb = c[1]
+	cd.q = c[2]
+	cd.e = c[3]
+	cd.potion = c[4]
+	var s: Array = d.s
+	stun = s[0]
+	slow = s[1]
+	root = s[2]
+	stealth = s[3]
+	frozen = s[4]
+	parry = s[5]
+	immune = s[6]
+	dr = s[7]
+	spin_t = s[8]
+	channel_t = s[9]
+	charge_t = s[10]
+	cast = maxf(cast, s[11])
+	slow_mul = d.sm2
+	dots.resize(int(d.dot))
+	blocking = d.bl
+	if panther != d.pa:
+		panther = d.pa
+		game.on_shapeshift(self)
+	kills = d.k[0]
+	pvp_kills = d.k[1]

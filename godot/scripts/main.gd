@@ -8,6 +8,8 @@ var results: Control
 var overlay: CanvasLayer
 var mode := "lobby"
 var last_result = null
+var pending_loadout = null # 함께하기: 서버에 제출했지만 아직 시작되지 않은 장비
+var dedicated := false
 
 
 func _ready() -> void:
@@ -46,11 +48,20 @@ func _ready() -> void:
 	UI.tooltip.add_child(UI.tooltip_label)
 	UI.tooltip.visible = false
 	overlay.add_child(UI.tooltip)
+	Net.prepare_received.connect(_on_net_prepare)
+	Net.begin_received.connect(_on_net_begin)
+	Net.server_begin.connect(_on_server_begin)
+	Net.disconnected.connect(_on_net_disconnected)
+	var args := OS.get_cmdline_user_args()
+	if args.has("--server"):
+		_run_dedicated(args)
+		return
 	apply_quality(SaveData.setting("quality", "mid"))
 	_build_results()
 	open_lobby()
-	var args := OS.get_cmdline_user_args()
-	if args.has("--autotest"):
+	if args.has("--mptest"):
+		_mptest.call_deferred(args[args.find("--mptest") + 1])
+	elif args.has("--autotest"):
 		_autotest.call_deferred()
 	elif args.has("--screenshots"):
 		_screenshots.call_deferred(args[args.find("--screenshots") + 1])
@@ -117,16 +128,58 @@ func open_lobby() -> void:
 	lobby.refresh()
 
 
-func start_raid() -> void:
+# 입장 시 소지품은 위험에 노출됨 (탈출해야 돌아옴)
+func _take_loadout() -> Dictionary:
 	var s: Dictionary = SaveData.data
-	var loadout := {"cls": s.cls, "equipment": s.equipment.duplicate(), "bag": s.bag.duplicate()}
-	# 입장 시 소지품은 위험에 노출됨 (탈출해야 돌아옴)
+	var lo := {"cls": s.cls, "equipment": s.equipment.duplicate(), "bag": s.bag.duplicate()}
 	s.equipment = {"weapon": null, "head": null, "chest": null, "trinket": null}
 	s.bag = []
 	s.stats.raids += 1
 	SaveData.save()
+	return lo
+
+
+# 레이드가 시작되지 못했으면 제출한 장비를 되돌림
+func _restore_loadout() -> void:
+	if pending_loadout == null:
+		return
+	var s: Dictionary = SaveData.data
+	for k in pending_loadout.equipment:
+		if pending_loadout.equipment[k] != null:
+			if s.equipment[k] == null:
+				s.equipment[k] = pending_loadout.equipment[k]
+			else:
+				s.stash.append(pending_loadout.equipment[k])
+	s.bag.append_array(pending_loadout.bag)
+	s.stats.raids = maxi(0, s.stats.raids - 1)
+	SaveData.save()
+	pending_loadout = null
+
+
+func start_raid() -> void:
+	if Net.online():
+		# 함께하기: 리더가 시작하면 서버가 모두의 장비를 모아 레이드를 만든다
+		if not Net.is_leader() or Net.raid_running():
+			return
+		if Net.is_server():
+			pending_loadout = _take_loadout()
+			Net.request_start(pending_loadout)
+		else:
+			Net.request_start()
+		return
+	var loadout := _take_loadout()
+	_create_game()
+	game.start(loadout, hud)
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _create_game() -> void:
 	UI.hide_tip()
-	lobby.visible = false
+	if lobby != null:
+		lobby.visible = false
+	results.visible = false
+	if game != null and is_instance_valid(game):
+		game.queue_free()
 	mode = "raid"
 	game = Game.new()
 	game.quality = SaveData.setting("quality", "mid")
@@ -140,8 +193,92 @@ func start_raid() -> void:
 		game.abandon())
 	hud.setting_changed.connect(_on_setting)
 	game.raid_ended.connect(_on_raid_ended)
-	game.start(loadout, hud)
+	game.raid_over.connect(_on_raid_over.bind(game))
+
+
+# ------------------------------------------------------------------ 함께하기
+func _on_net_prepare() -> void:
+	if mode != "lobby":
+		return
+	pending_loadout = _take_loadout()
+	Net.send_loadout(pending_loadout)
+
+
+func _on_net_begin(info: Dictionary) -> void:
+	pending_loadout = null
+	_create_game()
+	game.start_client(info, hud)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+# 서버(호스트/전용): 모인 장비로 레이드 생성
+func _on_server_begin(loadouts: Dictionary) -> void:
+	var hs := []
+	var ids := loadouts.keys()
+	ids.sort()
+	for id in ids:
+		var lo: Dictionary = loadouts[id]
+		hs.append({"peer": id, "name": Net.roster.get(id, {}).get("name", "모험가"), "cls": lo.cls, "equipment": lo.equipment, "bag": lo.bag})
+	if dedicated:
+		game = Game.new()
+		add_child(game)
+		game.raid_over.connect(_on_raid_over.bind(game))
+		game.start_server("server", hs, Net.pvp, null)
+		print("[server] 레이드 시작: %d명" % hs.size())
+		return
+	pending_loadout = null
+	_create_game()
+	game.start_server("host", hs, Net.pvp, hud)
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _on_raid_over(g) -> void:
+	Net.game = null
+	if dedicated:
+		print("[server] 레이드 종료")
+	# 결과 화면을 이미 넘겨 백그라운드로 돌던 레이드면 정리
+	if g != game or mode != "raid" or dedicated:
+		if is_instance_valid(g):
+			g.queue_free()
+		if g == game:
+			game = null
+	if lobby != null and lobby.visible:
+		lobby.refresh()
+
+
+func _on_net_disconnected(reason: String) -> void:
+	_restore_loadout()
+	UI.toast(reason)
+	if mode == "raid" and game != null and game.net == "client":
+		# 레이드 중 끊기면 사망과 같음 (소지품 손실)
+		if game.result == null:
+			SaveData.data.stats.deaths += 1
+			SaveData.save()
+		Net.game = null
+		game.queue_free()
+		game = null
+		if hud:
+			hud.queue_free()
+			hud = null
+		open_lobby()
+	elif lobby != null and lobby.visible:
+		lobby.refresh()
+
+
+# 전용 서버: godot --headless -- --server [--port 7777]
+func _run_dedicated(args: PackedStringArray) -> void:
+	dedicated = true
+	var port := Net.PORT
+	if args.has("--port"):
+		port = int(args[args.find("--port") + 1])
+	var err := Net.host(port, "서버", true)
+	if err != "":
+		printerr(err)
+		get_tree().quit(1)
+		return
+	if args.has("--pvp"):
+		Net.pvp = true
+	print("[server] Dungeon Reborn 전용 서버 - UDP 포트 %d. 가장 먼저 접속한 사람이 레이드를 시작합니다." % port)
 
 
 func _on_setting(key: String, value) -> void:
@@ -192,11 +329,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("map"):
 		hud.toggle_map()
-	elif event.is_action_pressed("interact") and hud.container != null and not game.menu_open:
-		# 전리품 창이 열려 있을 때 F는 닫기
-		hud.close_container()
-		_update_mouse()
-		get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton and event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and not game.menu_open and not hud.is_panel_open():
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -300,7 +432,16 @@ func _on_results_continue() -> void:
 		SaveData.save()
 	last_result = null
 	if game:
-		game.queue_free()
+		if game.net == "host" and game.running:
+			# 친구들이 아직 던전에 있으면 레이드는 뒤에서 계속 진행
+			game.hud = null
+			game.visible = false
+			if game.camera:
+				game.camera.current = false
+		else:
+			if game.net != "offline":
+				Net.game = null
+			game.queue_free()
 		game = null
 	if hud:
 		hud.queue_free()
@@ -493,11 +634,11 @@ func _autotest() -> void:
 		var po = g.portals[g.portals.size() - 1]
 		p.invuln = 999.0
 		p.frozen = 0.0
-		for i in 260:
+		var et := 0.0
+		while et < 6.0 and g.result == null:
 			p.pos = po.pos
 			await get_tree().process_frame
-			if g.result != null:
-				break
+			et += get_process_delta_time()
 		out.append("  탈출 결과: %s" % (str(g.result.success) if g.result != null else "없음"))
 		while results.visible == false and game != null:
 			await get_tree().process_frame
@@ -553,3 +694,208 @@ func _autotest() -> void:
 		print("[autotest] ", line)
 	print("[autotest] 완료")
 	get_tree().quit()
+
+
+# ------------------------------------------------------------------ 함께하기 자동 테스트
+# 호스트:   godot --headless -- --mptest host --profile h
+# 클라이언트: godot --headless -- --mptest client --profile c
+func _wait(sec: float) -> void:
+	await get_tree().create_timer(sec).timeout
+
+
+func _shot_dir() -> String:
+	var args := OS.get_cmdline_user_args()
+	return args[args.find("--shots") + 1] if args.has("--shots") else ""
+
+
+func _mptest(role: String) -> void:
+	var port := 7790
+	print("[mptest] 역할: ", role)
+	SaveData.data.cls = "fighter" if role == "host" else "pyromancer"
+	SaveData.data.equipment.weapon = Data.make_item(Data.STARTER_WEAPON[SaveData.data.cls])
+	SaveData.data.bag = [Data.make_item("health_potion")]
+	if role == "host":
+		await _mptest_host(port)
+	else:
+		await _mptest_client(port)
+	print("[mptest] 완료")
+	get_tree().quit()
+
+
+func _mptest_host(port: int) -> void:
+	var err := Net.host(port, "호스트")
+	if err != "":
+		print("[mptest] 실패: ", err)
+		return
+	var t := 0.0
+	while Net.roster.size() < 2 and t < 30.0:
+		await _wait(0.2)
+		t += 0.2
+	print("[mptest] 대기실 인원 ", Net.roster.size())
+	start_raid()
+	t = 0.0
+	while (game == null or not game.running) and t < 10.0:
+		await _wait(0.1)
+		t += 0.1
+	var g := game
+	g.force_act = true
+	g.player.invuln = 999.0
+	var r = null
+	for p in g.players:
+		if p.peer_id > 1:
+			r = p
+	print("[mptest] 레이드 플레이어 %d명, 원격 %s" % [g.players.size(), r.name if r != null else "없음"])
+	r.invuln = 999.0
+	var start_pos: Vector3 = r.pos
+	await _wait(3.0)
+	print("[mptest] 원격 입력 수신 %s, 이동 거리 %.1fm" % [r.has_net, r.pos.distance_to(start_pos)])
+	# 원격 플레이어를 몬스터 옆으로 (서버 강제 위치 -> 클라이언트 동기화 확인)
+	var m = null
+	for a in g.actors:
+		if a.kind == "monster" and not a.def.boss and a.alive:
+			m = a
+			break
+	m.stun = 30.0
+	m.invuln = 0.0
+	var hp0: float = m.hp
+	r.pos = g.dungeon.resolve_circle(m.pos + Vector3(2.2, 0, 0), r.radius)
+	r.forced_t = 1.5
+	await _wait(2.5)
+	var shots := _shot_dir()
+	if shots != "":
+		# 호스트 화면: 친구(원격 플레이어)가 몬스터를 공격하는 모습
+		var hp_pos: Vector3 = r.pos + Vector3(0, 0, 4.5)
+		g.player.pos = g.dungeon.resolve_circle(hp_pos, g.player.radius)
+		g.player.yaw = Actor.yaw_to(r.pos.x - g.player.pos.x, r.pos.z - g.player.pos.z) + 0.25
+		g.player.pitch = -0.08
+		await _wait(0.4)
+		await _shot(shots, "mp_host_view")
+	await _wait(2.0)
+	print("[mptest] 원격 플레이어 공격: 몬스터 체력 %.0f -> %.0f (공격자 %s), 원격 마나 %.0f" % [hp0, m.hp, m.last_attacker.name if m.last_attacker != null else "없음", r.res])
+	# 상자 열기
+	var c = null
+	for ch in g.chests:
+		if not ch.opened:
+			c = ch
+			break
+	var bag0: int = r.bag.size()
+	r.pos = g.dungeon.resolve_circle(c.pos + Vector3(1.2, 0, 0), r.radius)
+	r.yaw = Actor.yaw_to(c.pos.x - r.pos.x, c.pos.z - r.pos.z)
+	r.forced_t = 1.0
+	t = 0.0
+	while not c.opened and t < 8.0:
+		await _wait(0.1)
+		t += 0.1
+	await _wait(2.0)
+	print("[mptest] 상자 열림 %s, 원격 가방 %d -> %d" % [c.opened, bag0, r.bag.size()])
+	# 탈출
+	g.spawn_portal("exit")
+	var po = g.portals[g.portals.size() - 1]
+	t = 0.0
+	while not r.done and t < 8.0:
+		r.pos = po.pos
+		r.forced_t = 0.5
+		await get_tree().process_frame
+		t += get_process_delta_time()
+	print("[mptest] 원격 플레이어 탈출 %s (성공 %s)" % [r.done, r.extracted])
+	await _wait(1.0)
+	# 호스트 탈출 -> 결과 -> 레이드 종료
+	t = 0.0
+	while not results.visible and t < 8.0:
+		g.player.pos = po.pos
+		await get_tree().process_frame
+		t += get_process_delta_time()
+	print("[mptest] 호스트 결과 화면 %s (%s), 레이드 종료 %s" % [results.visible, last_result.success if last_result != null else "?", g.over])
+	_on_results_continue()
+	await _wait(0.5)
+	print("[mptest] 대기실 복귀: 레이드 진행 중 %s, 보관함 %d" % [Net.raid_running(), SaveData.data.stash.size()])
+	await _wait(1.0)
+
+
+func _mptest_client(port: int) -> void:
+	await _wait(1.0)
+	var err := Net.join("127.0.0.1", port, "친구")
+	if err != "":
+		print("[mptest] 실패: ", err)
+		return
+	var t := 0.0
+	while Net.roster.is_empty() and t < 10.0:
+		await _wait(0.1)
+		t += 0.1
+	# 전용 서버에서는 먼저 들어온 사람이 리더
+	if Net.is_leader():
+		print("[mptest] 리더로서 레이드 시작 요청")
+		start_raid()
+	t = 0.0
+	while (game == null or not game.running) and t < 30.0:
+		await _wait(0.1)
+		t += 0.1
+	if game == null:
+		print("[mptest] 레이드 시작 정보 없음")
+		return
+	var g := game
+	g.force_act = true
+	var proxies := g.actors.filter(func(a): return a is NetActor)
+	print("[mptest] 클라이언트 입장: 대리 액터 %d, 상자 %d, 던전 방 %d" % [proxies.size(), g.chests.size(), g.dungeon.rooms.size()])
+	await _wait(0.5)
+	Input.action_press("move_forward")
+	await _wait(1.5)
+	Input.action_release("move_forward")
+	await _wait(1.5)
+	# 서버가 몬스터 옆으로 옮겨 줌 -> 가장 가까운 몬스터를 조준해 공격
+	var p := g.player
+	print("[mptest] 서버 강제 이동 반영 위치 %s" % p.pos)
+	var target = null
+	var bd := 1e9
+	for a in g.actors:
+		if a is NetActor and a.kind == "monster" and a.alive and a.pos.distance_to(p.pos) < bd:
+			bd = a.pos.distance_to(p.pos)
+			target = a
+	print("[mptest] 가장 가까운 몬스터 %.1fm" % bd)
+	Input.action_press("attack")
+	var at := 0.0
+	while at < 3.0:
+		at += get_process_delta_time()
+		if target != null:
+			var dx: float = target.pos.x - p.pos.x
+			var dz: float = target.pos.z - p.pos.z
+			p.yaw = Actor.yaw_to(dx, dz)
+			p.pitch = atan2(target.center().y - (p.pos.y + Player.EYE), sqrt(dx * dx + dz * dz))
+		await get_tree().process_frame
+	Input.action_release("attack")
+	var shots := _shot_dir()
+	if shots != "":
+		Input.action_press("attack")
+		await _wait(0.3)
+		await _shot(shots, "mp_client_view")
+		Input.action_release("attack")
+	print("[mptest] 투사체 표시 기록: %d개 진행 중, 대상 체력 %.0f" % [g.net_proj.size(), target.hp if target != null else -1.0])
+	# 서버가 상자 옆으로 옮겨 줄 때까지 기다렸다가 상자 열기 (F 길게) -> 모두 가져가기
+	t = 0.0
+	while t < 10.0:
+		var near := false
+		for c in g.chests:
+			if not c.opened and c.pos.distance_to(p.pos) < 2.0:
+				near = true
+		if near:
+			break
+		await _wait(0.1)
+		t += 0.1
+	Input.action_press("interact")
+	await _wait(2.0)
+	Input.action_release("interact")
+	await _wait(0.5)
+	print("[mptest] 상자 창 열림 %s" % (hud.container != null))
+	if hud.container != null:
+		hud._take_all()
+	await _wait(0.8)
+	print("[mptest] 클라이언트 가방 %d개" % g.player.bag.size())
+	t = 0.0
+	while not results.visible and t < 15.0:
+		await _wait(0.1)
+		t += 0.1
+	print("[mptest] 클라이언트 결과: %s, 아이템 %d개" % [last_result.success if last_result != null else "없음", last_result.items.size() if last_result != null else 0])
+	var stash0: int = SaveData.data.stash.size()
+	_on_results_continue()
+	print("[mptest] 보관함 %d -> %d" % [stash0, SaveData.data.stash.size()])
+	await _wait(1.0)
