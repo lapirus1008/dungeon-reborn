@@ -1,0 +1,28 @@
+{
+ "source": "res://assets/kaykit/characters/Mage.glb",
+ "scale": 0.8,
+ "show": [
+  "1H_Wand",
+  "Spellbook",
+  "Mage_Hat",
+  "Mage_Cape"
+ ],
+ "animations": {
+  "idle": "Idle",
+  "walk": "Walking_A",
+  "run": "Running_A",
+  "block": "Blocking",
+  "cast": "Spellcast_Shoot",
+  "death": "Death_A",
+  "hit": "Hit_A",
+  "spin": "2H_Melee_Attack_Spinning",
+  "attack": [
+   "Spellcast_Shoot"
+  ]
+ },
+ "tint": {
+  "Mage_Hat": "#80c0ff",
+  "Mage_Cape": "#80c0ff",
+  "Mage_Body": "#c0e0ff"
+ }
+}

@@ -1,0 +1,31 @@
+{
+ "source": "res://assets/kaykit/characters/Barbarian.glb",
+ "scale": 0.8,
+ "show": [
+  "Barbarian_Cape"
+ ],
+ "animations": {
+  "idle": "Idle",
+  "walk": "Walking_A",
+  "run": "Running_A",
+  "block": "Blocking",
+  "cast": "Spellcast_Shoot",
+  "death": "Death_A",
+  "hit": "Hit_A",
+  "spin": "2H_Melee_Attack_Spinning",
+  "attack": [
+   "Spellcast_Shoot"
+  ]
+ },
+ "tint": {
+  "Barbarian_Cape": "#4a8a3a",
+  "Barbarian_Body": "#a8c890"
+ },
+ "attach": [
+  {
+   "from": "res://assets/kaykit/characters/Mage.glb",
+   "mesh": "2H_Staff",
+   "slot": "r"
+  }
+ ]
+}

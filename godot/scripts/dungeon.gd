@@ -3,7 +3,7 @@ class_name Dungeon
 extends RefCounted
 
 const T := 4.0 # 타일 크기 (미터)
-const WALL_H := 5.5
+const WALL_H := 4.0 # KayKit 던전 벽 높이(4m)와 맞춤
 
 const EMPTY := 0
 const ROOM := 1
@@ -274,20 +274,37 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 				if adj:
 					walls.append(Transform3D(Basis(), Vector3((x + 0.5) * T, WALL_H / 2.0, (z + 0.5) * T)))
 
-	# 타일 메시: res://assets/dungeon/<floor|ceiling|wall|pillar|barrel>.glb 가 있으면 교체 (docs/ART_PIPELINE.md)
-	var plane: Mesh = AssetRegistry.mesh("dungeon", "floor")
+	# 타일 메시: assets/theme.json 의 "dungeon" 설정 또는 assets/dungeon/<이름> 파일이 있으면 교체 (docs/ART_PIPELINE.md)
+	var th := AssetRegistry.theme_section("dungeon")
+	var tm := func(key: String) -> Mesh:
+		var v = th.get(key)
+		if v is Array:
+			v = v[0] if v.size() else ""
+		return AssetRegistry.mesh_at(v) if v is String else null
+	var plane: Mesh = tm.call("floor")
+	if plane == null:
+		plane = AssetRegistry.mesh("dungeon", "floor")
 	if plane == null:
 		plane = PlaneMesh.new()
 		plane.size = Vector2(T, T)
 		plane.material = floor_mat
 	root.add_child(_multimesh(plane, floors))
-	var cplane: Mesh = AssetRegistry.mesh("dungeon", "ceiling")
+	var cplane: Mesh = tm.call("ceiling")
+	if cplane == null:
+		cplane = AssetRegistry.mesh("dungeon", "ceiling")
 	if cplane == null:
 		cplane = PlaneMesh.new()
 		cplane.size = Vector2(T, T)
 		cplane.material = ceil_mat
 	var ceil_mi := _multimesh(cplane, ceils)
 	ceil_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# 테마 천장은 바닥 타일을 뒤집어 쓰므로 어둡게
+	if th.has("ceiling") and cplane.get_surface_count() > 0:
+		var cm = cplane.surface_get_material(0)
+		if cm is StandardMaterial3D:
+			var dark: StandardMaterial3D = cm.duplicate()
+			dark.albedo_color = Color(0.32, 0.3, 0.3)
+			ceil_mi.material_override = dark
 	root.add_child(ceil_mi)
 	var box: Mesh = AssetRegistry.mesh("dungeon", "wall")
 	if box == null:
@@ -297,6 +314,36 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		# 벽 텍스처가 세로로 늘어나지 않도록 UV 비율 조정
 		wall_mat.uv1_scale = Vector3(3.0, 2.0 * WALL_H / T, 1.0)
 	root.add_child(_multimesh(box, walls))
+	# 테마 벽면: 바닥과 벽이 맞닿는 모든 경계에 벽 조각을 세움 (뒤의 블록 벽은 틈새 메우기용)
+	var faces: Array = th.get("wall_face", [])
+	var themed := faces.size() > 0 and AssetRegistry.mesh_at(faces[0]) != null
+	var banner_x := []
+	if themed:
+		var by_mesh := {}
+		for z in H:
+			for x in W:
+				if get_t(x, z) == EMPTY:
+					continue
+				var c := center(x, z)
+				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					if get_t(x + d.x, z + d.y) != EMPTY:
+						continue
+					var n := Vector3(d.x, 0, d.y)
+					var rot := Basis(Vector3.UP, PI / 2 if d.x != 0 else 0.0)
+					var path: String = faces.pick_random()
+					if not by_mesh.has(path):
+						by_mesh[path] = []
+					by_mesh[path].append(Transform3D(rot, c + n * (T / 2.0 + 0.45)))
+					# 방 안쪽 벽에 가끔 깃발
+					if room_id[idx(x, z)] >= 0 and randf() < 0.07:
+						var face_rot := Basis(Vector3.UP, atan2(-n.x, -n.z))
+						banner_x.append(Transform3D(face_rot, c + n * (T / 2.0 + 0.33)))
+		for path in by_mesh:
+			var fm := _multimesh(AssetRegistry.mesh_at(path), by_mesh[path])
+			root.add_child(fm)
+		var banner: Mesh = tm.call("banner")
+		if banner != null and banner_x.size():
+			root.add_child(_multimesh(banner, banner_x))
 
 	# 기둥
 	var pillar_x := []
@@ -314,7 +361,14 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 					var bb := Basis(Vector3.UP, randf() * TAU) * Basis(Vector3.RIGHT, PI / 2)
 					bone_x.append(Transform3D(bb, p.pos + Vector3(randf_range(-0.5, 0.5), 0.05, randf_range(-0.5, 0.5))))
 				skull_x.append(Transform3D(Basis(Vector3.UP, randf() * TAU), p.pos + Vector3(0, 0.18, 0)))
-	if pillar_x.size() and AssetRegistry.mesh("dungeon", "pillar") != null:
+	if pillar_x.size() and tm.call("pillar") != null:
+		var ps: Array = th.get("pillar_scale", [1.0, 1.0, 1.0])
+		var sc := Vector3(ps[0], ps[1], ps[2])
+		var px := []
+		for t in pillar_x:
+			px.append(Transform3D(Basis().scaled(sc), Vector3(t.origin.x, 0.0, t.origin.z)))
+		root.add_child(_multimesh(tm.call("pillar"), px))
+	elif pillar_x.size() and AssetRegistry.mesh("dungeon", "pillar") != null:
 		root.add_child(_multimesh(AssetRegistry.mesh("dungeon", "pillar"), pillar_x))
 	elif pillar_x.size():
 		var cyl := CylinderMesh.new()
@@ -326,7 +380,24 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		pm.uv1_scale = Vector3(4, 2, 1)
 		cyl.material = pm
 		root.add_child(_multimesh(cyl, pillar_x))
-	if barrel_x.size() and AssetRegistry.mesh("dungeon", "barrel") != null:
+	if barrel_x.size() and tm.call("barrel") != null:
+		var bs: float = th.get("barrel_scale", 1.0)
+		var bx := []
+		for t in barrel_x:
+			bx.append(Transform3D(t.basis.scaled(Vector3.ONE * bs), Vector3(t.origin.x, 0.0, t.origin.z)))
+		root.add_child(_multimesh(tm.call("barrel"), bx))
+		# 일부 방 구석에 상자 더미
+		var crates: Mesh = tm.call("crates")
+		if crates != null:
+			var cx := []
+			for r in rooms:
+				if randf() < 0.35 and not r.boss:
+					var corner := center(r.x, r.z) + Vector3(-0.6, 0, -0.6)
+					if get_t(r.x, r.z) == ROOM:
+						cx.append(Transform3D(Basis(Vector3.UP, randf() * TAU), corner))
+			if cx.size():
+				root.add_child(_multimesh(crates, cx))
+	elif barrel_x.size() and AssetRegistry.mesh("dungeon", "barrel") != null:
 		root.add_child(_multimesh(AssetRegistry.mesh("dungeon", "barrel"), barrel_x))
 	elif barrel_x.size():
 		var bm := CylinderMesh.new()
@@ -376,10 +447,18 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 	flame.material = fmat
 	var sx := []
 	var fx := []
+	var torch_mesh: Mesh = tm.call("torch")
 	for t in torches:
 		var n: Vector3 = t.n
-		var b := Basis(Vector3.RIGHT, n.z * 0.4) * Basis(Vector3.BACK, -n.x * 0.4)
-		sx.append(Transform3D(b, t.pos + Vector3(0, -0.4, 0)))
+		if torch_mesh != null:
+			# 벽걸이 횃불 모델: 벽면에 붙이고, 불꽃은 횃불 끝에
+			var c := center(t.tx, t.tz)
+			var mount := c + n * (T / 2.0 - 0.02) + Vector3(0, 2.15, 0)
+			sx.append(Transform3D(Basis(Vector3.UP, atan2(-n.x, -n.z)), mount))
+			t.pos = mount - n * 0.42 + Vector3(0, 0.72, 0) - Vector3(-n.x * 0.12, 0.1, -n.z * 0.12)
+		else:
+			var b := Basis(Vector3.RIGHT, n.z * 0.4) * Basis(Vector3.BACK, -n.x * 0.4)
+			sx.append(Transform3D(b, t.pos + Vector3(0, -0.4, 0)))
 		fx.append(Transform3D(Basis(), t.pos + Vector3(-n.x * 0.12, 0.1, -n.z * 0.12)))
 		var l := OmniLight3D.new()
 		l.light_color = Color(1.0, 0.55, 0.28) if deep else Color(1.0, 0.68, 0.38)
@@ -394,7 +473,7 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		root.add_child(l)
 		t["light"] = l
 	if torches.size():
-		root.add_child(_multimesh(sconce, sx))
+		root.add_child(_multimesh(torch_mesh if torch_mesh != null else sconce, sx))
 		var fmi := _multimesh(flame, fx)
 		fmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		flame_mm = fmi.multimesh

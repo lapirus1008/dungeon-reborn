@@ -1,0 +1,26 @@
+{
+ "source": "res://assets/kaykit/characters/Knight.glb",
+ "scale": 0.8,
+ "show": [
+  "2H_Sword",
+  "Knight_Cape"
+ ],
+ "animations": {
+  "idle": "2H_Melee_Idle",
+  "walk": "Walking_A",
+  "run": "Running_A",
+  "block": "Blocking",
+  "cast": "Spellcast_Shoot",
+  "death": "Death_A",
+  "hit": "Hit_A",
+  "spin": "2H_Melee_Attack_Spinning",
+  "attack": [
+   "2H_Melee_Attack_Slice",
+   "2H_Melee_Attack_Chop"
+  ]
+ },
+ "tint": {
+  "Knight_Cape": "#b03030",
+  "Knight_Body": "#c8a0a0"
+ }
+}

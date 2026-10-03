@@ -1,0 +1,84 @@
+{
+ "_comment": "던전/소품/무기 교체 설정. 값이 없거나 파일이 없으면 블록 모델 사용. docs/ART_PIPELINE.md 참고",
+ "dungeon": {
+  "wall_height": 4.0,
+  "floor": "res://assets/kaykit/dungeon/floor_tile_large.obj",
+  "ceiling": "res://assets/kaykit/dungeon/floor_tile_large.obj",
+  "wall_face": [
+   "res://assets/kaykit/dungeon/wall.obj",
+   "res://assets/kaykit/dungeon/wall.obj",
+   "res://assets/kaykit/dungeon/wall.obj",
+   "res://assets/kaykit/dungeon/wall_cracked.obj"
+  ],
+  "pillar": "res://assets/kaykit/dungeon/pillar.obj",
+  "pillar_scale": [
+   1.75,
+   1.0,
+   1.75
+  ],
+  "barrel": "res://assets/kaykit/dungeon/barrel_small.obj",
+  "barrel_scale": 1.1,
+  "crates": "res://assets/kaykit/dungeon/crates_stacked.obj",
+  "torch": "res://assets/kaykit/dungeon/torch_mounted.obj",
+  "banner": "res://assets/kaykit/dungeon/banner_red.obj"
+ },
+ "props": {
+  "chest_0": {
+   "base": "res://assets/kaykit/dungeon/chest.obj",
+   "lid": "res://assets/kaykit/dungeon/chest_lid.obj",
+   "scale": 0.85
+  },
+  "chest_1": {
+   "base": "res://assets/kaykit/dungeon/chest.obj",
+   "lid": "res://assets/kaykit/dungeon/chest_lid.obj",
+   "scale": 0.95
+  },
+  "chest_2": {
+   "base": "res://assets/kaykit/dungeon/chest_gold.obj",
+   "lid": "res://assets/kaykit/dungeon/chest_gold_lid.obj",
+   "scale": 1.0
+  }
+ },
+ "weapons": {
+  "sword": {
+   "from": "res://assets/kaykit/characters/Knight.glb",
+   "mesh": "1H_Sword",
+   "scale": 0.62
+  },
+  "longsword": {
+   "from": "res://assets/kaykit/characters/Knight.glb",
+   "mesh": "2H_Sword",
+   "scale": 0.6
+  },
+  "greatsword": {
+   "from": "res://assets/kaykit/characters/Knight.glb",
+   "mesh": "2H_Sword",
+   "scale": 0.7
+  },
+  "dagger": {
+   "from": "res://assets/kaykit/characters/Rogue.glb",
+   "mesh": "Knife",
+   "scale": 0.6
+  },
+  "mace": {
+   "from": "res://assets/kaykit/characters/Barbarian.glb",
+   "mesh": "1H_Axe",
+   "scale": 0.6
+  },
+  "staff": {
+   "from": "res://assets/kaykit/characters/Mage.glb",
+   "mesh": "2H_Staff",
+   "scale": 0.75
+  },
+  "shield": {
+   "from": "res://assets/kaykit/characters/Knight.glb",
+   "mesh": "Round_Shield",
+   "scale": 0.55
+  },
+  "book": {
+   "from": "res://assets/kaykit/characters/Mage.glb",
+   "mesh": "Spellbook",
+   "scale": 0.5
+  }
+ }
+}

@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://c4c1w4wf5u73m"
+path="res://.godot/imported/pillar.obj-c3c8808a04e14aa147a3cf9e99ae88cd.mesh"
+
+[deps]
+
+files=["res://.godot/imported/pillar.obj-c3c8808a04e14aa147a3cf9e99ae88cd.mesh"]
+
+source_file="res://assets/kaykit/dungeon/pillar.obj"
+dest_files=["res://.godot/imported/pillar.obj-c3c8808a04e14aa147a3cf9e99ae88cd.mesh", "res://.godot/imported/pillar.obj-c3c8808a04e14aa147a3cf9e99ae88cd.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

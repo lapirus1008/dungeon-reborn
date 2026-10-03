@@ -8,8 +8,8 @@
 | 로비 | 전투 (전사) |
 |---|---|
 | ![로비](docs/lobby.png) | ![전사](docs/fighter.png) |
-| **마법사 비전 보호막** | **탈출 포탈** |
-| ![보호막](docs/mage-shield.png) | ![포탈](docs/portal.png) |
+| **프리스트 수호 (보호막)** | **던전** |
+| ![보호막](docs/mage-shield.png) | ![던전](docs/dungeon.png) |
 
 > 스크린샷은 그래픽카드가 없는 환경에서 소프트웨어 렌더링(호환 모드)으로 찍은 것이라 실제 PC 화면보다 단순하게 보입니다.
 
@@ -115,12 +115,26 @@ godot --path godot --headless --fixed-fps 60 -- --autotest
 
 8개 직업으로 각각 기본 공격, Q/E 스킬, 탈출을 실행하고, 스태미나 연속 달리기 검사와 150초 레이드 시뮬레이션을 돌려 결과를 출력합니다.
 
-## 그래픽 업그레이드
+## 그래픽
 
-지금은 블록 모델이지만 `godot/assets/`에 정해진 이름의 `.glb` 파일을 넣으면 코드 수정 없이 실제 3D 모델로 바뀝니다.
+캐릭터·몬스터·던전·상자·1인칭 무기는 [KayKit](https://kaylousberg.itch.io/) (Kay Lousberg)의 CC0 무료 에셋을 사용합니다.
+- Adventurers 캐릭터 팩: 직업별 모험가 (기사, 바바리안, 마법사, 로그 모델에 장비 조합과 색을 달리해 8직업 표현)
+- Skeletons 캐릭터 팩: 스켈레톤 전사·궁수, 고블린·구울(색 변형), 보스 망령 기사
+- Dungeon Remastered: 벽, 바닥, 기둥, 횃불, 깃발, 통, 상자 더미, 보물상자
+
+캐릭터는 걷기·달리기·공격·방어·시전·회전베기·사망 애니메이션이 재생됩니다. 드루이드 표범 형태는 맞는 에셋이 없어 아직 블록 모델입니다.
+
+## 그래픽 업그레이드/교체
+
+어떤 모델을 쓸지는 설정 파일로 정해집니다. 코드 수정 없이 바꿀 수 있습니다.
+- `godot/assets/characters/<직업·몬스터 id>.json` — 사용할 glb, 보이는 장비, 손에 들 무기, 색, 애니메이션 이름
+- `godot/assets/theme.json` — 던전 타일, 상자, 1인칭 무기
+
+설정 파일을 지우면 예전 블록 모델로 돌아갑니다. 그 외에 `godot/assets/`에 정해진 이름의 `.glb` 파일을 넣으면 코드 수정 없이 실제 3D 모델로 바뀝니다.
 캐릭터, 1인칭 손, 무기, 던전 타일, 상자 모두 교체할 수 있습니다. 자세한 규칙: [docs/ART_PIPELINE.md](docs/ART_PIPELINE.md)
 
 ## 라이선스 참고
 
 - 폰트: Noto Sans KR, Noto Emoji — SIL Open Font License 1.1 (`godot/fonts/OFL-*.txt`)
+- 3D 에셋: KayKit Adventurers / Skeletons / Dungeon Remastered by Kay Lousberg — CC0 (`godot/assets/kaykit/**/LICENSE-*.txt`)
 - 웹 시제품의 Three.js — MIT

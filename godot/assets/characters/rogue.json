@@ -1,0 +1,23 @@
+{
+ "source": "res://assets/kaykit/characters/Rogue_Hooded.glb",
+ "scale": 0.8,
+ "show": [
+  "Knife",
+  "Knife_Offhand",
+  "Rogue_Cape"
+ ],
+ "animations": {
+  "idle": "Idle",
+  "walk": "Walking_A",
+  "run": "Running_A",
+  "block": "Blocking",
+  "cast": "Spellcast_Shoot",
+  "death": "Death_A",
+  "hit": "Hit_A",
+  "spin": "2H_Melee_Attack_Spinning",
+  "attack": [
+   "Dualwield_Melee_Attack_Stab",
+   "Dualwield_Melee_Attack_Slice"
+  ]
+ }
+}

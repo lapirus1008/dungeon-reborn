@@ -134,6 +134,7 @@ func animate(dt: float) -> void:
 		"block": blocking,
 		"dead_t": death_t if not alive else -1.0,
 		"cast": cls in ["pyromancer", "cryomancer", "druid"] and not panther,
+		"spin": spin_t > 0.0,
 	}
 	if attack_anim > 0.0:
 		attack_anim -= dt
@@ -171,6 +172,7 @@ func set_visible(v: bool) -> void:
 	visible = v
 	if node:
 		active_rig().node.visible = v and _stealth_visible()
+		active_rig().set_active(v)
 	if not v:
 		hp_bar.visible = false
 

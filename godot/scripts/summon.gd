@@ -10,6 +10,8 @@ func _init(g, o, p: Vector3) -> void:
 	super(g, {"kind": "summon", "name": "트렌트", "faction": o.faction, "pos": p, "hp": 200.0, "radius": 0.7, "height": 3.0, "armor": 20.0})
 	owner_actor = o
 	attach_rig(Models.treant_rig())
+	if not rig.procedural:
+		rig.node.scale = Vector3.ONE * 1.5
 
 
 func display_name() -> String:

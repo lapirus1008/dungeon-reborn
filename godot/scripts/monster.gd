@@ -40,6 +40,8 @@ func _init(g, t: String, p: Vector3, room: Dictionary, depth_mul := 1.0) -> void
 		_:
 			m = Models.humanoid({"skin": Color(0.13, 0.13, 0.2), "body": Color(0.11, 0.11, 0.15), "legs": Color(0.08, 0.08, 0.11), "helmet": Color(0.16, 0.16, 0.21), "weapon": "boss_sword", "scale": 1.55, "eyes": Color(1, 0.13, 0), "metal": 0.6})
 	attach_rig(CharacterRig.create(t, func(): return m))
+	if not rig.procedural:
+		rig.node.scale = Vector3.ONE * d.scale
 	if d.boss:
 		hp_bar.scale = Vector3(2, 2, 2)
 

@@ -63,3 +63,70 @@ static func config(category: String, id: String) -> Dictionary:
 		if d is Dictionary:
 			return d
 	return {}
+
+
+# 테마 설정 (던전 타일, 상자, 1인칭 무기) res://assets/theme.json
+static func theme() -> Dictionary:
+	if not _cache.has("theme"):
+		var d := {}
+		if FileAccess.file_exists(ROOT + "theme.json"):
+			var parsed = JSON.parse_string(FileAccess.get_file_as_string(ROOT + "theme.json"))
+			if parsed is Dictionary:
+				d = parsed
+		_cache["theme"] = d
+	return _cache["theme"]
+
+
+static func theme_section(name: String) -> Dictionary:
+	return theme().get(name, {})
+
+
+# 경로의 리소스가 실제로 있을 때만 로드
+static func load_res(path: String):
+	if path == "" or not ResourceLoader.exists(path):
+		return null
+	var key := "res:" + path
+	if not _cache.has(key):
+		_cache[key] = load(path)
+	return _cache[key]
+
+
+# 메시 파일(obj) 또는 씬(glb)의 첫 메시
+static func mesh_at(path: String) -> Mesh:
+	var r = load_res(path)
+	if r is Mesh:
+		return r
+	if r is PackedScene:
+		var key := "first_mesh:" + path
+		if not _cache.has(key):
+			var inst: Node = r.instantiate()
+			var mis := inst.find_children("*", "MeshInstance3D", true, false)
+			_cache[key] = (mis[0] as MeshInstance3D).mesh if mis.size() else null
+			inst.free()
+		return _cache[key]
+	return null
+
+
+# 다른 모델 파일 안의 특정 메시를 떼어 와서 새 MeshInstance3D로 (무기/방패 등)
+# 반환되는 노드의 원점은 손잡이(원래 손 슬롯 기준) 위치
+static func extract_mesh(path: String, mesh_name: String) -> MeshInstance3D:
+	var key := "extract:" + path + ":" + mesh_name
+	if not _cache.has(key):
+		var ps = load_res(path)
+		var found = null
+		if ps is PackedScene:
+			var inst: Node = ps.instantiate()
+			var m = inst.find_child(mesh_name, true, false)
+			if m is MeshInstance3D:
+				found = {"mesh": m.mesh, "xform": m.transform, "mat": m.get_active_material(0)}
+			inst.free()
+		_cache[key] = found
+	var f = _cache[key]
+	if f == null:
+		return null
+	var mi := MeshInstance3D.new()
+	mi.mesh = f.mesh
+	mi.transform = f.xform
+	if f.mat != null:
+		mi.material_override = f.mat
+	return mi

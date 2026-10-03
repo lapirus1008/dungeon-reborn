@@ -84,6 +84,18 @@ static func weapon(type: String, orb_color := Color(0.4, 0.67, 1.0)) -> Node3D:
 	var custom := AssetRegistry.scene("weapons", type)
 	if custom != null:
 		return custom
+	var wcfg: Dictionary = AssetRegistry.theme_section("weapons").get(type, {})
+	if not wcfg.is_empty():
+		var mi := AssetRegistry.extract_mesh(wcfg.from, wcfg.mesh)
+		if mi != null:
+			var holder := Node3D.new()
+			mi.transform = Transform3D.IDENTITY
+			holder.add_child(mi)
+			holder.scale = Vector3.ONE * float(wcfg.get("scale", 1.0))
+			# 크기 조절을 내부에서 처리해 바깥에서 scale을 바꿔도 비율 유지
+			var outer := Node3D.new()
+			outer.add_child(holder)
+			return outer
 	var g := Node3D.new()
 	var steel := mat(Color(0.78, 0.8, 0.83), 0.3, 0.9)
 	var leather := mat(Color(0.23, 0.14, 0.08))
@@ -277,6 +289,35 @@ static func humanoid(o: Dictionary) -> Node3D:
 
 
 static func chest(tier: int) -> Node3D:
+	var pcfg: Dictionary = AssetRegistry.theme_section("props").get("chest_%d" % tier, {})
+	var base_mesh := AssetRegistry.mesh_at(pcfg.get("base", ""))
+	if base_mesh != null:
+		var g0 := Node3D.new()
+		var holder := Node3D.new()
+		holder.scale = Vector3.ONE * float(pcfg.get("scale", 1.0))
+		g0.add_child(holder)
+		var bmi := MeshInstance3D.new()
+		bmi.mesh = base_mesh
+		holder.add_child(bmi)
+		# 뚜껑은 뒤쪽 경첩을 축으로 열림
+		var pivot := Node3D.new()
+		pivot.position = Vector3(0, 0.6, -0.6)
+		holder.add_child(pivot)
+		var lid_mesh := AssetRegistry.mesh_at(pcfg.get("lid", ""))
+		if lid_mesh != null:
+			var lmi := MeshInstance3D.new()
+			lmi.mesh = lid_mesh
+			lmi.position = Vector3(0, -0.6, 0.6)
+			pivot.add_child(lmi)
+		g0.set_meta("lid", pivot)
+		if tier == 2:
+			var l0 := OmniLight3D.new()
+			l0.light_color = Color(1.0, 0.8, 0.4)
+			l0.light_energy = 0.8
+			l0.omni_range = 3.0
+			l0.position.y = 1.2
+			g0.add_child(l0)
+		return g0
 	var custom := AssetRegistry.scene("props", "chest_%d" % tier)
 	if custom != null:
 		# 교체 모델은 뚜껑 노드 이름을 "Lid"로 둔다
@@ -665,19 +706,30 @@ static func view_model(cls: String, wmodel: String, panther := false) -> Node3D:
 				w.rotation = Vector3(-0.6, 0, -0.2)
 				w.scale = Vector3.ONE * 0.6
 				R.add_child(w)
-				var book := box(Vector3(0.16, 0.2, 0.05), mat(Color(0.5, 0.35, 0.15)))
-				book.position = Vector3(0.05, 0.08, -0.2)
-				var trim := box(Vector3(0.17, 0.21, 0.02), glow_mat(Color(1.0, 0.85, 0.4), 1.5))
-				trim.position = Vector3(0.05, 0.08, -0.23)
-				L.add_child(book)
-				L.add_child(trim)
+				if AssetRegistry.theme_section("weapons").has("book"):
+					var tb := weapon("book")
+					tb.position = Vector3(0.05, 0.06, -0.22)
+					tb.rotation = Vector3(-0.3, 0.3, 0)
+					L.add_child(tb)
+				else:
+					var book := box(Vector3(0.16, 0.2, 0.05), mat(Color(0.5, 0.35, 0.15)))
+					book.position = Vector3(0.05, 0.08, -0.2)
+					var trim := box(Vector3(0.17, 0.21, 0.02), glow_mat(Color(1.0, 0.85, 0.4), 1.5))
+					trim.position = Vector3(0.05, 0.08, -0.23)
+					L.add_child(book)
+					L.add_child(trim)
 			_:
 				w = weapon("staff", orb_color(cls))
 				w.position = Vector3(0, -0.3, -0.12)
 				w.rotation = Vector3(-0.35, 0, -0.12)
 				w.scale = Vector3.ONE * 0.42
 				R.add_child(w)
-		if cls == "fighter":
+		if cls == "fighter" and AssetRegistry.theme_section("weapons").has("shield"):
+			var tsh := weapon("shield")
+			tsh.position = Vector3(0.02, 0.0, -0.3)
+			tsh.rotation = Vector3(0, 0.25, 0)
+			L.add_child(tsh)
+		elif cls == "fighter":
 			var sh := cyl(0.2, 0.2, 0.04, mat(Color(0.29, 0.2, 0.09)), 14)
 			sh.rotation.x = PI / 2
 			sh.position = Vector3(-0.06, -0.02, -0.3)

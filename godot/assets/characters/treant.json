@@ -1,0 +1,25 @@
+{
+ "source": "res://assets/kaykit/characters/Barbarian.glb",
+ "scale": 0.8,
+ "show": [
+  "Barbarian_Hat"
+ ],
+ "tint": {
+  "*": "#7a9a50",
+  "Barbarian_Hat": "#3a6a20"
+ },
+ "animations": {
+  "idle": "Unarmed_Idle",
+  "walk": "Walking_B",
+  "run": "Walking_B",
+  "attack": [
+   "Unarmed_Melee_Attack_Punch_A",
+   "Unarmed_Melee_Attack_Kick"
+  ],
+  "death": "Death_B",
+  "hit": "Hit_B",
+  "block": "Blocking",
+  "cast": "Spellcast_Shoot",
+  "spin": "Hit_A"
+ }
+}

@@ -1,4 +1,34 @@
-# 그래픽 교체 가이드 (블록 모델 → 실제 3D 모델)
+# 그래픽 교체 가이드
+
+현재 기본 그래픽은 KayKit(CC0) 에셋입니다 (`godot/assets/kaykit/`). 아래 설정 파일로 어떤 모델을 쓸지 정합니다.
+
+## 설정 파일로 지정 (현재 사용 중)
+
+### 캐릭터: `assets/characters/<id>.json`
+
+```json
+{
+  "source": "res://assets/kaykit/characters/Knight.glb",
+  "scale": 0.8,
+  "show": ["1H_Sword", "Round_Shield", "Knight_Helmet", "Knight_Cape"],
+  "attach": [{"from": "res://assets/kaykit/characters/Mage.glb", "mesh": "2H_Staff", "slot": "r"}],
+  "tint": {"*": "#5a5068", "Knight_Cape": "#3a1850"},
+  "animations": {"idle": "Idle", "walk": "Walking_A", "run": "Running_A", "attack": ["1H_Melee_Attack_Chop"],
+                 "block": "Blocking", "cast": "Spellcast_Shoot", "spin": "2H_Melee_Attack_Spinning", "death": "Death_A"}
+}
+```
+
+- `show`: 뼈에 붙은 장비/모자/망토 중 보일 것만 (나머지는 숨김)
+- `attach`: 다른 모델 파일의 무기 메시를 손(`r`/`l`)에 부착
+- `tint`: 메시별 색 (`*`은 전체), 텍스처 색에 곱해짐
+- `animations`: 상황별 애니메이션 이름 (배열이면 무작위)
+
+### 던전·상자·1인칭 무기: `assets/theme.json`
+
+`dungeon` (floor, ceiling, wall_face, pillar, barrel, crates, torch, banner), `props` (chest_0~2: base + lid), `weapons` (sword, longsword, greatsword, dagger, mace, staff, shield, book: 다른 모델의 메시 이름 + 크기).
+값을 지우면 해당 부분은 블록 모델로 돌아갑니다.
+
+## 파일 이름으로 지정 (블록 모델 → 실제 3D 모델)
 
 지금 게임은 모든 그래픽을 코드로 만든 블록 모델로 그립니다.
 `godot/assets/` 폴더에 정해진 이름으로 3D 파일을 넣으면 **코드 수정 없이** 그 모델이 대신 쓰입니다.

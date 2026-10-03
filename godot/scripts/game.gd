@@ -94,7 +94,7 @@ func build_level(d: int) -> void:
 	e.background_color = Color(0.01, 0.005, 0.004) if deep else Color(0.008, 0.008, 0.01)
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	e.ambient_light_color = Color(0.32, 0.18, 0.16) if deep else Color(0.24, 0.22, 0.26)
-	e.ambient_light_energy = 0.55
+	e.ambient_light_energy = 0.42
 	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	e.tonemap_exposure = 1.1
 	e.fog_enabled = true
@@ -161,7 +161,7 @@ func build_level(d: int) -> void:
 	# 플레이어 횃불(손전등 역할) - 그림자로 입체감
 	player_light = OmniLight3D.new()
 	player_light.light_color = Color(1.0, 0.72, 0.45)
-	player_light.light_energy = 1.6
+	player_light.light_energy = 1.3
 	player_light.omni_range = 16.0
 	player_light.omni_attenuation = 1.3
 	player_light.shadow_enabled = shadows_enabled()
@@ -1121,7 +1121,7 @@ func _process(delta: float) -> void:
 	update_portals(dt)
 	player.update_camera(camera, view_model, shield_bubble, dt)
 	player_light.position = camera.position + Vector3(0, 0.6, 0) - Actor.fwd(player.yaw) * 0.5
-	player_light.light_energy = 1.6 + sin(time * 13.0) * 0.08 + sin(time * 7.3) * 0.1
+	player_light.light_energy = 1.3 + sin(time * 13.0) * 0.08 + sin(time * 7.3) * 0.1
 	dungeon.animate_torches(time, cam_pos)
 	update_explored()
 	hud.update_hud(dt)
