@@ -2,6 +2,12 @@
 import * as THREE from 'three';
 import { woodTexture } from './textures.js';
 
+// 자주 생성되는 지오메트리/재질/텍스처를 공유
+const SHARED = {};
+function shared(key, fn) {
+  return SHARED[key] || (SHARED[key] = fn());
+}
+
 const matCache = new Map();
 function mat(color, opts = {}) {
   const key = color + JSON.stringify(opts);
@@ -144,9 +150,9 @@ export function makeHumanoid(o = {}) {
 
 export function makeChest(tier = 0) {
   const g = new THREE.Group();
-  const wt = woodTexture();
   const color = tier === 2 ? 0xffd27a : tier === 1 ? 0xc9a070 : 0xffffff;
-  const bodyM = new THREE.MeshLambertMaterial({ map: wt, color });
+  const wt = shared('woodTex', () => woodTexture());
+  const bodyM = shared('chestMat' + tier, () => new THREE.MeshLambertMaterial({ map: wt, color }));
   const base = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.7, 0.85), bodyM);
   base.position.y = 0.35;
   const lidG = new THREE.Group();
@@ -217,11 +223,6 @@ export function makePortal(kind = 'exit') {
   return g;
 }
 
-// 투사체는 자주 생성되므로 지오메트리/재질을 공유
-const SHARED = {};
-function shared(key, fn) {
-  return SHARED[key] || (SHARED[key] = fn());
-}
 
 export function makeArrow() {
   const g = new THREE.Group();

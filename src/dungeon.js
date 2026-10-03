@@ -212,10 +212,32 @@ export class Dungeon {
     carve(x, z);
   }
 
+  // 정적 횃불 조명을 타일 단위로 미리 계산 (실시간 점광원 수를 줄여 GPU 부하 감소)
+  bakeLight(x, z) {
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    const c = this.deep ? [1.0, 0.45, 0.25] : [1.0, 0.65, 0.32];
+    for (const t of this.torches) {
+      const dx = t.x - x;
+      const dz = t.z - z;
+      const d = Math.hypot(dx, dz);
+      if (d > 15) continue;
+      if (d > 2.5 && !this.los(t.x - t.nx * 0.5, t.z - t.nz * 0.5, x, z)) continue;
+      const k = (1 - d / 15) ** 2 * 1.9;
+      r += c[0] * k;
+      g += c[1] * k;
+      b += c[2] * k;
+    }
+    const base = 0.42;
+    return new THREE.Color(base + r, base + g, base + b);
+  }
+
   // 월드 메시 생성
   buildMeshes(scene) {
     const group = new THREE.Group();
     const deep = this.depth > 1;
+    this.deep = deep;
     const wallTex = stoneWallTexture(deep ? [95, 60, 55] : [92, 86, 80]);
     const floorTex = floorTexture(deep ? [70, 48, 44] : [70, 66, 60]);
     const wallMat = new THREE.MeshLambertMaterial({ map: wallTex });
@@ -242,6 +264,28 @@ export class Dungeon {
         }
       }
 
+    // 바닥 타일별 조명 값
+    const light = new Map();
+    for (const [x, z] of floors) light.set(this.idx(x, z), this.bakeLight((x + 0.5) * T, (z + 0.5) * T));
+    const wallLight = (x, z) => {
+      // 벽은 인접한 바닥 타일 중 가장 밝은 값을 사용
+      let best = null;
+      for (const [dx, dz] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+        [1, 1],
+        [-1, -1],
+        [1, -1],
+        [-1, 1],
+      ]) {
+        const c = light.get(this.idx(x + dx, z + dz));
+        if (c && this.get(x + dx, z + dz) !== EMPTY && (!best || c.r > best.r)) best = c;
+      }
+      return best ? best.clone().multiplyScalar(0.95) : new THREE.Color(0.4, 0.4, 0.4);
+    };
+
     const m = new THREE.Matrix4();
     const planeGeo = new THREE.PlaneGeometry(T, T);
     planeGeo.rotateX(-Math.PI / 2);
@@ -252,8 +296,11 @@ export class Dungeon {
     floors.forEach(([x, z], i) => {
       m.makeTranslation((x + 0.5) * T, 0, (z + 0.5) * T);
       floorMesh.setMatrixAt(i, m);
+      const c = light.get(this.idx(x, z));
+      floorMesh.setColorAt(i, c);
       m.makeTranslation((x + 0.5) * T, WALL_H, (z + 0.5) * T);
       ceilMesh.setMatrixAt(i, m);
+      ceilMesh.setColorAt(i, c.clone().multiplyScalar(0.6));
     });
     group.add(floorMesh, ceilMesh);
 
@@ -262,6 +309,7 @@ export class Dungeon {
     walls.forEach(([x, z], i) => {
       m.makeTranslation((x + 0.5) * T, WALL_H / 2, (z + 0.5) * T);
       wallMesh.setMatrixAt(i, m);
+      wallMesh.setColorAt(i, wallLight(x, z));
     });
     group.add(wallMesh);
 
@@ -273,52 +321,82 @@ export class Dungeon {
       pillars.forEach((p, i) => {
         m.makeTranslation(p.x, WALL_H / 2, p.z);
         pm.setMatrixAt(i, m);
+        pm.setColorAt(i, this.bakeLight(p.x + 1.5, p.z));
       });
       group.add(pm);
     }
 
-    // 횃불
-    const sconceGeo = new THREE.BoxGeometry(0.15, 0.7, 0.15);
-    const sconceMat = new THREE.MeshLambertMaterial({ color: 0x3a2a1a });
-    const flameGeo = new THREE.ConeGeometry(0.16, 0.45, 6);
-    const flameMat = new THREE.MeshBasicMaterial({ color: deep ? 0xff5a2a : 0xffaa44 });
-    this.flames = [];
-    for (const t of this.torches) {
-      const s = new THREE.Mesh(sconceGeo, sconceMat);
-      s.position.set(t.x, t.y - 0.4, t.z);
-      s.rotation.x = t.nz * 0.4;
-      s.rotation.z = -t.nx * 0.4;
-      const f = new THREE.Mesh(flameGeo, flameMat);
-      f.position.set(t.x - t.nx * 0.12, t.y + 0.1, t.z - t.nz * 0.12);
-      group.add(s, f);
-      this.flames.push(f);
-    }
+    // 횃불 (인스턴싱: 횃불이 많아도 그리기 호출 2회)
+    const nT = this.torches.length;
+    const sconceMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.15, 0.7, 0.15), new THREE.MeshLambertMaterial({ color: 0x3a2a1a }), Math.max(1, nT));
+    const flameMesh = new THREE.InstancedMesh(new THREE.ConeGeometry(0.16, 0.45, 6), new THREE.MeshBasicMaterial({ color: deep ? 0xff5a2a : 0xffaa44 }), Math.max(1, nT));
+    const o = new THREE.Object3D();
+    this.torches.forEach((t, i) => {
+      o.position.set(t.x, t.y - 0.4, t.z);
+      o.rotation.set(t.nz * 0.4, 0, -t.nx * 0.4);
+      o.scale.setScalar(1);
+      o.updateMatrix();
+      sconceMesh.setMatrixAt(i, o.matrix);
+      o.position.set(t.x - t.nx * 0.12, t.y + 0.1, t.z - t.nz * 0.12);
+      o.rotation.set(0, 0, 0);
+      o.updateMatrix();
+      flameMesh.setMatrixAt(i, o.matrix);
+    });
+    sconceMesh.count = nT;
+    flameMesh.count = nT;
+    group.add(sconceMesh, flameMesh);
+    this.flameMesh = flameMesh;
 
-    // 통, 뼈
-    const barrelGeo = new THREE.CylinderGeometry(0.55, 0.5, 1.2, 10);
-    const barrelMat = new THREE.MeshLambertMaterial({ color: 0x5b3b20 });
+    // 통, 뼈 (인스턴싱)
+    const barrels = this.props.filter((p) => p.type === 'barrel');
+    const bones = this.props.filter((p) => p.type === 'bones');
     const boneMat = new THREE.MeshLambertMaterial({ color: 0xcfc6ad });
-    for (const p of this.props) {
-      if (p.type === 'barrel') {
-        const b = new THREE.Mesh(barrelGeo, barrelMat);
-        b.position.set(p.x, 0.6, p.z);
-        group.add(b);
-      } else if (p.type === 'bones') {
-        for (let i = 0; i < 5; i++) {
-          const b = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.6), boneMat);
-          b.rotation.set(Math.PI / 2, 0, Math.random() * Math.PI);
-          b.position.set(p.x + (Math.random() - 0.5), 0.05, p.z + (Math.random() - 0.5));
-          group.add(b);
+    if (barrels.length) {
+      const bm = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.55, 0.5, 1.2, 10), new THREE.MeshLambertMaterial({ color: 0x5b3b20 }), barrels.length);
+      barrels.forEach((p, i) => {
+        m.makeTranslation(p.x, 0.6, p.z);
+        bm.setMatrixAt(i, m);
+        bm.setColorAt(i, this.bakeLight(p.x, p.z));
+      });
+      group.add(bm);
+    }
+    if (bones.length) {
+      const sticks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.05, 0.05, 0.6), boneMat, bones.length * 5);
+      const skulls = new THREE.InstancedMesh(new THREE.SphereGeometry(0.2, 8, 6), boneMat, bones.length);
+      bones.forEach((p, i) => {
+        const c = this.bakeLight(p.x, p.z);
+        for (let k = 0; k < 5; k++) {
+          o.position.set(p.x + (Math.random() - 0.5), 0.05, p.z + (Math.random() - 0.5));
+          o.rotation.set(Math.PI / 2, 0, Math.random() * Math.PI);
+          o.updateMatrix();
+          sticks.setMatrixAt(i * 5 + k, o.matrix);
+          sticks.setColorAt(i * 5 + k, c);
         }
-        const skull = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), boneMat);
-        skull.position.set(p.x, 0.18, p.z);
-        group.add(skull);
-      }
+        m.makeTranslation(p.x, 0.18, p.z);
+        skulls.setMatrixAt(i, m);
+        skulls.setColorAt(i, c);
+      });
+      group.add(sticks, skulls);
     }
 
     scene.add(group);
     this.group = group;
     return group;
+  }
+
+  // 횃불 불꽃 흔들림 (인스턴스 행렬만 갱신)
+  animateFlames(time) {
+    const fm = this.flameMesh;
+    if (!fm || !this.torches.length) return;
+    const o = this._fo || (this._fo = new THREE.Object3D());
+    this.torches.forEach((t, i) => {
+      const fl = Math.sin(time * 11 + i * 3.7) * 0.5 + Math.sin(time * 5.3 + i) * 0.4;
+      o.position.set(t.x - t.nx * 0.12, t.y + 0.1, t.z - t.nz * 0.12);
+      o.scale.set(1 + fl * 0.1, 1 + fl * 0.25, 1 + fl * 0.1);
+      o.updateMatrix();
+      fm.setMatrixAt(i, o.matrix);
+    });
+    fm.instanceMatrix.needsUpdate = true;
   }
 
   dispose(scene) {

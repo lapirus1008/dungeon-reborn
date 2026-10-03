@@ -7,7 +7,6 @@ import { Actor, Monster, Bot, computeStats, angleDiff, yawTo, fwd } from './acto
 import { sfx } from './audio.js';
 
 export const RAID_TIME = 900; // 15분
-const LIGHT_POOL = 8;
 const EYE = 1.65;
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -74,7 +73,8 @@ export class Game {
     this.renderer = renderer;
     this.ui = ui;
     this.input = input;
-    this.camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 200);
+    this.camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 85);
+    this.lightPool = 3; // 품질 설정에 따라 main.js에서 변경
     this.camera.rotation.order = 'YXZ';
     this.flashMat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
     this.running = false;
@@ -109,7 +109,8 @@ export class Game {
     this.torchLight = new THREE.PointLight(0xffb070, 9, 20, 1.4);
     this.scene.add(this.torchLight);
     this.lights = [];
-    for (let i = 0; i < LIGHT_POOL; i++) {
+    // 횃불 조명은 바닥/벽에 미리 구워 두었으므로 실시간 점광원은 포탈·마법·근처 횃불용으로 소수만 사용
+    for (let i = 0; i < this.lightPool; i++) {
       const l = new THREE.PointLight(0xff9944, 0, 16, 1.3);
       this.scene.add(l);
       this.lights.push(l);
@@ -193,6 +194,18 @@ export class Game {
       }
       this.spawnChest(r, Math.random() < 0.25 ? 1 : 0, luck);
       if (area > 30 && Math.random() < 0.5) this.spawnChest(r, 0, luck);
+    }
+    this.warmup();
+  }
+
+  // 품질 변경 시 실시간 조명 수 재구성 (셰이더 재컴파일)
+  rebuildLights() {
+    for (const l of this.lights) this.scene.remove(l);
+    this.lights = [];
+    for (let i = 0; i < this.lightPool; i++) {
+      const l = new THREE.PointLight(0xff9944, 0, 16, 1.3);
+      this.scene.add(l);
+      this.lights.push(l);
     }
     this.warmup();
   }
@@ -957,14 +970,14 @@ export class Game {
     for (const po of this.portals) srcs.push({ x: po.pos.x, y: 2, z: po.pos.z, color: po.mesh.userData.color, intensity: 14, dist: 18, pri: 2 });
     for (let i = 0; i < this.dungeon.torches.length; i++) {
       const t = this.dungeon.torches[i];
+      if (Math.abs(t.x - cam.x) + Math.abs(t.z - cam.z) > 24) continue;
       const fl = Math.sin(this.time * 11 + i * 3.7) * 0.5 + Math.sin(this.time * 5.3 + i) * 0.4;
-      srcs.push({ x: t.x - t.nx * 0.4, y: t.y + 0.2, z: t.z - t.nz * 0.4, color: this.depth > 1 ? 0xff5a2a : 0xff9a44, intensity: 7 + fl, dist: 16, pri: 1 });
-      const fm = this.dungeon.flames[i];
-      fm.scale.set(1 + fl * 0.1, 1 + fl * 0.25, 1 + fl * 0.1);
+      srcs.push({ x: t.x - t.nx * 0.4, y: t.y + 0.2, z: t.z - t.nz * 0.4, color: this.depth > 1 ? 0xff5a2a : 0xff9a44, intensity: 2.5 + fl, dist: 10, pri: 0 });
     }
+    this.dungeon.animateFlames(this.time);
     for (const s of srcs) s.score = Math.hypot(s.x - cam.x, s.z - cam.z) - s.pri * 12;
     srcs.sort((a, b) => a.score - b.score);
-    for (let i = 0; i < LIGHT_POOL; i++) {
+    for (let i = 0; i < this.lights.length; i++) {
       const l = this.lights[i];
       const s = srcs[i];
       if (s && Math.hypot(s.x - cam.x, s.z - cam.z) < 45) {
@@ -1010,10 +1023,23 @@ export class Game {
       }
     }
     this.separate();
+    this.cullT = (this.cullT || 0) - dt;
+    const doCull = this.cullT <= 0;
+    if (doCull) this.cullT = 0.15;
     for (const a of this.actors) {
       if (a.mesh && !a.extracted) {
-        a.animate(dt);
-        a.updateHpBar(this.camera);
+        if (doCull) {
+          // 멀거나 벽 너머라 보이지 않는 캐릭터는 그리지 않음 (그리기 호출 절감)
+          const d = Math.abs(a.pos.x - p.pos.x) + Math.abs(a.pos.z - p.pos.z);
+          a.mesh.visible = d < 70 && (d < 8 || this.dungeon.los(p.pos.x, p.pos.z, a.pos.x, a.pos.z));
+        }
+        if (a.mesh.visible) {
+          a.animate(dt);
+          a.updateHpBar(this.camera);
+        } else {
+          a.mesh.position.copy(a.pos);
+          a.hpBar.visible = false;
+        }
       }
     }
     this.updateProjectiles(dt);

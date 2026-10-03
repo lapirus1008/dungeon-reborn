@@ -806,9 +806,18 @@ kbd {
   position: absolute;
   left: 8px;
   top: 6px;
+  max-width: 30vw;
   font-size: 11px;
   color: #9a9;
   text-shadow: 0 0 2px #000;
+}
+#fps small {
+  display: block;
+  font-size: 10px;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .pause-box {
   width: 340px;

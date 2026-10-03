@@ -8,29 +8,53 @@ import { initAudio } from './audio.js';
 const params = new URLSearchParams(location.search);
 const NO_LOCK = params.has('nolock'); // 테스트용: 포인터 잠금 없이 조작
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-// 그래픽 품질: 렌더링 해상도 배율 (고해상도 노트북 화면에서 큰 차이)
-const QUALITY = { low: 0.6, mid: 1, high: 2 };
+// 그래픽 품질: 렌더링 해상도, 안티앨리어싱, 실시간 조명 수
+// 기본값 '보통'은 안티앨리어싱을 끄고 해상도 1배 (내장 그래픽에서도 60fps 목표)
+const QUALITY = {
+  low: { ratio: 0.7, aa: false, lights: 2 },
+  mid: { ratio: 1, aa: false, lights: 3 },
+  high: { ratio: 2, aa: true, lights: 5 },
+};
 let quality = 'mid';
 try {
   quality = localStorage.getItem('dr_quality') || 'mid';
+  if (!QUALITY[quality]) quality = 'mid';
 } catch (e) {
   /* 무시 */
 }
-function applyQuality() {
-  renderer.setPixelRatio(Math.min(devicePixelRatio, QUALITY[quality] || 1));
+const wrap = document.getElementById('canvas-wrap');
+let renderer = null;
+let gpuName = '';
+function createRenderer() {
+  const q = QUALITY[quality];
+  if (renderer) {
+    renderer.dispose();
+    renderer.domElement.remove();
+  }
+  renderer = new THREE.WebGLRenderer({ antialias: q.aa, powerPreference: 'high-performance', stencil: false });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, q.ratio));
   renderer.setSize(innerWidth, innerHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.15;
+  wrap.appendChild(renderer.domElement);
+  // 브라우저가 실제로 사용하는 그래픽 장치 이름 (소프트웨어 렌더링 여부 진단용)
+  try {
+    const gl = renderer.getContext();
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    gpuName = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    gpuName = String(gpuName).replace(/^ANGLE \((.*)\)$/, '$1');
+  } catch (e) {
+    gpuName = '';
+  }
+  return renderer;
 }
-applyQuality();
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.15;
-const canvas = renderer.domElement;
-document.getElementById('canvas-wrap').appendChild(canvas);
+createRenderer();
 
 const input = { keys: new Set(), pressed: new Set(), mouse: { l: false, r: false, rPressed: false }, dx: 0, dy: 0, locked: NO_LOCK };
 const ui = new UI();
 const game = new Game(renderer, ui, input);
+game.lightPool = QUALITY[quality].lights;
 let save = loadSave();
 let mode = 'lobby';
 
@@ -51,7 +75,9 @@ const qualitySel = document.getElementById('quality');
 qualitySel.value = quality;
 qualitySel.addEventListener('change', () => {
   quality = qualitySel.value;
-  applyQuality();
+  game.renderer = createRenderer();
+  game.lightPool = QUALITY[quality].lights;
+  if (game.running) game.rebuildLights();
   try {
     localStorage.setItem('dr_quality', quality);
   } catch (e) {
@@ -62,7 +88,7 @@ qualitySel.addEventListener('change', () => {
 function lock() {
   if (NO_LOCK) return;
   try {
-    const r = canvas.requestPointerLock();
+    const r = wrap.requestPointerLock();
     if (r && r.catch) r.catch(() => {});
   } catch (e) {
     /* 무시 */
@@ -70,7 +96,7 @@ function lock() {
 }
 
 document.addEventListener('pointerlockchange', () => {
-  input.locked = NO_LOCK || document.pointerLockElement === canvas;
+  input.locked = NO_LOCK || document.pointerLockElement === wrap;
   if (!input.locked) {
     input.mouse.l = input.mouse.r = false;
   }
@@ -83,7 +109,7 @@ document.addEventListener('mousemove', (e) => {
   }
 });
 
-canvas.addEventListener('mousedown', (e) => {
+wrap.addEventListener('mousedown', (e) => {
   initAudio();
   if (mode !== 'raid') return;
   if (!input.locked) {
@@ -221,7 +247,7 @@ function frame(now) {
     fpsTime += raw;
     worstFrame = Math.max(worstFrame, raw);
     if (fpsTime >= 0.5) {
-      fpsEl.textContent = `${Math.round(fpsFrames / fpsTime)} FPS · 최대 ${(worstFrame * 1000).toFixed(0)}ms`;
+      fpsEl.innerHTML = `${Math.round(fpsFrames / fpsTime)} FPS · 최대 ${(worstFrame * 1000).toFixed(0)}ms<br><small>${gpuName.replace(/[<>&]/g, '')}</small>`;
       fpsFrames = 0;
       fpsTime = 0;
       worstFrame = 0;
