@@ -1,7 +1,7 @@
 // 레이드(던전) 진행: 월드, 플레이어 조작, 전투, 투사체, 포탈, 상자
 import * as THREE from 'three';
 import { Dungeon, WALL_H } from './dungeon.js';
-import { makeChest, makeLootBag, makePortal, makeArrow, makeOrb, makeViewModel } from './models.js';
+import { makeChest, makeLootBag, makePortal, makeArrow, makeOrb, makeViewModel, makeFxSphere, makeTelegraph, makeHumanoid } from './models.js';
 import { CLASSES, ITEM_BASES, rollLoot } from './data.js';
 import { Actor, Monster, Bot, computeStats, angleDiff, yawTo, fwd } from './actors.js';
 import { sfx } from './audio.js';
@@ -194,6 +194,24 @@ export class Game {
       this.spawnChest(r, Math.random() < 0.25 ? 1 : 0, luck);
       if (area > 30 && Math.random() < 0.5) this.spawnChest(r, 0, luck);
     }
+    this.warmup();
+  }
+
+  // 전투 중 처음 등장하는 효과 때문에 셰이더 컴파일 끊김이 생기지 않도록 미리 컴파일
+  warmup() {
+    const g = new THREE.Group();
+    const tele = makeTelegraph(2);
+    const flash = makeHumanoid({});
+    flash.traverse((o) => {
+      if (o.isMesh) o.material = this.flashMat;
+    });
+    g.add(makeArrow(), makeOrb(0x7a6aff), makeOrb(0xff6a1a), makeFxSphere(0xff6a1a, 0.5), tele.ring, tele.inner, makeLootBag(), makePortal('exit'), makePortal('descend'), flash);
+    g.position.copy(this.player.pos);
+    this.scene.add(g);
+    this.camera.position.set(this.player.pos.x, EYE, this.player.pos.z);
+    this.camera.updateMatrixWorld();
+    this.renderer.compile(this.scene, this.camera);
+    this.scene.remove(g);
   }
 
   spawnChest(room, tier, luck) {
@@ -383,7 +401,7 @@ export class Game {
       a.takeDamage(dmg * f, owner, { knock: { x: (dx / (d || 1)) * 8, z: (dz / (d || 1)) * 8 }, from: pos, stun: kind === 'slam' ? 0.4 : 0 });
     }
     const color = kind === 'fire' ? 0xff6a1a : 0x9a3aff;
-    const m = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false }));
+    const m = makeFxSphere(color, 0.6);
     m.position.copy(pos);
     if (kind === 'slam') m.position.y = 0.2;
     this.scene.add(m);
@@ -402,34 +420,33 @@ export class Game {
   }
 
   spark(pos, color) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, depthWrite: false }));
+    const m = makeFxSphere(color, 0.8);
     m.position.copy(pos);
+    m.scale.setScalar(0.3);
     this.scene.add(m);
     this.effects.push({
       mesh: m,
       t: 0,
       dur: 0.2,
       update: (e, k) => {
-        e.mesh.scale.setScalar(1 + k * 2);
+        e.mesh.scale.setScalar(0.3 + k * 0.6);
         e.mesh.material.opacity = 0.8 * (1 - k);
       },
     });
   }
 
   spawnTelegraph(pos, radius, dur) {
-    const m = new THREE.Mesh(new THREE.RingGeometry(radius - 0.25, radius, 40), new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthWrite: false }));
-    m.rotation.x = -Math.PI / 2;
+    const { ring: m, inner } = makeTelegraph(radius);
     m.position.set(pos.x, 0.06, pos.z);
-    const inner = new THREE.Mesh(new THREE.CircleGeometry(radius, 40), new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false }));
-    inner.rotation.x = -Math.PI / 2;
     inner.position.set(pos.x, 0.05, pos.z);
+    inner.userData.r = radius;
     this.scene.add(m, inner);
     this.effects.push({
       mesh: m,
       extra: inner,
       t: 0,
       dur,
-      update: (e, k) => e.extra.scale.setScalar(Math.max(0.01, k)),
+      update: (e, k) => e.extra.scale.setScalar(Math.max(0.01, k) * e.extra.userData.r),
     });
   }
 
@@ -663,7 +680,7 @@ export class Game {
     } else {
       p.move(wx * speed, wz * speed, dt);
     }
-    p.lastVel = new THREE.Vector3(wx * speed, 0, wz * speed);
+    (p.lastVel || (p.lastVel = new THREE.Vector3())).set(wx * speed, 0, wz * speed);
     const moving = wl > 0 && !p.dash;
     if (moving) {
       p.bob += dt * speed * 1.9;
@@ -983,11 +1000,12 @@ export class Game {
     this.updatePlayer(dt);
     for (const a of this.actors) {
       if (a !== p) {
-        const prev = a.lastPos || a.pos.clone();
+        if (!a.lastPos) {
+          a.lastPos = a.pos.clone();
+          a.lastVel = new THREE.Vector3();
+        }
         a.update(dt);
-        a.lastVel = a.lastVel || new THREE.Vector3();
-        a.lastVel.set((a.pos.x - prev.x) / dt, 0, (a.pos.z - prev.z) / dt);
-        a.lastPos = a.lastPos || new THREE.Vector3();
+        a.lastVel.set((a.pos.x - a.lastPos.x) / dt, 0, (a.pos.z - a.lastPos.z) / dt);
         a.lastPos.copy(a.pos);
       }
     }
@@ -1006,7 +1024,11 @@ export class Game {
       e.update(e, k);
       if (k >= 1) {
         this.scene.remove(e.mesh);
-        if (e.extra) this.scene.remove(e.extra);
+        if (e.mesh.material.userData.disposable !== false && !e.extra) e.mesh.material.dispose();
+        if (e.extra) {
+          this.scene.remove(e.extra);
+          e.mesh.geometry.dispose();
+        }
         this.effects.splice(i, 1);
       }
     }

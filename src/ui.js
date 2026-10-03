@@ -45,10 +45,14 @@ export class UI {
     this.bigmap = $('#bigmap');
     this.bm = this.bigmap.getContext('2d');
     this.mmTimer = 0;
+    this.tipVisible = false;
+    this.tipH = 0;
     document.addEventListener('mousemove', (e) => {
-      this.tooltip.style.left = Math.min(innerWidth - 270, e.clientX + 16) + 'px';
-      this.tooltip.style.top = Math.min(innerHeight - this.tooltip.offsetHeight - 8, e.clientY + 12) + 'px';
+      // 포인터 잠금 중에는 초당 수백 번 발생하므로 툴팁이 보일 때만 처리 (레이아웃 강제 계산 방지)
+      if (!this.tipVisible || document.pointerLockElement) return;
+      this.tooltip.style.transform = `translate(${Math.min(innerWidth - 270, e.clientX + 16)}px, ${Math.max(0, Math.min(innerHeight - this.tipH - 8, e.clientY + 12))}px)`;
     });
+    this.cache = new Map();
     document.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
@@ -93,9 +97,42 @@ export class UI {
     if (extra) h += `<div class="tip-hint">${extra}</div>`;
     this.tooltip.innerHTML = h;
     this.tooltip.style.display = 'block';
+    this.tipVisible = true;
+    this.tipH = this.tooltip.offsetHeight;
   }
   hideTip() {
+    if (!this.tipVisible) return;
+    this.tipVisible = false;
     this.tooltip.style.display = 'none';
+  }
+
+  // 값이 바뀔 때만 DOM에 기록 (매 프레임 스타일 변경으로 인한 끊김 방지)
+  setStyle(sel, prop, val) {
+    const key = sel + '|' + prop;
+    if (this.cache.get(key) === val) return;
+    this.cache.set(key, val);
+    this.q(sel).style[prop] = val;
+  }
+  setText(sel, val) {
+    const key = sel + '|text';
+    if (this.cache.get(key) === val) return;
+    this.cache.set(key, val);
+    this.q(sel).textContent = val;
+  }
+  setClass(sel, cls, on) {
+    const key = sel + '|c|' + cls;
+    if (this.cache.get(key) === on) return;
+    this.cache.set(key, on);
+    this.q(sel).classList.toggle(cls, on);
+  }
+  q(sel) {
+    this.els = this.els || new Map();
+    let e = this.els.get(sel);
+    if (!e || !e.isConnected) {
+      e = document.querySelector(sel);
+      this.els.set(sel, e);
+    }
+    return e;
   }
 
   toast(text) {
@@ -354,6 +391,8 @@ export class UI {
     $('#killfeed').innerHTML = '';
     this.dmgLayer.innerHTML = '';
     this.dmgNums = [];
+    this._pv = new THREE.Vector3();
+    this.cache.clear();
     const cls = CLASSES[game.player.cls];
     const sk = $('#skills');
     sk.innerHTML = '';
@@ -362,11 +401,13 @@ export class UI {
       const d = cls.skills[k];
       const box = el('div', 'skill', `<div class="sk-key">${k === 'rmb' ? '우클릭' : k.toUpperCase()}</div><div class="sk-name">${d.name}</div><div class="sk-cd"></div>`);
       box.title = d.desc;
+      box.id = 'sk-' + k;
       sk.appendChild(box);
       this.skillEls[k] = box;
     }
     for (const k of ['1', '2']) {
       const box = el('div', 'skill potion', `<div class="sk-key">${k}</div><div class="sk-name">${k === '1' ? '🧪' : '🩹'} <span></span></div><div class="sk-cd"></div>`);
+      box.id = 'sk-p' + k;
       sk.appendChild(box);
       this.skillEls['p' + k] = box;
     }
@@ -380,83 +421,81 @@ export class UI {
   updateHud(dt) {
     const g = this.game;
     const p = g.player;
-    $('#hp-bar').style.width = (p.hp / p.maxHp) * 100 + '%';
-    $('#hp-text').textContent = `${Math.ceil(p.hp)} / ${p.maxHp}` + (p.shield > 0 ? ` (+${Math.ceil(p.shield)})` : '');
-    $('#hp-heal').style.width = (Math.min(p.maxHp, p.hp + p.heal) / p.maxHp) * 100 + '%';
-    $('#st-bar').style.width = p.stamina + '%';
-    if (p.stats.maxMana) $('#mana-bar').style.width = (p.mana / p.stats.maxMana) * 100 + '%';
+    const pct = (v) => Math.max(0, Math.min(100, v * 100)).toFixed(1) + '%';
+    this.setStyle('#hp-bar', 'width', pct(p.hp / p.maxHp));
+    this.setText('#hp-text', `${Math.ceil(p.hp)} / ${p.maxHp}` + (p.shield > 0 ? ` (+${Math.ceil(p.shield)})` : ''));
+    this.setStyle('#hp-heal', 'width', pct(Math.min(p.maxHp, p.hp + p.heal) / p.maxHp));
+    this.setStyle('#st-bar', 'width', pct(p.stamina / 100));
+    if (p.stats.maxMana) this.setStyle('#mana-bar', 'width', pct(p.mana / p.stats.maxMana));
     const tl = Math.max(0, g.timeLeft);
     const mm = Math.floor(tl / 60);
     const ss = Math.floor(tl % 60);
-    const timer = $('#timer');
-    timer.textContent = `${mm}:${ss.toString().padStart(2, '0')}`;
-    timer.classList.toggle('danger', tl < 120);
-    $('#depth').textContent = g.depth > 1 ? `심연 ${g.depth}층` : '고대 지하묘지 1층';
+    this.setText('#timer', `${mm}:${ss.toString().padStart(2, '0')}`);
+    this.setClass('#timer', 'danger', tl < 120);
+    this.setText('#depth', g.depth > 1 ? `심연 ${g.depth}층` : '고대 지하묘지 1층');
     const ex = g.exitPortals().length;
-    $('#portal-info').textContent = ex ? `🌀 탈출 포탈 ${ex}개 열림` : `🌀 포탈 대기 중`;
+    this.setText('#portal-info', ex ? `🌀 탈출 포탈 ${ex}개 열림` : `🌀 포탈 대기 중`);
     // 스킬 쿨다운
     const cdOf = { rmb: p.cd.rmb, q: p.cd.q, e: p.cd.e };
     const clsSk = CLASSES[p.cls].skills;
     for (const k of ['rmb', 'q', 'e']) {
-      const box = this.skillEls[k];
       const max = clsSk[k].cd;
       const c = cdOf[k];
-      const cdEl = box.querySelector('.sk-cd');
-      if (max && c > 0) {
-        cdEl.style.height = (c / max) * 100 + '%';
-        box.classList.add('cooling');
-      } else {
-        cdEl.style.height = '0';
-        box.classList.remove('cooling');
-      }
-      if (k === 'rmb') box.classList.toggle('active', (p.cls === 'fighter' && p.blocking) || (p.cls === 'ranger' && g.zoom) || (p.cls === 'mage' && p.shield > 0));
-      if (k === 'e' && p.cls === 'fighter') box.classList.toggle('active', p.rage > 0);
+      const cooling = !!(max && c > 0);
+      this.setStyle(`#sk-${k} .sk-cd`, 'height', cooling ? pct(c / max) : '0%');
+      this.setClass(`#sk-${k}`, 'cooling', cooling);
+      if (k === 'rmb') this.setClass('#sk-rmb', 'active', (p.cls === 'fighter' && p.blocking) || (p.cls === 'ranger' && !!g.zoom) || (p.cls === 'mage' && p.shield > 0));
+      if (k === 'e' && p.cls === 'fighter') this.setClass('#sk-e', 'active', p.rage > 0);
     }
-    this.skillEls.p1.querySelector('span').textContent = p.bag.filter((i) => i.base === 'health_potion').length;
-    this.skillEls.p2.querySelector('span').textContent = p.bag.filter((i) => i.base === 'bandage').length;
+    let pots = 0;
+    let bands = 0;
+    for (const i of p.bag) {
+      if (i.base === 'health_potion') pots++;
+      else if (i.base === 'bandage') bands++;
+    }
+    this.setText('#sk-p1 span', String(pots));
+    this.setText('#sk-p2 span', String(bands));
 
     // 조준 대상
     const t = g.aimedActor();
-    const tgt = $('#target');
     if (t) {
-      tgt.classList.remove('hidden');
-      tgt.querySelector('.t-name').textContent = t.displayName;
-      tgt.querySelector('.t-name').style.color = t.kind === 'bot' ? '#ff7a5a' : t.def && t.def.boss ? '#ff4040' : '#ddd';
-      tgt.querySelector('.t-hp').style.width = (t.hp / t.maxHp) * 100 + '%';
-    } else tgt.classList.add('hidden');
+      this.setClass('#target', 'hidden', false);
+      this.setText('#target .t-name', t.displayName);
+      this.setStyle('#target .t-name', 'color', t.kind === 'bot' ? '#ff7a5a' : t.def && t.def.boss ? '#ff4040' : '#ddd');
+      this.setStyle('#target .t-hp', 'width', pct(t.hp / t.maxHp));
+    } else this.setClass('#target', 'hidden', true);
 
     // 차징 바
-    const ch = $('#channel');
-    if (this.channelT > 0) {
-      this.channelT -= dt;
-      ch.classList.remove('hidden');
-    } else ch.classList.add('hidden');
-    if (p.cls === 'ranger' && p.draw >= 0) {
-      $('#crosshair').style.transform = `translate(-50%,-50%) scale(${1.6 - Math.min(1, p.draw / 0.9) * 0.8})`;
-    } else $('#crosshair').style.transform = 'translate(-50%,-50%)';
+    if (this.channelT > 0) this.channelT -= dt;
+    this.setClass('#channel', 'hidden', !(this.channelT > 0));
+    const drawK = p.cls === 'ranger' && p.draw >= 0 ? Math.min(1, p.draw / 0.9) : -1;
+    this.setStyle('#crosshair', 'transform', drawK >= 0 ? `translate(-50%,-50%) scale(${(1.6 - drawK * 0.8).toFixed(2)})` : 'translate(-50%,-50%)');
 
     // 피격 비네트
     const lowHp = p.hp / p.maxHp < 0.3 ? 0.35 + Math.sin(g.time * 6) * 0.1 : 0;
     this.hurtV = Math.max(0, (this.hurtV || 0) - dt * 1.5);
-    $('#vignette').style.opacity = Math.min(1, this.hurtV + lowHp);
+    this.setStyle('#vignette', 'opacity', Math.min(1, this.hurtV + lowHp).toFixed(2));
 
-    // 데미지 숫자
+    // 데미지 숫자 (transform만 사용해 레이아웃 계산 없이 이동)
     const cam = g.camera;
     for (let i = this.dmgNums.length - 1; i >= 0; i--) {
       const n = this.dmgNums[i];
       n.t += dt;
       n.pos.y += dt * 1.2;
-      const v = n.pos.clone().project(cam);
+      const v = this._pv.copy(n.pos).project(cam);
       if (n.t > 0.9 || v.z > 1) {
         n.el.remove();
         this.dmgNums.splice(i, 1);
         continue;
       }
-      n.el.style.left = ((v.x + 1) / 2) * innerWidth + 'px';
-      n.el.style.top = ((1 - v.y) / 2) * innerHeight + 'px';
-      n.el.style.opacity = 1 - n.t / 0.9;
+      const x = ((v.x + 1) / 2) * innerWidth;
+      const y = ((1 - v.y) / 2) * innerHeight;
+      n.el.style.transform = `translate(${x.toFixed(0)}px, ${y.toFixed(0)}px) translate(-50%, -50%)`;
+      n.el.style.opacity = (1 - n.t / 0.9).toFixed(2);
     }
 
+    this.fpsFrames = (this.fpsFrames || 0) + 1;
+    this.fpsT = (this.fpsT || 0) + dt;
     this.mmTimer -= dt;
     if (this.mmTimer <= 0) {
       this.mmTimer = 0.1;
@@ -466,18 +505,17 @@ export class UI {
   }
 
   prompt(text) {
-    const pr = $('#prompt');
-    if (!text) pr.classList.add('hidden');
+    if (!text) this.setClass('#prompt', 'hidden', true);
     else {
-      pr.classList.remove('hidden');
-      pr.textContent = text;
+      this.setClass('#prompt', 'hidden', false);
+      this.setText('#prompt', text);
     }
   }
 
   channel(text, k) {
     this.channelT = 0.1;
-    $('#channel .ch-text').textContent = text;
-    $('#channel .ch-fill').style.width = Math.min(1, k) * 100 + '%';
+    this.setText('#channel .ch-text', text);
+    this.setStyle('#channel .ch-fill', 'width', (Math.min(1, k) * 100).toFixed(1) + '%');
   }
 
   announce(title, sub) {

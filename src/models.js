@@ -217,23 +217,62 @@ export function makePortal(kind = 'exit') {
   return g;
 }
 
+// 투사체는 자주 생성되므로 지오메트리/재질을 공유
+const SHARED = {};
+function shared(key, fn) {
+  return SHARED[key] || (SHARED[key] = fn());
+}
+
 export function makeArrow() {
   const g = new THREE.Group();
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.8, 4), mat(0x8a6a3a));
-  shaft.rotation.x = Math.PI / 2;
-  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.12, 4), mat(0x999999));
-  tip.rotation.x = -Math.PI / 2;
-  tip.position.z = -0.45;
+  const shaft = new THREE.Mesh(
+    shared('arrowShaft', () => new THREE.CylinderGeometry(0.015, 0.015, 0.8, 4).rotateX(Math.PI / 2)),
+    mat(0x8a6a3a),
+  );
+  const tip = new THREE.Mesh(
+    shared('arrowTip', () => new THREE.ConeGeometry(0.04, 0.12, 4).rotateX(-Math.PI / 2).translate(0, 0, -0.45)),
+    mat(0x999999),
+  );
   g.add(shaft, tip);
   return g;
 }
 
 export function makeOrb(color, size = 0.18) {
   const g = new THREE.Group();
-  const core = new THREE.Mesh(new THREE.SphereGeometry(size, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-  const halo = new THREE.Mesh(new THREE.SphereGeometry(size * 1.8, 8, 6), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, depthWrite: false }));
+  const core = new THREE.Mesh(
+    shared('orbCore', () => new THREE.SphereGeometry(1, 8, 6)),
+    shared('orbCoreMat', () => new THREE.MeshBasicMaterial({ color: 0xffffff })),
+  );
+  core.scale.setScalar(size);
+  const halo = new THREE.Mesh(
+    shared('orbCore', () => new THREE.SphereGeometry(1, 8, 6)),
+    shared('orbHalo' + color, () => new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, depthWrite: false })),
+  );
+  halo.scale.setScalar(size * 1.8);
   g.add(core, halo);
   return g;
+}
+
+// 폭발/스파크/예고 원: 효과마다 재질을 따로 두어 투명도를 개별 조절
+export function makeFxSphere(color, opacity) {
+  return new THREE.Mesh(
+    shared('fxSphere', () => new THREE.SphereGeometry(1, 16, 12)),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false }),
+  );
+}
+
+export function makeTelegraph(radius) {
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(radius - 0.25, radius, 40),
+    shared('teleRingMat', () => new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthWrite: false })),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  const inner = new THREE.Mesh(
+    shared('teleDisc', () => new THREE.CircleGeometry(1, 40)),
+    shared('teleDiscMat', () => new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false })),
+  );
+  inner.rotation.x = -Math.PI / 2;
+  return { ring, inner };
 }
 
 // 1인칭 뷰모델

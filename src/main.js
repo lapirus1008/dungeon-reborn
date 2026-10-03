@@ -9,8 +9,19 @@ const params = new URLSearchParams(location.search);
 const NO_LOCK = params.has('nolock'); // 테스트용: 포인터 잠금 없이 조작
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
-renderer.setSize(innerWidth, innerHeight);
+// 그래픽 품질: 렌더링 해상도 배율 (고해상도 노트북 화면에서 큰 차이)
+const QUALITY = { low: 0.6, mid: 1, high: 2 };
+let quality = 'mid';
+try {
+  quality = localStorage.getItem('dr_quality') || 'mid';
+} catch (e) {
+  /* 무시 */
+}
+function applyQuality() {
+  renderer.setPixelRatio(Math.min(devicePixelRatio, QUALITY[quality] || 1));
+  renderer.setSize(innerWidth, innerHeight);
+}
+applyQuality();
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
@@ -31,6 +42,18 @@ sensInput.addEventListener('input', () => {
   game.sensitivity = 0.0022 * Number(sensInput.value);
   try {
     localStorage.setItem('dr_sens', sensInput.value);
+  } catch (e) {
+    /* 무시 */
+  }
+});
+
+const qualitySel = document.getElementById('quality');
+qualitySel.value = quality;
+qualitySel.addEventListener('change', () => {
+  quality = qualitySel.value;
+  applyQuality();
+  try {
+    localStorage.setItem('dr_quality', quality);
   } catch (e) {
     /* 무시 */
   }
@@ -107,7 +130,7 @@ window.addEventListener('blur', () => {
 });
 
 document.getElementById('pause').addEventListener('mousedown', (e) => {
-  if (e.target.closest('button') || e.target.closest('input')) return;
+  if (e.target.closest('button') || e.target.closest('input') || e.target.closest('select')) return;
   lock();
 });
 document.getElementById('resume-btn').onclick = () => lock();
@@ -177,19 +200,32 @@ function abandon() {
 ui.openLobby(save, startRaid);
 
 // ------------------------------------------------------------- 루프
+// 던전본처럼 메뉴(Esc)나 인벤토리를 열어도 게임은 멈추지 않는다
+const fpsEl = document.getElementById('fps');
+let fpsFrames = 0;
+let fpsTime = 0;
+let worstFrame = 0;
 let last = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.1, (now - last) / 1000);
+  const raw = (now - last) / 1000;
+  const dt = Math.min(0.1, raw);
   last = now;
   if (mode === 'raid') {
-    const paused = !input.locked && !ui.isPanelOpen() && !game.result && game.running;
-    ui.showPause(paused, abandon);
-    if (!paused) {
-      game.update(dt);
-      if (game.running || game.result) ui.updateHud(dt);
-    }
+    const menu = !input.locked && !ui.isPanelOpen() && !game.result && game.running;
+    ui.showPause(menu, abandon);
+    game.update(dt);
+    if (game.running || game.result) ui.updateHud(dt);
     game.render();
+    fpsFrames++;
+    fpsTime += raw;
+    worstFrame = Math.max(worstFrame, raw);
+    if (fpsTime >= 0.5) {
+      fpsEl.textContent = `${Math.round(fpsFrames / fpsTime)} FPS · 최대 ${(worstFrame * 1000).toFixed(0)}ms`;
+      fpsFrames = 0;
+      fpsTime = 0;
+      worstFrame = 0;
+    }
   }
   input.dx = input.dy = 0;
   input.pressed.clear();
