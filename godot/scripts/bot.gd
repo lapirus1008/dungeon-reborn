@@ -31,25 +31,45 @@ static func _pick_name() -> String:
 	return n
 
 
+# 직업에 맞는 무기 세트 + 방어구 (깊을수록 좋은 등급)
 static func _random_gear(c: String, depth: int) -> Dictionary:
 	var luck := depth - 1 + randf()
-	var weapons := []
-	for k in Data.ITEM_BASES:
-		if Data.ITEM_BASES[k].slot == "weapon" and c in Data.ITEM_BASES[k].classes:
-			weapons.append(k)
-	var pick := func(slot: String) -> String:
+	var by_cat := func(cat: String) -> String:
 		var ks := []
 		for k in Data.ITEM_BASES:
-			if Data.ITEM_BASES[k].slot == slot:
+			var b: Dictionary = Data.ITEM_BASES[k]
+			if b.slot == "weapon" and b.cat == cat and int(b.rarity) <= clampi(Data.roll_rarity(luck), 0, 4):
 				ks.append(k)
-		return ks.pick_random()
+		return ks.pick_random() if ks.size() else ""
 	var eq := Account.empty_equipment()
-	eq.weapon = Data.make_item(Data.STARTER_WEAPON[c] if randf() < 0.35 else weapons.pick_random(), Data.roll_rarity(luck - 1))
-	# 부위별 착용 확률
-	for pair in [["head", 0.6], ["chest", 0.75], ["hands", 0.45], ["legs", 0.55], ["feet", 0.6], ["necklace", 0.2], ["ring1", 0.25]]:
-		if randf() < pair[1]:
-			var item_slot: String = "ring" if pair[0] == "ring1" else pair[0]
-			eq[pair[0]] = Data.make_item(pick.call(item_slot), Data.roll_rarity(luck - 1))
+	var cats: Array = Data.CLASSES[c].weapons
+	var main_cats := cats.filter(func(x): return not (x in Data.OFFHAND))
+	var mc: String = main_cats.pick_random()
+	var w: String = by_cat.call(mc)
+	eq.w1 = Data.make_item(w if w != "" else Data.STARTER_WEAPON[c])
+	if not (Data.base_of(eq.w1).cat in Data.TWO_HANDED):
+		var offs := cats.filter(func(x): return x in Data.OFFHAND)
+		if c == "rogue":
+			offs = ["dagger"]
+		if offs.size() and randf() < 0.8:
+			var o: String = by_cat.call(offs.pick_random())
+			if o != "":
+				eq.w1o = Data.make_item(o)
+	var at: String = Data.STARTER_ARMOR[c]
+	for slot in ["head", "chest", "hands", "legs", "feet"]:
+		if randf() < 0.7:
+			var r := clampi(Data.roll_rarity(luck), 0, 3)
+			var ks := []
+			for k in Data.ITEM_BASES:
+				var b: Dictionary = Data.ITEM_BASES[k]
+				if b.slot == slot and b.get("cat", "") == at and int(b.rarity) == r:
+					ks.append(k)
+			if ks.size():
+				eq[slot] = Data.make_item(ks.pick_random())
+	if randf() < 0.25:
+		eq.necklace = Data.make_item(["bone_necklace", "wolf_pendant", "skull_amulet"].pick_random())
+	if randf() < 0.3:
+		eq.ring1 = Data.make_item(["copper_ring", "silver_ring", "ruby_ring"].pick_random())
 	return eq
 
 
@@ -62,8 +82,13 @@ func _init(g, p: Vector3, depth: int, force_cls := "") -> void:
 	cls = c
 	equipment = eq
 	stats = st
-	res = st.res_max if st.res != "soul" else 30.0
-	block_mul = 0.25 if c == "fighter" else 0.4
+	res = st.res_max if st.res == "mana" else st.res_max * 0.5
+	block_mul = 1.0 - st.block_pct / 100.0 if st.block_pct > 0.0 else 0.4
+	# 무작위 Q/E 스킬 선택
+	skills = {"q": Data.CLASSES[c].q.pick_random(), "e": Data.CLASSES[c].e.pick_random()}
+	if c == "swordmaster":
+		eq.sw1 = Data.make_item("old_sword")
+		eq.sw2 = Data.make_item("old_sword")
 	for i in randi_range(0, 2):
 		bag.append(Data.make_item("health_potion"))
 	if randf() < 0.4:
@@ -71,7 +96,7 @@ func _init(g, p: Vector3, depth: int, force_cls := "") -> void:
 	strafe_dir = 1.0 if randf() < 0.5 else -1.0
 	aim_err = randf_range(0.03, 0.08)
 	courage = randf()
-	attach_rig(Models.hero_rig(c, Data.weapon_model(c, eq), eq.head != null))
+	attach_rig(Models.hero_rig(c, Data.weapon_model(c, eq, 1), eq.head != null))
 	if c == "druid":
 		attach_alt_rig(Models.panther_rig())
 
@@ -154,6 +179,8 @@ func update(dt: float) -> void:
 	Skills.tick_resource(self, dt)
 	Skills.tick_channel(self, dt)
 	Skills.tick_spin(self, dt)
+	Skills.tick_soul_storm(self, dt)
+	Skills.tick_barrier(self, dt)
 	if incapacitated():
 		windup = 0.0
 		move_amt = 0.0
@@ -194,7 +221,7 @@ func update(dt: float) -> void:
 	# 적이 없을 때: 로그는 가끔 은신, 드루이드는 표범 형태 해제
 	if cls == "rogue" and stealth <= 0.0 and cd.e <= 0.0 and randf() < dt * 0.05:
 		Skills.use_e(self, bot_aim())
-	if panther and res < 40.0:
+	if panther and res < 5.0:
 		Skills.set_panther(self, false)
 	explore(dt)
 
@@ -280,61 +307,106 @@ func _ranged_combat(dt: float, t, d: float, dx: float, dz: float, seen: bool, sp
 		atk_cd = randf_range(0.5, 0.9)
 
 
-# 직업별 스킬 사용 판단
+# 고른 Q/E 스킬에 맞춰 사용 판단
 func _use_skills(t, d: float) -> void:
 	var aim := bot_aim()
 	var near := 0
 	for a in game.actors:
 		if a.alive and a != self and hostile_to(a) and a.pos.distance_to(pos) < 3.5:
 			near += 1
-	match cls:
-		"fighter":
-			if near >= 2 or (d < 3.0 and randf() < 0.3):
+	var hpk := hp / max_hp
+	if cls == "swordmaster" and (t.windup > 0.0 or t.swinging) and d < 4.0 and randf() < 0.6:
+		Skills.start_parry(self)
+	if cls == "rogue" and d > 5.0 and d < 14.0 and randf() < 0.3:
+		Skills.throw_knife(self, aim)
+	match Skills.skill_id(self, "q"):
+		"fighter_whirlwind":
+			if near >= 2 or d < 3.0:
 				Skills.use_q(self, aim)
-			elif d > 5.0 and d < 10.0:
+		"fighter_warcry":
+			if d < 4.0:
+				Skills.use_q(self, aim)
+		"priest_revelation":
+			if d < 14.0:
+				Skills.use_q(self, aim)
+		"priest_heal":
+			if hpk < 0.6:
+				var sa := aim.duplicate()
+				sa["self"] = true
+				Skills.use_q(self, sa, 1.0)
+		"pyro_pyroblast":
+			if d > 4.0 and d < 25.0:
+				Skills.use_q(self, aim, 1.5 if res >= 40.0 else 0.6)
+		"rogue_petrify":
+			if d < 6.0:
+				Skills.use_q(self, aim)
+		"rogue_blades":
+			if d > 3.0 and d < 12.0:
+				Skills.use_q(self, aim)
+		"dk_wraith_guard":
+			if near >= 1:
+				Skills.use_q(self, aim)
+		"dk_soul_storm":
+			if not soul_storm and near >= 1 and res > 30.0:
+				Skills.use_q(self, aim)
+			elif soul_storm and near == 0:
+				Skills.use_q(self, aim)
+		"cryo_blizzard":
+			if d < 18.0:
+				Skills.use_q(self, aim)
+		"cryo_frost_curse":
+			if d < 20.0:
+				Skills.use_q(self, aim)
+		"sm_psionic":
+			if d < 20.0:
+				Skills.use_q(self, aim)
+		"druid_primal":
+			if not panther and d < 9.0 and res >= 40.0:
+				Skills.use_q(self, aim)
+			elif panther and res < 20.0:
+				Skills.use_q(self, aim)
+	var sa := aim.duplicate()
+	sa["self"] = true
+	match Skills.skill_id(self, "e"):
+		"fighter_charge":
+			if d > 5.0 and d < 10.0:
 				Skills.use_e(self, aim)
-		"swordmaster":
-			if (t.windup > 0.0 or t.swinging) and d < 4.0 and randf() < 0.6:
-				Skills.start_parry(self)
+		"fighter_inspire":
+			if d > 8.0 and randf() < 0.3:
+				Skills.use_e(self, aim)
+		"priest_holy_ward":
+			if hpk < 0.35:
+				Skills.use_e(self, sa)
+		"priest_protection":
+			if hpk < 0.75 and d < 8.0:
+				Skills.use_e(self, aim)
+		"pyro_fireshock":
 			if d < 5.0:
 				Skills.use_e(self, aim)
-			elif d < 20.0:
-				Skills.use_q(self, aim)
-		"rogue":
-			if d > 4.0 and d < 12.0 and randf() < 0.5:
-				Skills.use_q(self, aim)
-			elif d > 5.0 and d < 14.0:
-				Skills.throw_knife(self, aim)
-		"deathknight":
+		"rogue_stealth", "rogue_shadow_veil":
+			if stealth <= 0.0 and d > 14.0 and randf() < 0.05:
+				Skills.use_e(self, aim)
+		"rogue_quick_conceal":
+			if stealth <= 0.0 and (hpk < 0.4 or (d > 8.0 and d < 14.0)):
+				Skills.use_e(self, aim)
+		"dk_soul_chain":
 			if d > 5.0 and d < 16.0:
 				Skills.use_e(self, aim)
-			elif d < 5.0 and res >= 40.0:
-				Skills.use_q(self, aim)
-		"druid":
-			if not panther:
-				if cd.e <= 0.0:
-					Skills.use_e(self, aim)
-				elif d < 7.0 and res >= 50.0:
-					Skills.use_q(self, aim)
-			elif d > 4.0 and d < 9.0:
+		"cryo_ice_armor":
+			if hpk < 0.65:
+				Skills.use_e(self, sa)
+		"cryo_ice_barrier":
+			if hpk < 0.3:
 				Skills.use_e(self, aim)
-		"pyromancer":
+		"sm_blade_dance":
 			if d < 5.0:
 				Skills.use_e(self, aim)
-			elif d > 5.0 and res >= 45.0 and randf() < 0.5:
-				Skills.use_q(self, aim)
-		"cryomancer":
-			if hp < max_hp * 0.35:
+		"druid_nature":
+			if d < 14.0:
 				Skills.use_e(self, aim)
-			elif d < 16.0 and res >= 45.0:
-				Skills.use_q(self, aim)
-		"priest":
-			if hp < max_hp * 0.7 and d < 8.0:
+		"druid_shadow_assault":
+			if d > 3.0 and d < 9.0:
 				Skills.use_e(self, aim)
-			if hp < max_hp * 0.6 and d < 6.0:
-				Skills.use_q(self, aim)
-			elif hp < max_hp * 0.5:
-				Skills.cleanse_heal(self, 1.0)
 
 
 func choose_goal() -> Dictionary:
@@ -414,7 +486,7 @@ func explore(dt: float) -> void:
 
 func all_items() -> Array:
 	var out := []
-	for s in Data.GEAR_SLOTS:
+	for s in Data.ALL_SLOTS:
 		if equipment[s] != null:
 			out.append(equipment[s])
 	out.append_array(bag)

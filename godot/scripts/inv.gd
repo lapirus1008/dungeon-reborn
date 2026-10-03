@@ -54,7 +54,25 @@ static func find_space(list: Array, grid: Vector2i, it: Dictionary, prefer_r := 
 	return {}
 
 
+# 같은 종류의 겹칠 수 있는 아이템(물약, 금화 등)에 먼저 합침. 남은 수량이 있으면 false
+static func merge_into(list: Array, it: Dictionary) -> bool:
+	var mx := Data.max_stack(it)
+	if mx <= 1:
+		return false
+	for o in list:
+		if o.id != it.id and o.base == it.base and int(o.get("count", 1)) < mx:
+			var room: int = mx - int(o.get("count", 1))
+			var n := mini(room, int(it.get("count", 1)))
+			o.count = int(o.get("count", 1)) + n
+			it.count = int(it.get("count", 1)) - n
+			if it.count <= 0:
+				return true
+	return false
+
+
 static func add_auto(list: Array, grid: Vector2i, it: Dictionary) -> bool:
+	if merge_into(list, it):
+		return true
 	var sp := find_space(list, grid, it, it.get("r", false))
 	if sp.is_empty():
 		return false
@@ -105,8 +123,8 @@ static func pack_container(items: Array) -> Dictionary:
 
 # ------------------------------------------------------------------ 이동
 # ctx: {cls, equipment, stores: {이름: {list, grid}}}
-# src/dst: 저장소 이름("bag", "stash", "cont") 또는 "equip" (dst의 slot은 x 자리에 문자열로 오지 않으므로 별도 인자)
-# x < 0 이면 빈 자리 자동 탐색
+# src/dst: 저장소 이름("bag", "stash", "cont") 또는 "equip" (장비 칸은 slot 인자)
+# x < 0 이면 빈 자리 자동 탐색. 같은 종류의 겹치는 아이템 위에 놓으면 합쳐짐
 static func move(ctx: Dictionary, src: String, id: String, dst: String, x: int, y: int, r: bool, slot := "") -> Dictionary:
 	var it = _peek(ctx, src, id)
 	if it == null:
@@ -118,6 +136,19 @@ static func move(ctx: Dictionary, src: String, id: String, dst: String, x: int, 
 	var st: Dictionary = ctx.stores[dst]
 	if src == dst and x >= 0 and int(it.get("x", -1)) == x and int(it.get("y", -1)) == y and bool(it.get("r", false)) == r:
 		return {"ok": false}
+	# 겹치기: 놓는 칸에 같은 종류 아이템이 있으면 수량 합치기
+	if x >= 0 and Data.max_stack(it) > 1:
+		for o in st.list:
+			if o.id != it.id and o.base == it.base and rect_of(o).has_point(Vector2i(x, y)):
+				var mx := Data.max_stack(it)
+				var n := mini(mx - int(o.get("count", 1)), int(it.get("count", 1)))
+				if n <= 0:
+					return {"ok": false, "msg": "더 이상 겹칠 수 없습니다"}
+				o.count = int(o.get("count", 1)) + n
+				it.count = int(it.get("count", 1)) - n
+				if it.count <= 0:
+					_take(ctx, src, it.id)
+				return {"ok": true}
 	var pos := {}
 	if x >= 0:
 		if not fits(st.list, st.grid, it, x, y, r, it.id if src == dst else ""):
@@ -125,6 +156,9 @@ static func move(ctx: Dictionary, src: String, id: String, dst: String, x: int, 
 		pos = {"x": x, "y": y, "r": r}
 	else:
 		var others: Array = st.list.filter(func(o): return o.id != it.id)
+		if src != dst and merge_into(others, it):
+			_take(ctx, src, it.id)
+			return {"ok": true}
 		pos = find_space(others, st.grid, it, it.get("r", false))
 		if pos.is_empty():
 			return {"ok": false, "msg": "%s에 자리가 없습니다" % store_name(dst)}
@@ -149,7 +183,7 @@ static func store_name(n: String) -> String:
 
 static func _peek(ctx: Dictionary, src: String, id: String):
 	if src == "equip":
-		for s in Data.GEAR_SLOTS:
+		for s in Data.ALL_SLOTS:
 			var e = ctx.equipment.get(s)
 			if e != null and e.id == id:
 				return e
@@ -160,12 +194,19 @@ static func _peek(ctx: Dictionary, src: String, id: String):
 	return ctx.stores[src].list[i] if i >= 0 else null
 
 
+static func slot_of(eq: Dictionary, id: String) -> String:
+	for s in Data.ALL_SLOTS:
+		var e = eq.get(s)
+		if e != null and e.id == id:
+			return s
+	return ""
+
+
 static func _take(ctx: Dictionary, src: String, id: String) -> void:
 	if src == "equip":
-		for s in Data.GEAR_SLOTS:
-			var e = ctx.equipment.get(s)
-			if e != null and e.id == id:
-				ctx.equipment[s] = null
+		var s := slot_of(ctx.equipment, id)
+		if s != "":
+			ctx.equipment[s] = null
 		return
 	var list: Array = ctx.stores[src].list
 	var i := index_of(list, id)
@@ -173,41 +214,98 @@ static func _take(ctx: Dictionary, src: String, id: String) -> void:
 		list.remove_at(i)
 
 
-# 장착: 같은 칸에 있던 장비는 원래 아이템이 있던 저장소로 (자리가 없으면 실패)
+# 이 아이템을 이 직업이 넣을 수 있는 장비 칸
+static func valid_slots(it: Dictionary, cls: String) -> Array:
+	if not Data.can_equip(it, cls):
+		return []
+	var out := Data.gear_slots_for(it, cls)
+	if cls != "swordmaster":
+		out = out.filter(func(s): return not s.begins_with("sw"))
+	if cls != "rogue":
+		var b := Data.base_of(it)
+		if b.slot == "weapon" and b.cat == "dagger":
+			out = out.filter(func(s): return not s.ends_with("o"))
+	return out
+
+
+static func _is_2h(it) -> bool:
+	return it != null and Data.base_of(it).slot == "weapon" and Data.base_of(it).cat in Data.TWO_HANDED
+
+
+# 빈 자리를 찾아 넣기 (저장소에 넣을 수 없으면 실패)
+static func _stash_back(ctx: Dictionary, store: String, it: Dictionary) -> bool:
+	if not ctx.stores.has(store):
+		return false
+	var st: Dictionary = ctx.stores[store]
+	var sp := find_space(st.list, st.grid, it)
+	if sp.is_empty():
+		return false
+	it.x = sp.x
+	it.y = sp.y
+	it.r = sp.r
+	st.list.append(it)
+	return true
+
+
+# 장착: 같은 칸에 있던 장비는 원래 아이템이 있던 저장소로. 양손 무기는 보조 칸을 비움
 static func _equip(ctx: Dictionary, src: String, it: Dictionary, slot: String) -> Dictionary:
-	if not Data.can_equip(it, ctx.cls):
+	var slots := valid_slots(it, ctx.cls)
+	if slots.is_empty():
 		var b := Data.base_of(it)
 		if b.slot == "weapon":
-			return {"ok": false, "msg": "%s 전용 무기입니다" % Data.class_names(b.classes)}
+			return {"ok": false, "msg": "%s 전용 무기입니다" % Data.class_names(Data.weapon_classes(b.cat))}
 		return {"ok": false, "msg": "장착할 수 없는 물건입니다"}
-	var slots := Data.gear_slots_for(it)
+	var eq: Dictionary = ctx.equipment
+	var from := slot_of(eq, it.id) if src == "equip" else ""
 	if slot == "":
-		slot = slots[0]
-		for s in slots:
-			if ctx.equipment.get(s) == null:
+		# 활성 세트 우선, 빈 칸 우선
+		var ws := int(ctx.get("wset", 1))
+		var order := slots.duplicate()
+		order.sort_custom(func(a, b): return (1 if a.begins_with("w%d" % ws) else 0) > (1 if b.begins_with("w%d" % ws) else 0))
+		slot = order[0]
+		for s in order:
+			if eq.get(s) == null and s != from:
 				slot = s
 				break
 	if not (slot in slots):
 		return {"ok": false, "msg": "%s 칸에는 넣을 수 없습니다" % Data.SLOT_NAMES.get(slot, slot)}
-	if src == "equip":
-		# 반지 1 <-> 반지 2 교환
-		var from := ""
-		for s in Data.GEAR_SLOTS:
-			var e = ctx.equipment.get(s)
-			if e != null and e.id == it.id:
-				from = s
-		if from == slot:
-			return {"ok": false}
-		var other = ctx.equipment.get(slot)
-		ctx.equipment[slot] = it
-		ctx.equipment[from] = other
+	if from == slot:
+		return {"ok": false}
+	# 양손 무기를 든 세트의 보조 칸에는 넣을 수 없음
+	if slot.length() == 3 and slot.ends_with("o") and _is_2h(eq.get(slot.left(2))):
+		return {"ok": false, "msg": "양손 무기를 들고 있습니다"}
+	var back := src if src != "equip" else ("bag" if ctx.stores.has("bag") else "stash")
+	# 양손 무기: 보조 칸의 장비를 저장소로
+	if _is_2h(it) and slot in ["w1", "w2"]:
+		var off = eq.get(slot + "o")
+		if off != null and off.id != it.id:
+			if not _stash_back(ctx, back, off):
+				return {"ok": false, "msg": "보조 장비를 넣을 자리가 없습니다"}
+			eq[slot + "o"] = null
+	var prev = eq.get(slot)
+	# 같은 소모품/투척 도구는 수량을 합침
+	if prev != null and prev.id != it.id and prev.base == it.base and Data.max_stack(it) > 1:
+		var n := mini(Data.max_stack(it) - int(prev.get("count", 1)), int(it.get("count", 1)))
+		if n <= 0:
+			return {"ok": false, "msg": "더 이상 겹칠 수 없습니다"}
+		prev.count = int(prev.get("count", 1)) + n
+		it.count = int(it.get("count", 1)) - n
+		if it.count <= 0:
+			_take(ctx, src, it.id)
 		return {"ok": true}
-	var prev = ctx.equipment.get(slot)
+	if src == "equip":
+		# 장비 칸끼리 교환 (예: 반지 1 <-> 반지 2, 세트 1 <-> 세트 2)
+		if prev != null and not (from in valid_slots(prev, ctx.cls)):
+			if not _stash_back(ctx, back, prev):
+				return {"ok": false, "msg": "기존 장비를 넣을 자리가 없습니다"}
+			prev = null
+		eq[slot] = it
+		eq[from] = prev
+		return {"ok": true}
 	var st: Dictionary = ctx.stores[src]
 	var others: Array = st.list.filter(func(o): return o.id != it.id)
 	var pos := {}
 	if prev != null:
-		# 꺼낸 자리 근처에 우선 (원래 자리에 그대로 들어가면 그 자리)
 		var ox := int(it.get("x", 0))
 		var oy := int(it.get("y", 0))
 		if fits(others, st.grid, prev, ox, oy, false):
@@ -222,7 +320,7 @@ static func _equip(ctx: Dictionary, src: String, it: Dictionary, slot: String) -
 	it.erase("x")
 	it.erase("y")
 	it.r = false
-	ctx.equipment[slot] = it
+	eq[slot] = it
 	if prev != null:
 		prev.x = pos.x
 		prev.y = pos.y
@@ -243,12 +341,12 @@ static func quick(ctx: Dictionary, src: String, id: String, order: Array) -> Dic
 				if r.ok:
 					return r
 		return {"ok": false, "msg": "장비를 넣을 자리가 없습니다"}
-	if Data.is_gear(it) and Data.can_equip(it, ctx.cls):
+	if not valid_slots(it, ctx.cls).is_empty():
 		return _equip(ctx, src, it, "")
 	return transfer(ctx, src, id, order)
 
 
-# Shift+클릭: 다른 저장소로 바로 옮기기 (order 중 src가 아닌 첫 번째로)
+# 다른 저장소로 바로 옮기기 (order 중 src가 아닌 첫 번째로)
 static func transfer(ctx: Dictionary, src: String, id: String, order: Array) -> Dictionary:
 	var last := {"ok": false}
 	for dst in order:

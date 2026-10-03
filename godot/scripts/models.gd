@@ -386,6 +386,160 @@ static func loot_bag(color: Color) -> Node3D:
 	return g
 
 
+# 바닥에 떨어진 아이템: 아이템 모양 + 등급 색 빛줄기
+static func ground_item(base_id: String, rarity: int) -> Node3D:
+	var b: Dictionary = Data.ITEM_BASES.get(base_id, {})
+	var col: Color = Data.RARITIES[clampi(rarity, 0, Data.RARITIES.size() - 1)].color
+	var g := Node3D.new()
+	var shape := Node3D.new()
+	shape.name = "Shape"
+	g.add_child(shape)
+	var slot: String = b.get("slot", "")
+	if slot == "weapon":
+		var w := weapon(str(b.get("model", "sword")))
+		w.rotation = Vector3(PI / 2, 0, 0)
+		w.position.y = 0.08
+		shape.add_child(w)
+	else:
+		var m := mat(Color(0.55, 0.5, 0.42), 0.6, 0.3)
+		var node: MeshInstance3D
+		match slot:
+			"head":
+				node = sphere(0.22, mat(Color(0.6, 0.6, 0.65), 0.4, 0.7), 10)
+				node.scale = Vector3(1, 0.8, 1.1)
+				node.position.y = 0.18
+			"chest":
+				node = box(Vector3(0.55, 0.12, 0.6), m)
+				node.position.y = 0.06
+			"legs":
+				node = box(Vector3(0.4, 0.1, 0.7), m)
+				node.position.y = 0.05
+			"hands", "feet":
+				node = box(Vector3(0.22, 0.14, 0.3), m)
+				node.position.y = 0.07
+			"necklace", "ring":
+				node = sphere(0.1, mat(Color(1.0, 0.82, 0.3), 0.2, 1.0), 8)
+				node.position.y = 0.1
+			"consumable":
+				node = cyl(0.06, 0.12, 0.3, mat(Color(0.8, 0.2, 0.25), 0.2), 8)
+				node.position.y = 0.15
+			"utility":
+				node = cyl(0.03, 0.05, 0.35, mat(Color(0.75, 0.75, 0.8), 0.3, 0.8), 6)
+				node.rotation.z = PI / 2
+				node.position.y = 0.05
+			_:
+				node = sphere(0.16, mat(Color(1.0, 0.82, 0.3), 0.25, 0.9), 8)
+				node.position.y = 0.14
+		shape.add_child(node)
+	# 빛줄기 (등급 색)
+	var beam_mat := StandardMaterial3D.new()
+	beam_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	beam_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	beam_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	beam_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	beam_mat.albedo_color = Color(col.r, col.g, col.b, 0.22 + 0.06 * rarity)
+	var h := 2.2 + 0.7 * rarity
+	var beam := cyl(0.05, 0.16, h, beam_mat, 10)
+	beam.name = "Beam"
+	beam.position.y = h * 0.5
+	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	g.add_child(beam)
+	var core := cyl(0.015, 0.04, h * 0.9, glow_mat(col, 2.5), 6)
+	core.position.y = h * 0.45
+	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	g.add_child(core)
+	var ring := MeshInstance3D.new()
+	var tm := TorusMesh.new()
+	tm.inner_radius = 0.3
+	tm.outer_radius = 0.36
+	tm.rings = 16
+	tm.ring_segments = 3
+	ring.mesh = tm
+	ring.material_override = glow_mat(col, 2.0)
+	ring.scale = Vector3(1, 0.1, 1)
+	ring.position.y = 0.02
+	g.add_child(ring)
+	if rarity >= 2:
+		var light := OmniLight3D.new()
+		light.light_color = col
+		light.light_energy = 0.6 + 0.3 * rarity
+		light.omni_range = 2.5
+		light.position.y = 0.6
+		g.add_child(light)
+	return g
+
+
+# 지도 고정 물체: 성소(회복), 부활석, 아래층 계단
+static func fixture(kind: String) -> Node3D:
+	var g := Node3D.new()
+	var stone := mat(Color(0.38, 0.36, 0.34), 0.9)
+	match kind:
+		"shrine":
+			var base := cyl(0.55, 0.7, 0.5, stone, 8)
+			base.position.y = 0.25
+			g.add_child(base)
+			var col := cyl(0.22, 0.28, 0.9, stone, 8)
+			col.position.y = 0.95
+			g.add_child(col)
+			var glow := Node3D.new()
+			glow.name = "Glow"
+			var gem := sphere(0.22, glow_mat(Color(0.45, 1.0, 0.55), 3.0), 10)
+			gem.scale = Vector3(1, 1.5, 1)
+			gem.position.y = 1.65
+			glow.add_child(gem)
+			var l := OmniLight3D.new()
+			l.light_color = Color(0.5, 1.0, 0.6)
+			l.light_energy = 1.2
+			l.omni_range = 5.0
+			l.position.y = 1.7
+			glow.add_child(l)
+			g.add_child(glow)
+		"stone":
+			var ob := box(Vector3(0.7, 2.2, 0.45), mat(Color(0.18, 0.17, 0.2), 0.7))
+			ob.position.y = 1.1
+			g.add_child(ob)
+			var glow := Node3D.new()
+			glow.name = "Glow"
+			for i in 3:
+				var rune := box(Vector3(0.3, 0.12, 0.02), glow_mat(Color(1.0, 0.8, 0.35), 4.0))
+				rune.position = Vector3(0, 0.7 + i * 0.5, -0.235)
+				glow.add_child(rune)
+			var l := OmniLight3D.new()
+			l.light_color = Color(1.0, 0.8, 0.4)
+			l.light_energy = 0.9
+			l.omni_range = 4.0
+			l.position = Vector3(0, 1.4, -0.6)
+			glow.add_child(l)
+			g.add_child(glow)
+		_:
+			# 아래층 계단: 바닥에 뚫린 어두운 구멍과 계단
+			var hole := box(Vector3(2.6, 0.05, 2.6), mat(Color(0.02, 0.02, 0.02)))
+			hole.position.y = 0.03
+			g.add_child(hole)
+			for i in 4:
+				var st := box(Vector3(2.2, 0.08, 0.5), stone)
+				st.position = Vector3(0, 0.06 - i * 0.02, -0.9 + i * 0.55)
+				g.add_child(st)
+			var rim := MeshInstance3D.new()
+			var tm := TorusMesh.new()
+			tm.inner_radius = 1.6
+			tm.outer_radius = 1.75
+			tm.rings = 16
+			tm.ring_segments = 3
+			rim.mesh = tm
+			rim.material_override = glow_mat(Color(0.6, 0.3, 0.9), 1.2)
+			rim.scale = Vector3(1, 0.1, 1)
+			rim.position.y = 0.05
+			g.add_child(rim)
+	return g
+
+
+static func fixture_spent(node: Node3D) -> void:
+	var glow := node.get_node_or_null("Glow")
+	if glow != null:
+		glow.visible = false
+
+
 static func portal(kind: String) -> Node3D:
 	var color := Color(0.29, 0.72, 1.0) if kind == "exit" else Color(1.0, 0.23, 0.16)
 	var g := Node3D.new()
@@ -603,6 +757,159 @@ static func treant_rig() -> CharacterRig:
 		leaves.position.y = 3.25
 		root.add_child(leaves)
 		return root)
+
+
+# 사람형이 아닌 몬스터 (박쥐, 딱정벌레, 쥐, 멧돼지, 악마의 눈, 촉수, 미믹, 미믹 책, 해충)
+static func creature(t: String) -> Node3D:
+	var root := Node3D.new()
+	var rig := Node3D.new()
+	root.add_child(rig)
+	var meshes := []
+	var legs := []
+	var dummy := Node3D.new()
+	rig.add_child(dummy)
+	var wing_l: Node3D = dummy
+	var wing_r: Node3D = dummy
+	var add := func(m: MeshInstance3D, pos: Vector3, parent: Node3D = null) -> MeshInstance3D:
+		m.position = pos
+		(parent if parent != null else rig).add_child(m)
+		meshes.append(m)
+		return m
+	var leg_set := func(n: int, ln: float, w: float, half_x: float, z0: float, z1: float, y: float, m: Material) -> void:
+		for i in n:
+			for s in [-1, 1]:
+				var pivot := Node3D.new()
+				pivot.position = Vector3(s * half_x, y, lerpf(z0, z1, float(i) / maxf(1.0, n - 1.0)))
+				pivot.rotation.z = s * 0.5
+				var leg := box(Vector3(w, ln, w), m)
+				leg.position.y = -ln / 2.0
+				pivot.add_child(leg)
+				rig.add_child(pivot)
+				legs.append(pivot)
+				meshes.append(leg)
+	var eye_pair := func(pos: Vector3, gap: float, col: Color, sz := 0.05) -> void:
+		for s in [-1, 1]:
+			var e := box(Vector3(sz, sz, 0.02), glow_mat(col, 6.0))
+			e.position = pos + Vector3(s * gap, 0, 0)
+			rig.add_child(e)
+	match t:
+		"giant_bat":
+			var fur := mat(Color(0.18, 0.13, 0.12), 0.8)
+			add.call(sphere(0.25, fur, 8), Vector3(0, 0, 0))
+			add.call(sphere(0.16, fur, 8), Vector3(0, 0.12, -0.25))
+			eye_pair.call(Vector3(0, 0.16, -0.39), 0.06, Color(1, 0.3, 0.2))
+			for s in [-1, 1]:
+				var pv := Node3D.new()
+				pv.position = Vector3(s * 0.2, 0.05, 0)
+				var wing := box(Vector3(0.8, 0.03, 0.5), mat(Color(0.25, 0.15, 0.15), 0.9))
+				wing.position.x = s * 0.4
+				pv.add_child(wing)
+				rig.add_child(pv)
+				meshes.append(wing)
+				if s < 0:
+					wing_l = pv
+				else:
+					wing_r = pv
+		"giant_beetle":
+			var shell := mat(Color(0.12, 0.2, 0.16), 0.3, 0.5)
+			var b: MeshInstance3D = add.call(sphere(0.5, shell, 10), Vector3(0, 0.45, 0.05))
+			b.scale = Vector3(1.0, 0.6, 1.4)
+			add.call(sphere(0.22, mat(Color(0.1, 0.1, 0.08)), 8), Vector3(0, 0.4, -0.7))
+			var horn: MeshInstance3D = add.call(cyl(0.0, 0.06, 0.4, mat(Color(0.3, 0.25, 0.2)), 6), Vector3(0, 0.55, -0.9))
+			horn.rotation.x = -1.2
+			eye_pair.call(Vector3(0, 0.45, -0.9), 0.1, Color(1, 0.6, 0.1))
+			leg_set.call(3, 0.45, 0.06, 0.4, -0.4, 0.5, 0.42, mat(Color(0.08, 0.08, 0.06)))
+		"giant_rat":
+			var fur := mat(Color(0.36, 0.3, 0.26), 0.9)
+			var b: MeshInstance3D = add.call(sphere(0.35, fur, 10), Vector3(0, 0.45, 0.1))
+			b.scale = Vector3(0.9, 0.85, 1.6)
+			var head: MeshInstance3D = add.call(cyl(0.05, 0.22, 0.5, fur, 8), Vector3(0, 0.5, -0.65))
+			head.rotation.x = -PI / 2
+			var tail: MeshInstance3D = add.call(cyl(0.03, 0.04, 0.9, mat(Color(0.75, 0.55, 0.5)), 5), Vector3(0, 0.35, 0.95))
+			tail.rotation.x = 1.2
+			eye_pair.call(Vector3(0, 0.58, -0.72), 0.08, Color(1, 0.2, 0.15), 0.04)
+			leg_set.call(2, 0.3, 0.08, 0.2, -0.3, 0.4, 0.3, fur)
+		"boar":
+			var fur := mat(Color(0.3, 0.2, 0.14), 0.9)
+			var b: MeshInstance3D = add.call(box(Vector3(0.75, 0.7, 1.4), fur), Vector3(0, 0.85, 0.1))
+			b.rotation.x = 0.08
+			add.call(box(Vector3(0.5, 0.5, 0.55), fur), Vector3(0, 0.8, -0.8))
+			add.call(box(Vector3(0.3, 0.25, 0.2), mat(Color(0.45, 0.3, 0.28))), Vector3(0, 0.72, -1.12))
+			for s in [-1, 1]:
+				var tusk: MeshInstance3D = add.call(cyl(0.0, 0.04, 0.3, mat(Color(0.9, 0.88, 0.8)), 5), Vector3(s * 0.18, 0.7, -1.15))
+				tusk.rotation.x = -0.6
+			eye_pair.call(Vector3(0, 0.95, -1.08), 0.15, Color(1, 0.4, 0.1))
+			leg_set.call(2, 0.5, 0.14, 0.25, -0.4, 0.55, 0.5, fur)
+		"demon_eye":
+			var e: MeshInstance3D = add.call(sphere(0.45, mat(Color(0.75, 0.2, 0.2), 0.4), 14), Vector3.ZERO)
+			add.call(sphere(0.22, mat(Color(0.95, 0.9, 0.7), 0.2), 10), Vector3(0, 0, -0.33))
+			var pupil := sphere(0.1, glow_mat(Color(1.0, 0.85, 0.2), 5.0), 8)
+			pupil.position = Vector3(0, 0, -0.5)
+			rig.add_child(pupil)
+			for i in 4:
+				var tent: MeshInstance3D = add.call(cyl(0.02, 0.06, 0.7, mat(Color(0.5, 0.12, 0.15)), 5), Vector3(cos(i * PI / 2) * 0.2, -0.45, 0.2 + sin(i * PI / 2) * 0.2))
+				tent.rotation.x = 0.3
+			e.scale = Vector3.ONE
+		"tentacle":
+			var flesh := mat(Color(0.35, 0.18, 0.3), 0.5)
+			var hole: MeshInstance3D = add.call(cyl(0.6, 0.7, 0.05, mat(Color(0.05, 0.03, 0.03)), 12), Vector3(0, 0.02, 0))
+			hole.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var pv := Node3D.new()
+			rig.add_child(pv)
+			var y := 0.0
+			for i in 6:
+				var seg := cyl(0.2 - i * 0.03, 0.25 - i * 0.03, 0.5, flesh, 8)
+				seg.position = Vector3(0, y + 0.25, -i * 0.05)
+				pv.add_child(seg)
+				meshes.append(seg)
+				y += 0.45
+			wing_r = pv
+		"mimic":
+			var wood := mat(Color(0.42, 0.27, 0.13), 0.8)
+			var gold := mat(Color(0.85, 0.65, 0.25), 0.3, 0.9)
+			add.call(box(Vector3(1.1, 0.55, 0.75), wood), Vector3(0, 0.3, 0))
+			var lid := Node3D.new()
+			lid.position = Vector3(0, 0.58, 0.37)
+			var lm := box(Vector3(1.12, 0.3, 0.77), wood)
+			lm.position = Vector3(0, 0.15, -0.37)
+			lid.add_child(lm)
+			meshes.append(lm)
+			for i in 6:
+				var tooth := cyl(0.0, 0.05, 0.14, mat(Color(0.95, 0.93, 0.85)), 4)
+				tooth.position = Vector3(-0.45 + i * 0.18, -0.05, -0.72)
+				tooth.rotation.x = PI
+				lid.add_child(tooth)
+			rig.add_child(lid)
+			add.call(box(Vector3(1.14, 0.08, 0.1), gold), Vector3(0, 0.56, -0.36))
+			var tongue: MeshInstance3D = add.call(box(Vector3(0.25, 0.05, 0.5), mat(Color(0.7, 0.2, 0.25))), Vector3(0, 0.6, -0.4))
+			tongue.visible = true
+			eye_pair.call(Vector3(0, 0.72, -0.3), 0.2, Color(1, 0.8, 0.2), 0.06)
+			wing_r = lid
+		"mimic_book":
+			var cover := mat(Color(0.35, 0.1, 0.12), 0.7)
+			var pages := mat(Color(0.92, 0.88, 0.75), 0.9)
+			add.call(box(Vector3(0.5, 0.12, 0.65), pages), Vector3.ZERO)
+			for s in [-1, 1]:
+				var pv := Node3D.new()
+				pv.position = Vector3(s * 0.02, 0.05, 0)
+				var cv := box(Vector3(0.3, 0.03, 0.68), cover)
+				cv.position.x = s * 0.15
+				pv.add_child(cv)
+				rig.add_child(pv)
+				meshes.append(cv)
+				if s < 0:
+					wing_l = pv
+				else:
+					wing_r = pv
+			eye_pair.call(Vector3(0, 0.12, -0.2), 0.08, Color(0.8, 0.4, 1.0))
+		_:
+			# 해충
+			var b: MeshInstance3D = add.call(sphere(0.18, mat(Color(0.3, 0.25, 0.15), 0.5), 8), Vector3(0, 0.15, 0))
+			b.scale = Vector3(1, 0.6, 1.5)
+			leg_set.call(3, 0.15, 0.03, 0.12, -0.12, 0.12, 0.15, mat(Color(0.15, 0.12, 0.08)))
+	root.set_meta("parts", {"rig": rig, "leg_l": dummy, "leg_r": dummy, "arm_l": wing_l, "arm_r": wing_r, "panther_legs": legs})
+	root.set_meta("meshes", meshes)
+	return root
 
 
 # 크라이오맨서 서리 장벽 얼음 덩어리

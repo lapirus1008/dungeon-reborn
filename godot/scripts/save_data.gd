@@ -5,8 +5,6 @@ extends Node
 
 signal changed
 
-const STASH_SIZE := Account.STASH_SIZE
-const BAG_SIZE := Account.BAG_SIZE
 
 # 한 PC에서 여러 개 실행해 함께하기를 시험할 때: -- --profile 이름  (저장 파일 분리)
 var PATH := "user://save.json"
@@ -40,7 +38,7 @@ func save() -> void:
 	# 온라인 계정 데이터는 서버가 저장. 내 PC에는 로컬 저장만 기록
 	var f := FileAccess.open(PATH, FileAccess.WRITE)
 	if f:
-		f.store_string(JSON.stringify(local_data))
+		f.store_string(JSON.stringify(Account.serial(local_data)))
 
 
 func reset() -> void:

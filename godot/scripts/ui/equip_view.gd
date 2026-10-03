@@ -1,17 +1,28 @@
-# 장비창 (인형 배치): 무기/머리/상의/장갑/하의/신발/목걸이/반지 2
-# 드래그로 장착/교체 · 우클릭: 해제 · Shift+클릭: 다른 칸(보관함/상자)으로
+# 장비창 (던전본 배치)
+#  세트1(주/보조) · 머리 · 세트2(주/보조) / 투척 · 상의 · 목걸이 · 소모품 1~3
+#  반지 · 하의 · 반지 / 장갑(왼쪽 아래) · 신발(오른쪽 아래) / 검 슬롯 4칸(소드마스터)
+# 드래그로 장착/교체 · 우클릭: 해제 · Shift+클릭: 버리기(던전) / 보관함으로
 class_name EquipView
 extends Control
 
-# 칸 위치와 크기 (칸 단위)
+# 칸 위치와 크기 (칸 단위, 8 x 10)
 const LAYOUT := {
-	"weapon": Rect2i(0, 2, 2, 4), "head": Rect2i(2, 0, 2, 2), "necklace": Rect2i(4, 1, 1, 1),
-	"chest": Rect2i(2, 2, 2, 3), "hands": Rect2i(4, 2, 2, 2), "ring1": Rect2i(4, 4, 1, 1), "ring2": Rect2i(5, 4, 1, 1),
-	"legs": Rect2i(2, 5, 2, 3), "feet": Rect2i(4, 6, 2, 2),
+	"w1": Rect2i(0, 0, 1, 3), "w1o": Rect2i(1, 0, 1, 3),
+	"head": Rect2i(3, 0, 2, 2),
+	"w2": Rect2i(6, 0, 1, 3), "w2o": Rect2i(7, 0, 1, 3),
+	"chest": Rect2i(3, 2, 2, 3), "necklace": Rect2i(5, 2, 1, 1),
+	"util": Rect2i(0, 4, 1, 3),
+	"q1": Rect2i(7, 4, 1, 1), "q2": Rect2i(7, 5, 1, 1), "q3": Rect2i(7, 6, 1, 1),
+	"ring1": Rect2i(2, 5, 1, 1), "legs": Rect2i(3, 5, 2, 3), "ring2": Rect2i(5, 5, 1, 1),
+	"hands": Rect2i(0, 8, 2, 2), "feet": Rect2i(6, 8, 2, 2),
+	"sw1": Rect2i(2, 10, 1, 1), "sw2": Rect2i(3, 10, 1, 1), "sw3": Rect2i(4, 10, 1, 1), "sw4": Rect2i(5, 10, 1, 1),
 }
+const GRID_W := 8
+const GRID_H := 10
 
 var equipment: Dictionary = {}
 var cls := "fighter"
+var wset := 1
 var cell := 36.0
 var on_op: Callable
 var hint := "우클릭: 해제 · 드래그: 옮기기"
@@ -22,7 +33,7 @@ var _hover := ""
 func _init(cell_px := 36.0) -> void:
 	cell = cell_px
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	custom_minimum_size = Vector2(6, 8) * cell
+	custom_minimum_size = Vector2(GRID_W, GRID_H) * cell
 	size = custom_minimum_size
 
 
@@ -34,12 +45,24 @@ func _exit_tree() -> void:
 	InvDrag.unregister(self)
 
 
-func set_equipment(eq: Dictionary, c: String) -> void:
+func _slots() -> Array:
+	var out := []
+	for s in LAYOUT:
+		if s.begins_with("sw") and cls != "swordmaster":
+			continue
+		out.append(s)
+	return out
+
+
+func set_equipment(eq: Dictionary, c: String, ws := 1) -> void:
 	equipment = eq
 	cls = c
+	wset = ws
+	custom_minimum_size = Vector2(GRID_W, GRID_H + (1 if cls == "swordmaster" else 0)) * cell
+	size = custom_minimum_size
 	for ch in get_children():
 		ch.queue_free()
-	for s in LAYOUT:
+	for s in _slots():
 		var r := _rect(s)
 		var it = equipment.get(s)
 		var l := Label.new()
@@ -50,13 +73,36 @@ func set_equipment(eq: Dictionary, c: String) -> void:
 		l.size = r.size
 		if it != null:
 			l.text = Data.base_of(it).icon
-			l.add_theme_font_size_override("font_size", int(minf(r.size.x, r.size.y) * 0.55))
+			l.add_theme_font_size_override("font_size", int(minf(r.size.x, r.size.y) * 0.5))
+			if int(it.get("count", 1)) > 1:
+				# 수량은 칸 오른쪽 아래 작게
+				var n := Label.new()
+				n.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				n.text = str(int(it.count))
+				n.add_theme_font_size_override("font_size", 10)
+				n.add_theme_color_override("font_outline_color", Color.BLACK)
+				n.add_theme_constant_override("outline_size", 4)
+				n.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+				n.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+				n.position = r.position
+				n.size = r.size - Vector2(2, 0)
+				add_child(n)
 		else:
-			l.text = Data.SLOT_NAMES[s]
-			l.add_theme_font_size_override("font_size", 11)
+			l.text = _short_name(s, r)
+			l.add_theme_font_size_override("font_size", 10)
 			l.add_theme_color_override("font_color", UI.MUTED)
 		add_child(l)
 	queue_redraw()
+
+
+func _short_name(s: String, r: Rect2) -> String:
+	var n: String = Data.SLOT_NAMES[s]
+	# 세로로 긴 1칸 너비 슬롯은 글자를 세로로
+	if r.size.x < cell * 1.2 and r.size.y > cell * 1.5:
+		return "\n".join(n.replace(" ", "").split(""))
+	if r.size.x < cell * 1.2:
+		return {"sw": "검", "q": "소모"}.get(s.left(2) if s.begins_with("sw") else s.left(1), n.left(2))
+	return n
 
 
 func _rect(s: String) -> Rect2:
@@ -65,7 +111,7 @@ func _rect(s: String) -> Rect2:
 
 
 func slot_at(local: Vector2) -> String:
-	for s in LAYOUT:
+	for s in _slots():
 		if _rect(s).has_point(local):
 			return s
 	return ""
@@ -73,9 +119,15 @@ func slot_at(local: Vector2) -> String:
 
 func _draw() -> void:
 	var drag_ok := []
-	if InvDrag.is_active() and Data.can_equip(InvDrag.inst.item, cls):
-		drag_ok = Data.gear_slots_for(InvDrag.inst.item)
-	for s in LAYOUT:
+	if InvDrag.is_active():
+		drag_ok = Inv.valid_slots(InvDrag.inst.item, cls)
+	# 활성 무기 세트 표시
+	var act := ["w1", "w1o"] if wset == 1 else ["w2", "w2o"]
+	var ar := _rect(act[0]).merge(_rect(act[1])).grow(2)
+	draw_rect(ar, Color(1.0, 0.82, 0.3, 0.85), false, 2.0)
+	var font := get_theme_default_font()
+	draw_string(font, Vector2(ar.position.x, ar.end.y + 12), "▲ 사용 중 [X]", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1.0, 0.82, 0.3))
+	for s in _slots():
 		var r := _rect(s)
 		var it = equipment.get(s)
 		draw_rect(r, Color(0.05, 0.04, 0.03, 0.92))

@@ -97,6 +97,7 @@ func _build() -> void:
 	streams["shield_break"] = _to_wav(_mix(_noise(0.4, 0.9, 0.3, 1.2), _tone(0.4, 1800, 300, 0.3, "tri")))
 	streams["chest"] = _to_wav(_mix(_tone(0.25, 180, 120, 0.35, "square"), _noise(0.3, 0.3, 0.2, 0.8)))
 	streams["pickup"] = _to_wav(_tone(0.1, 900, 1400, 0.3, "tri"))
+	streams["drop"] = _to_wav(_mix(_tone(0.12, 500, 220, 0.3, "tri"), _noise(0.1, 0.25, 0.1, 0.8)))
 	streams["coin"] = _to_wav(_mix(_tone(0.08, 1800, 1800, 0.2, "square"), _tone(0.12, 2400, 2400, 0.16, "square"), int(0.07 * RATE)))
 	streams["portal"] = _to_wav(_tone(1.2, 200, 800, 0.35))
 	streams["hurt"] = _to_wav(_mix(_tone(0.2, 220, 90, 0.5, "saw"), _noise(0.15, 0.1, 0.05, 1.5)))

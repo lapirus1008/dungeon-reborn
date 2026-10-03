@@ -1,0 +1,28 @@
+{
+ "source": "res://assets/kaykit/characters/Skeleton_Minion.glb",
+ "scale": 0.8,
+ "attach": [
+  {
+   "from": "res://assets/kaykit/characters/Mage.glb",
+   "mesh": "2H_Staff",
+   "slot": "r"
+  }
+ ],
+ "tint": {
+  "2H_Staff": "#8a7a6a"
+ },
+ "animations": {
+  "idle": "Idle_Combat",
+  "walk": "Walking_D_Skeletons",
+  "run": "Running_A",
+  "death": "Death_C_Skeletons",
+  "hit": "Hit_A",
+  "block": "Blocking",
+  "cast": "Spellcast_Shoot",
+  "spin": "2H_Melee_Attack_Spin",
+  "attack": [
+   "1H_Melee_Attack_Stab",
+   "2H_Melee_Attack_Stab"
+  ]
+ }
+}

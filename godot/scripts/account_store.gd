@@ -92,7 +92,9 @@ func _write(k: String, rec: Dictionary) -> void:
 	if f == null:
 		printerr("[accounts] 저장 실패: ", tmp)
 		return
-	f.store_string(JSON.stringify(rec))
+	var out: Dictionary = rec.duplicate()
+	out.data = Account.serial(rec.data)
+	f.store_string(JSON.stringify(out))
 	f.close()
 	if DirAccess.rename_absolute(tmp, p) != OK:
 		DirAccess.remove_absolute(p)

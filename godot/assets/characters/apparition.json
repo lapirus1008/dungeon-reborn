@@ -1,0 +1,24 @@
+{
+ "source": "res://assets/kaykit/characters/Skeleton_Mage.glb",
+ "scale": 0.85,
+ "show": [
+  "Skeleton_Mage_Hat"
+ ],
+ "tint": {
+  "*": "#7fa8d8"
+ },
+ "animations": {
+  "idle": "Idle_Combat",
+  "walk": "Walking_D_Skeletons",
+  "run": "Running_A",
+  "death": "Death_C_Skeletons",
+  "hit": "Hit_A",
+  "block": "Blocking",
+  "cast": "Spellcast_Shoot",
+  "spin": "Hit_A",
+  "attack": [
+   "Unarmed_Melee_Attack_Punch_A",
+   "Unarmed_Melee_Attack_Kick"
+  ]
+ }
+}

@@ -112,3 +112,12 @@ func mirror(p) -> void:
 	move_amt = 1.0 if p.moving else 0.0
 	if p.swing != null and p.swing.t < 0.05 and attack_anim <= 0.05:
 		attack_anim = 0.25
+
+
+func animate(dt: float) -> void:
+	super(dt)
+	# 나는 몬스터 (박쥐, 악마의 눈, 미믹 책)
+	var fly: float = def.get("fly", 0.0)
+	if fly > 0.0 and alive:
+		var r := active_rig()
+		r.node.position.y = fly + sin(game.time * 3.0 + nid) * 0.15

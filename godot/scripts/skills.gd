@@ -1,4 +1,4 @@
-# 직업 스킬 공용 로직 - 플레이어와 AI 모험가가 같은 규칙을 사용
+# 직업 스킬 공용 로직 - 플레이어와 AI 모험가가 같은 규칙을 사용 (던전본 Q/E 스킬과 패시브)
 # aim: {"origin": Vector3, "dir": Vector3, "target": Actor 또는 null, "point": Vector3(선택)}
 class_name Skills
 extends RefCounted
@@ -6,53 +6,99 @@ extends RefCounted
 const GOLD := Color(1.0, 0.85, 0.4)
 const NATURE := Color(0.45, 0.95, 0.4)
 const ARCANE := Color(0.35, 0.65, 1.0)
+const SOUL := Color(0.35, 0.95, 0.55)
+const SHADOW := Color(0.55, 0.25, 0.95)
+const FIRE := Color(1.0, 0.45, 0.12)
+const FROST := Color(0.6, 0.9, 1.0)
+
+# 누르고 있다가 놓으면 발동하는 스킬
+const HOLD_SKILLS := ["pyro_pyroblast", "priest_heal"]
 
 
 # ------------------------------------------------------------------ 조회
+static func skill_id(c, slot: String) -> String:
+	if slot == "e" and c.panther:
+		return "druid_shadow_assault"
+	var sk = c.get("skills")
+	if sk is Dictionary and sk.has(slot):
+		return sk[slot]
+	return Data.CLASSES[c.cls][slot][0]
+
+
 static func skill_def(c, slot: String) -> Dictionary:
+	if slot == "q" or slot == "e":
+		return Data.SKILLS[skill_id(c, slot)]
 	var sk: Dictionary = Data.CLASSES[c.cls].skills
 	if c.panther and sk.has(slot + "_p"):
 		return sk[slot + "_p"]
 	return sk[slot]
 
 
+static func has_fx(c, fx: String) -> bool:
+	return c.stats.get("flags", {}).has(fx)
+
+
+static func wcat(c) -> String:
+	return c.stats.get("wcat", "")
+
+
+static func is_caster_weapon(c) -> bool:
+	return wcat(c) in ["staff", "orb"]
+
+
 static func is_melee(c) -> bool:
-	return c.cls in ["fighter", "swordmaster", "rogue", "deathknight", "priest"] or (c.cls == "druid" and c.panther)
+	if c.panther:
+		return true
+	var w := wcat(c)
+	if w in ["staff", "orb", "crossbow"]:
+		return false
+	return true
 
 
 static func uses_block(c) -> bool:
-	return c.cls in ["fighter", "deathknight"]
+	if c.panther or c.cls in ["swordmaster", "rogue"]:
+		return false
+	var off := Data.offhand_cat(c.equipment, c.wset) if c.get("equipment") != null else ""
+	return off == "shield" or wcat(c) in ["sword", "longsword", "mace"]
 
 
-# 근접 공격 수치 (bash = 지팡이 치기)
+# 무기 종류별 근접 공격 (bash = 지팡이 치기)
 static func melee_profile(c, bash := false) -> Dictionary:
+	var spd: float = c.stats.get("act_mul", 1.0)
+	var p := {}
 	if bash:
-		return {"dmg": 12.0, "range": 2.6, "arc": 1.3, "cd": 0.8, "stamina": 8.0, "knock": 10.0, "hit_at": 0.14, "dur": 0.36}
-	if c.panther:
-		return {"dmg": 18.0, "range": 2.6, "arc": 1.4, "cd": 0.34, "stamina": 4.0, "knock": 2.0, "hit_at": 0.1, "dur": 0.28}
-	match c.cls:
-		"fighter":
-			return {"dmg": 26.0, "range": 3.1, "arc": 1.5, "cd": 0.48, "stamina": 9.0, "knock": 5.0, "hit_at": 0.17, "dur": 0.42}
-		"swordmaster":
-			return {"dmg": 21.0, "range": 3.3, "arc": 1.8, "cd": 0.36, "stamina": 6.0, "knock": 3.0, "hit_at": 0.12, "dur": 0.32}
-		"rogue":
-			return {"dmg": 15.0, "range": 2.5, "arc": 1.2, "cd": 0.3, "stamina": 5.0, "knock": 1.0, "hit_at": 0.1, "dur": 0.26}
-		"deathknight":
-			return {"dmg": 34.0, "range": 3.4, "arc": 1.6, "cd": 0.8, "stamina": 12.0, "knock": 6.0, "hit_at": 0.3, "dur": 0.62}
-		"priest":
-			return {"dmg": 22.0, "range": 2.9, "arc": 1.3, "cd": 0.58, "stamina": 8.0, "knock": 4.0, "hit_at": 0.18, "dur": 0.45}
-	return {"dmg": 12.0, "range": 2.6, "arc": 1.3, "cd": 0.8, "stamina": 8.0, "knock": 10.0, "hit_at": 0.14, "dur": 0.36}
+		p = {"dmg": 14.0, "range": 2.6, "arc": 1.3, "cd": 0.8, "stamina": 8.0, "knock": 10.0, "hit_at": 0.14, "dur": 0.36}
+	elif c.panther:
+		p = {"dmg": 22.0, "range": 2.6, "arc": 1.4, "cd": 0.34, "stamina": 4.0, "knock": 2.0, "hit_at": 0.1, "dur": 0.28, "claw": true}
+	else:
+		match wcat(c):
+			"longsword":
+				p = {"dmg": 46.0, "range": 3.4, "arc": 1.6, "cd": 0.75, "stamina": 12.0, "knock": 6.0, "hit_at": 0.26, "dur": 0.6}
+			"dagger":
+				p = {"dmg": 21.0, "range": 2.5, "arc": 1.2, "cd": 0.3, "stamina": 5.0, "knock": 1.0, "hit_at": 0.1, "dur": 0.26}
+			"mace":
+				p = {"dmg": 33.0, "range": 2.8, "arc": 1.3, "cd": 0.55, "stamina": 8.0, "knock": 4.0, "hit_at": 0.18, "dur": 0.45}
+			_:
+				p = {"dmg": 31.0, "range": 3.0, "arc": 1.6, "cd": 0.45, "stamina": 8.0, "knock": 4.0, "hit_at": 0.16, "dur": 0.4}
+		if c.cls == "deathknight":
+			p.dmg *= 1.1
+	p.cd /= spd
+	return p
 
 
-# 원거리 기본 공격 (드루이드 인간형, 파이로맨서, 크라이오맨서)
+# 원거리 기본 공격 (중석궁, 지팡이·오브를 든 술사)
 static func ranged_profile(c) -> Dictionary:
+	if wcat(c) == "crossbow":
+		return {"kind": "bolt", "speed": 55.0, "dmg": 62.0, "cd": 1.4, "cost": 0.0, "gravity": 1.5}
 	match c.cls:
 		"druid":
-			return {"kind": "thorn", "speed": 40.0, "dmg": 16.0, "cd": 0.5, "cost": 0.0}
+			return {"kind": "thorn", "speed": 40.0, "dmg": 20.0, "cd": 0.5, "cost": 0.0}
 		"pyromancer":
-			return {"kind": "firebolt", "speed": 30.0, "dmg": 18.0, "cd": 0.45, "cost": 8.0, "homing": 3.0}
+			return {"kind": "firebolt", "speed": 30.0, "dmg": 22.0, "cd": 0.45, "cost": 6.0, "homing": 3.0, "dtype": "fire"}
 		"cryomancer":
-			return {"kind": "icebolt", "speed": 40.0, "dmg": 15.0, "cd": 0.45, "cost": 8.0, "slow": 1.5}
+			return {"kind": "icebolt", "speed": 40.0, "dmg": 19.0, "cd": 0.45, "cost": 0.0, "slow": 1.0, "dtype": "cold"}
+		"priest":
+			return {"kind": "holy", "speed": 38.0, "dmg": 20.0, "cd": 0.5, "cost": 3.0, "dtype": "holy"}
 	return {}
 
 
@@ -60,8 +106,7 @@ static func pay(c, cost: float) -> bool:
 	if cost <= 0.0:
 		return true
 	if c.res < cost:
-		if true:
-			c.game.notify(c, "toast", ["%s이(가) 부족합니다" % Data.RES_NAMES.get(c.res_type(), "자원")])
+		c.game.notify(c, "toast", ["%s이(가) 부족합니다" % Data.RES_NAMES.get(c.res_type(), "자원")])
 		return false
 	c.res -= cost
 	return true
@@ -72,30 +117,87 @@ static func gain(c, amount: float) -> void:
 		c.res = minf(c.res_max(), c.res + amount)
 
 
-# 매 프레임 자원 회복/소모
+static func cd_of(c, sid: String) -> float:
+	return Data.SKILLS[sid].cd * c.stats.get("cd_mul", 1.0)
+
+
+static func _req_ok(c, sid: String) -> bool:
+	var req: String = Data.SKILLS[sid].get("req", "")
+	match req:
+		"2h":
+			if not (wcat(c) in ["longsword"]):
+				c.game.notify(c, "toast", ["양손 무기를 착용해야 합니다"])
+				return false
+		"caster":
+			if not is_caster_weapon(c):
+				c.game.notify(c, "toast", ["지팡이나 오브를 착용해야 합니다"])
+				return false
+		"sword_slot":
+			if sword_count(c) <= 0:
+				c.game.notify(c, "toast", ["검 슬롯에 검이 없습니다"])
+				return false
+	return true
+
+
+# 매 프레임 자원 회복
 static func tick_resource(c, dt: float) -> void:
+	var rm: float = c.stats.get("regen_mul", 1.0)
 	match c.res_type():
 		"mana":
-			c.res = minf(c.res_max(), c.res + dt * 7.0 * c.stats.get("regen_mul", 1.0))
+			c.res = minf(c.res_max(), c.res + dt * 3.0 * rm)
+		"soul":
+			# 영혼 에너지는 쓰러진 적의 영혼을 흡수해서 얻음 (아주 느린 자연 회복)
+			c.res = minf(c.res_max(), c.res + dt * 0.4 * rm)
 		"primal":
-			if c.panther:
-				c.res -= dt * 4.0
-				if c.res <= 0.0:
-					c.res = 0.0
-					set_panther(c, false)
-			else:
-				c.res = minf(c.res_max(), c.res + dt * 5.0 * c.stats.get("regen_mul", 1.0))
+			c.res = minf(c.res_max(), c.res + dt * 1.0 * rm)
+	# 자연의 힘 충전
+	if c.cls == "druid":
+		var mx := nature_max(c)
+		if c.charges < mx:
+			c.charge_cd -= dt
+			if c.charge_cd <= 0.0:
+				c.charges += 1
+				c.charge_cd = nature_recharge(c)
+	if c.cls == "priest":
+		var mx := 2 if has_fx(c, "saint") else 1
+		if c.charges < mx:
+			c.charge_cd -= dt
+			if c.charge_cd <= 0.0:
+				c.charges += 1
+				c.charge_cd = cd_of(c, "priest_protection")
+	for k in ["pursuit_t", "quick_cast_t", "petrify_coat", "soul_shield_cd"]:
+		var v: float = c.get(k)
+		if v > 0.0:
+			c.set(k, v - dt)
+
+
+static func nature_max(c) -> int:
+	return 2 if has_fx(c, "nature_seed") else 1
+
+
+static func nature_recharge(c) -> float:
+	return 30.0 if has_fx(c, "nature_agility") else 60.0
+
+
+static func sword_count(c) -> int:
+	var n := 0
+	for s in Data.SWORD_SLOTS:
+		if c.equipment.get(s) != null:
+			n += 1
+	return n
 
 
 # ------------------------------------------------------------------ 근접
-# 근접 타격 판정 (로그 기습/은신, 데스나이트 흡혈/영혼 포함). 가한 총 피해 반환
+# 근접 타격 판정. 가한 총 피해 반환
 static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 	var g = c.game
 	var total := 0.0
-	var stealth_bonus := 2.5 if (c.cls == "rogue" and c.stealth > 0.0) else 1.0
 	var hits := 0
+	var hit_list := []
 	for a in g.actors:
-		if not a.alive or a.extracted or not g.hostile(c, a):
+		if not a.alive or a.extracted or a == c:
+			continue
+		if not g.hostile(c, a) and not g.friendly_fire(c, a):
 			continue
 		var dx: float = a.pos.x - c.pos.x
 		var dz: float = a.pos.z - c.pos.z
@@ -106,25 +208,24 @@ static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 			continue
 		if not g.dungeon.los(c.pos.x, c.pos.z, a.pos.x, a.pos.z):
 			continue
-		var dmg: float = prof.dmg * c.dmg_mul() * mult * stealth_bonus
-		# 로그: 등 뒤 공격 1.6배
+		var dmg: float = prof.dmg * c.dmg_mul() * mult
 		if c.cls == "rogue":
 			var facing_away := absf(angle_difference(a.yaw, Actor.yaw_to(-dx, -dz))) > 2.0
 			if facing_away:
-				dmg *= 1.6 + c.stats.get("flags", {}).get("backstab", 0.0)
-		if c.panther:
-			dmg *= 1.0 + c.stats.get("flags", {}).get("beast", 0.0)
+				dmg *= 1.6
 		var nd := maxf(d, 0.001)
 		var k: float = prof.knock
-		total += a.take_damage(dmg, c, {"knock": Vector3(dx / nd * k, 0, dz / nd * k), "from": c.pos, "crit": stealth_bonus > 1.0})
+		var dealt: float = g.hit(c, a, dmg, {"knock": Vector3(dx / nd * k, 0, dz / nd * k), "from": c.pos, "melee": true, "weapon": true, "dtype": c.stats.get("dtype", "phys")})
+		total += dealt
 		hits += 1
+		hit_list.append(a)
 	if hits:
 		g.sfx("hit", c.pos)
 		if c.cls == "deathknight":
-			c.heal_now(total * (0.1 + c.stats.get("flags", {}).get("lifesteal", 0.0)))
-			gain(c, 8.0 * hits)
-		if c.cls == "rogue" and c.stealth > 0.0:
-			c.break_stealth()
+			c.heal_now(total * 0.1)
+		# 표범 공격: 암흑 에너지 +20
+		if prof.get("claw", false):
+			gain(c, 20.0)
 	return total
 
 
@@ -136,11 +237,10 @@ static func fire_basic(c, aim: Dictionary) -> bool:
 	if not pay(c, prof.cost):
 		return false
 	c.cd.lmb = prof.cd / c.stats.get("act_mul", 1.0)
-	var extra := {}
-	if prof.has("homing"):
-		extra["homing"] = prof.homing
-	if prof.has("slow"):
-		extra["slow"] = prof.slow
+	var extra := {"dtype": prof.get("dtype", c.stats.get("dtype", "phys")), "weapon": true}
+	for k in ["homing", "slow", "gravity"]:
+		if prof.has(k):
+			extra[k] = prof[k]
 	c.game.spawn_projectile(c, prof.kind, aim.origin, aim.dir, prof.speed, prof.dmg * c.dmg_mul(), extra)
 	return true
 
@@ -148,15 +248,15 @@ static func fire_basic(c, aim: Dictionary) -> bool:
 static func throw_knife(c, aim: Dictionary) -> bool:
 	if c.cd.rmb > 0.0:
 		return false
-	c.cd.rmb = skill_def(c, "rmb").cd * c.stats.get("cd_mul", 1.0)
-	c.game.spawn_projectile(c, "knife", aim.origin, aim.dir, 45.0, 14.0 * c.dmg_mul(), {})
+	c.cd.rmb = 1.5 * c.stats.get("cd_mul", 1.0)
+	c.game.spawn_projectile(c, "knife", aim.origin, aim.dir, 45.0, 16.0 * c.dmg_mul(), {"weapon": true})
 	return true
 
 
 static func start_parry(c) -> bool:
 	if c.cd.rmb > 0.0:
 		return false
-	c.cd.rmb = skill_def(c, "rmb").cd * c.stats.get("cd_mul", 1.0)
+	c.cd.rmb = 1.2 * c.stats.get("cd_mul", 1.0)
 	c.parry = 0.35
 	return true
 
@@ -164,104 +264,154 @@ static func start_parry(c) -> bool:
 static func roar(c) -> bool:
 	if c.cd.rmb > 0.0:
 		return false
-	c.cd.rmb = skill_def(c, "rmb").cd * c.stats.get("cd_mul", 1.0)
+	c.cd.rmb = 6.0 * c.stats.get("cd_mul", 1.0)
 	var g = c.game
 	for a in g.actors:
 		if a.alive and g.hostile(c, a) and a.pos.distance_to(c.pos) < 4.5:
 			var dir: Vector3 = (a.pos - c.pos).normalized()
-			a.take_damage(6.0 * c.dmg_mul(), c, {"knock": dir * 14.0, "from": c.pos})
+			g.hit(c, a, 8.0 * c.dmg_mul(), {"knock": dir * 14.0, "from": c.pos})
 	g.sfx("growl", c.pos)
 	g.spawn_ring_burst(c.pos + Vector3(0, 0.3, 0), NATURE, 4.5)
 	return true
 
 
-# 프리스트 정화: charge 0~1
-static func cleanse_heal(c, charge: float) -> bool:
-	if c.cd.rmb > 0.0:
+# 투척 칸 (G): 투척용 단검 / 화염병
+static func throw_utility(c, aim: Dictionary) -> bool:
+	var it = c.equipment.get("util")
+	if it == null or c.cd.get("util", 0.0) > 0.0:
 		return false
-	if not pay(c, 15.0):
-		return false
-	c.cd.rmb = skill_def(c, "rmb").cd * c.stats.get("cd_mul", 1.0)
-	c.cleanse()
-	c.apply_heal(lerpf(10.0, 30.0, clampf(charge, 0.0, 1.0)) * c.stats.get("heal_mul", 1.0), 0.6)
-	c.game.sfx("heal", c.pos)
-	c.game.spawn_ring_burst(c.pos + Vector3(0, 0.2, 0), GOLD, 1.6)
+	c.cd["util"] = 0.8
+	var g = c.game
+	match it.base:
+		"fire_flask":
+			var dir: Vector3 = aim.dir
+			dir.y += 0.15
+			g.spawn_projectile(c, "poison", aim.origin, dir.normalized(), 20.0, 45.0, {"gravity": 9.0, "aoe": 3.0, "burn": 3, "dtype": "fire", "fire_aoe": true})
+		_:
+			g.spawn_projectile(c, "knife", aim.origin, aim.dir, 45.0, 30.0, {"gravity": 3.0})
+	it.count = int(it.get("count", 1)) - 1
+	if it.count <= 0:
+		c.equipment.util = null
+	g.inv_changed(c)
 	return true
 
 
 # ------------------------------------------------------------------ Q / E
-static func use_q(c, aim: Dictionary) -> bool:
-	if c.cd.q > 0.0 or c.incapacitated():
+static func use_q(c, aim: Dictionary, charge := 1.0) -> bool:
+	return _use(c, "q", aim, charge)
+
+
+static func use_e(c, aim: Dictionary, charge := 1.0) -> bool:
+	return _use(c, "e", aim, charge)
+
+
+static func _use(c, slot: String, aim: Dictionary, charge: float) -> bool:
+	var sid := skill_id(c, slot)
+	# 다시 누르면 끄는 스킬 (재사용 대기와 무관)
+	match sid:
+		"dk_soul_storm":
+			if c.soul_storm:
+				stop_soul_storm(c)
+				return true
+		"cryo_ice_barrier":
+			if c.frozen > 0.0 and c.barrier:
+				c.frozen = 0.0
+				c.barrier = false
+				return true
+		"druid_primal":
+			if c.panther:
+				set_panther(c, false)
+				c.cd.q = cd_of(c, sid)
+				return true
+	var cd_key := slot
+	if c.cd[cd_key] > 0.0 or c.incapacitated():
+		return false
+	if not _req_ok(c, sid):
 		return false
 	var ok := false
-	match c.cls:
-		"fighter":
+	var custom_cd := -1.0
+	match sid:
+		"fighter_whirlwind":
 			ok = _whirlwind(c)
-		"swordmaster":
-			ok = _psionic_blades(c, aim)
-		"rogue":
-			ok = _poison(c, aim)
-		"deathknight":
-			ok = _soul_shroud(c)
-		"druid":
-			ok = _toggle_panther(c)
-		"pyromancer":
-			ok = _pyroblast(c, aim)
-		"cryomancer":
-			ok = _ice_storm(c, aim)
-		"priest":
-			ok = _divine_guidance(c)
-	if ok:
-		c.cd.q = skill_def(c, "q").cd * c.stats.get("cd_mul", 1.0)
-	return ok
-
-
-static func use_e(c, aim: Dictionary) -> bool:
-	if c.cd.e > 0.0 or c.incapacitated():
-		return false
-	var ok := false
-	match c.cls:
-		"fighter":
+		"fighter_warcry":
+			ok = _warcry(c)
+		"fighter_charge":
 			ok = _charge(c)
-		"swordmaster":
-			ok = _whirling_blade(c)
-		"rogue":
-			ok = _vanish(c)
-		"deathknight":
-			ok = _grasp(c, aim)
-		"druid":
-			ok = _shadow_assault(c) if c.panther else _force_of_nature(c)
-		"pyromancer":
-			ok = _fire_blast(c)
-		"cryomancer":
-			ok = _frostbite(c)
-		"priest":
-			ok = _guard(c)
+		"fighter_inspire":
+			ok = _inspire(c)
+		"priest_revelation":
+			ok = _revelation(c, aim)
+		"priest_heal":
+			ok = _heal(c, aim, charge)
+		"priest_holy_ward":
+			ok = _holy_ward(c, aim)
+		"priest_protection":
+			ok = _protection(c)
+			if ok:
+				custom_cd = 1.0
+		"pyro_pyroblast":
+			ok = _pyroblast(c, aim, charge)
+		"pyro_fireshock":
+			ok = _fireshock(c)
+		"rogue_petrify":
+			ok = _petrify(c)
+		"rogue_blades":
+			ok = _blades(c, aim)
+		"rogue_stealth":
+			ok = _stealth(c, 3.0, "stealth")
+		"rogue_quick_conceal":
+			ok = _quick_conceal(c)
+		"rogue_shadow_veil":
+			ok = _stealth(c, 3.0, "veil")
+		"dk_wraith_guard":
+			ok = _wraith_guard(c)
+		"dk_soul_storm":
+			ok = _soul_storm(c)
+		"dk_soul_chain":
+			ok = _soul_chain(c, aim)
+		"cryo_blizzard":
+			ok = _blizzard(c, aim)
+		"cryo_frost_curse":
+			ok = _frost_curse(c, aim)
+		"cryo_ice_armor":
+			ok = _ice_armor(c, aim)
+		"cryo_ice_barrier":
+			ok = _ice_barrier(c)
+		"sm_psionic":
+			var n := sword_count(c)
+			ok = _psionic(c, aim, n)
+			if ok:
+				custom_cd = _psionic_cd(c, n)
+		"sm_blade_dance":
+			ok = _blade_dance(c)
+		"druid_primal":
+			ok = _toggle_panther(c)
+		"druid_nature":
+			ok = _nature(c, aim)
+			if ok:
+				custom_cd = 1.0
+		"druid_shadow_assault":
+			ok = _shadow_assault(c)
 	if ok:
-		c.cd.e = skill_def(c, "e").cd * c.stats.get("cd_mul", 1.0)
+		c.cd[cd_key] = custom_cd if custom_cd >= 0.0 else cd_of(c, sid)
 	return ok
 
 
+# ---- 파이터
 static func _whirlwind(c) -> bool:
-	if c.get("stamina") != null and c.stamina < 20.0:
-		if true:
-			c.game.notify(c, "toast", ["스태미나가 부족합니다"])
-		return false
-	if c.get("stamina") != null:
-		c.stamina -= 20.0
-	c.spin_t = 2.0
+	c.spin_t = 2.4
 	c.spin_tick = 0.0
 	return true
 
 
-# 회오리 베기 진행 (매 프레임)
+# 소용돌이 진행 (매 프레임): 매회 51.12 직접 피해
 static func tick_spin(c, dt: float) -> void:
 	if c.spin_t <= 0.0:
 		return
 	c.spin_t -= dt
 	c.spin_tick -= dt
 	if c.spin_tick <= 0.0:
-		c.spin_tick = 0.25
+		c.spin_tick = 0.3
 		var g = c.game
 		g.sfx("swing", c.pos, 0.15)
 		var hits := 0
@@ -269,80 +419,396 @@ static func tick_spin(c, dt: float) -> void:
 			if not a.alive or a.extracted or not g.hostile(c, a):
 				continue
 			var d: float = a.pos.distance_to(c.pos)
-			if d < 3.2 + a.radius and g.dungeon.los(c.pos.x, c.pos.z, a.pos.x, a.pos.z):
+			if d < 3.3 + a.radius and g.dungeon.los(c.pos.x, c.pos.z, a.pos.x, a.pos.z):
 				var dir: Vector3 = (a.pos - c.pos).normalized()
-				a.take_damage(13.0 * c.dmg_mul(), c, {"knock": dir * 2.0, "from": c.pos})
+				g.hit(c, a, 51.12 * c.dmg_mul() / 1.6, {"knock": dir * 2.0, "from": c.pos, "melee": true, "weapon": true})
 				hits += 1
 		if hits:
 			g.sfx("hit", c.pos)
 
 
+static func _warcry(c) -> bool:
+	c.warcry_t = 5.0
+	if has_fx(c, "weapon_master"):
+		c.give_shield(200.0, 5.0, Color(1.0, 0.5, 0.3))
+	c.game.spawn_ring_burst(c.pos + Vector3(0, 1.0, 0), Color(1.0, 0.35, 0.2), 3.5)
+	c.game.sfx("growl", c.pos)
+	return true
+
+
 static func _charge(c) -> bool:
-	c.dash = {"dir": Actor.fwd(c.yaw), "speed": 22.0, "t": 0.32, "hit": 30.0 * c.dmg_mul(), "stun": 0.9, "hit_done": false}
+	c.dash = {"dir": Actor.fwd(c.yaw), "speed": 22.0, "t": 0.3, "hit_done": true}
 	c.game.sfx("swing", c.pos)
 	return true
 
 
-static func _psionic_blades(c, aim: Dictionary) -> bool:
+static func _inspire(c) -> bool:
 	var g = c.game
-	for i in 4:
-		var off := (i - 1.5) * 0.18
-		var dir: Vector3 = aim.dir.rotated(Vector3.UP, off)
-		dir.y += 0.08
-		g.spawn_projectile(c, "blade", aim.origin + Vector3(0, 0.15 * (i % 2), 0), dir.normalized(), 24.0 + i * 2.0, 16.0 * c.dmg_mul(), {"homing": 6.0, "heal_owner": 8.0, "life": 3.0})
-	g.sfx("magic", c.pos)
+	for a in g.actors:
+		if a.alive and (a == c or (a.faction == c.faction and a.kind in ["player", "bot"])) and a.pos.distance_to(c.pos) < 10.0:
+			a.add_speed(150.0, 3.0)
+	g.spawn_ring_burst(c.pos + Vector3(0, 0.3, 0), GOLD, 6.0)
+	g.sfx("bell", c.pos)
 	return true
 
 
-static func _whirling_blade(c) -> bool:
-	c.game.add_zone({"follow": c, "radius": 2.4, "dur": 8.0, "tick": 0.3, "dmg": 8.0 * c.dmg_mul(), "owner": c, "kind": "orbit_blade"})
-	c.dr = 0.25
-	c.dr_t = 8.0
-	c.game.sfx("swing", c.pos)
+# ---- 프리스트
+static func _aimed_ally(c, aim: Dictionary, rng := 25.0, allow_dead := false):
+	var g = c.game
+	var best = null
+	var bs := 0.95
+	for a in g.actors:
+		if a == c or a.extracted or not (a.kind in ["player", "bot"]) or a.faction != c.faction:
+			continue
+		if not a.alive and not allow_dead:
+			continue
+		var to: Vector3 = a.center() - aim.origin
+		var d := to.length()
+		if d > rng:
+			continue
+		var dot: float = to.normalized().dot(aim.dir)
+		if dot > bs and g.dungeon.los(c.pos.x, c.pos.z, a.pos.x, a.pos.z):
+			bs = dot
+			best = a
+	return best
+
+
+static func _revelation(c, aim: Dictionary) -> bool:
+	if not pay(c, Data.SKILLS.priest_revelation.cost):
+		return false
+	var g = c.game
+	var point: Vector3 = aim.get("point", g.aim_point(aim.origin, aim.dir, 20.0))
+	g.spawn_telegraph(point, 4.5, 1.0)
+	g.add_zone({"pos": point, "radius": 4.5, "dur": 1.2, "delay": 1.0, "owner": c, "kind": "revelation", "dmg": 49.78 * c.dmg_mul(), "heal": 89.41 * c.stats.get("heal_mul", 1.0), "once": true, "dtype": "holy"})
+	g.sfx("magic", point)
 	return true
 
 
-static func _poison(c, aim: Dictionary) -> bool:
-	var dir: Vector3 = aim.dir
-	dir.y += 0.12
-	c.game.spawn_projectile(c, "poison", aim.origin, dir.normalized(), 24.0, 8.0 * c.dmg_mul(), {"gravity": 9.0, "aoe": 2.8, "root": 2.0, "dot": 5.0 * (1.0 + c.stats.get("flags", {}).get("poison", 0.0))})
+static func _heal(c, aim: Dictionary, charge: float) -> bool:
+	if not pay(c, Data.SKILLS.priest_heal.cost):
+		return false
+	var g = c.game
+	var self_cast: bool = aim.get("self", false)
+	var t = null if self_cast else _aimed_ally(c, aim, 25.0, has_fx(c, "resurrect"))
+	if t == null:
+		t = c
+	var amount: float = lerpf(53.64, 143.05, clampf(charge, 0.0, 1.0)) * c.stats.get("heal_mul", 1.0)
+	if not t.alive:
+		# 부활 패시브: 모험 중 1회
+		if c.revive_used or not (t is Player) or t.done:
+			g.notify(c, "toast", ["부활시킬 수 없습니다"])
+			return false
+		c.revive_used = true
+		g.revive_player(t, c)
+		return true
+	t.apply_heal(amount, 0.5)
+	g.spawn_ring_burst(t.pos + Vector3(0, 0.2, 0), GOLD, 1.6)
+	g.sfx("heal", t.pos)
 	return true
 
 
-static func _vanish(c) -> bool:
-	c.channel_t = 1.5
+static func _holy_ward(c, aim: Dictionary) -> bool:
+	if not pay(c, Data.SKILLS.priest_holy_ward.cost):
+		return false
+	var t = null if aim.get("self", false) else _aimed_ally(c, aim)
+	if t == null:
+		t = c
+	t.invuln = maxf(t.invuln, 3.0)
+	t.give_shield(1.0, 3.0, Color(1.0, 0.95, 0.6))
+	c.game.spawn_ring_burst(t.pos + Vector3(0, 1.0, 0), GOLD, 2.0)
+	c.game.sfx("shield", t.pos)
+	return true
+
+
+# 수호: 충전(성자 패시브 2회)을 쓰는 실드
+static func _protection(c) -> bool:
+	if c.charges <= 0:
+		c.game.notify(c, "toast", ["'수호'를 아직 사용할 수 없습니다"])
+		return false
+	if not pay(c, Data.SKILLS.priest_protection.cost):
+		return false
+	c.charges -= 1
+	if c.charge_cd <= 0.0:
+		c.charge_cd = cd_of(c, "priest_protection")
+	var g = c.game
+	var targets := []
+	for a in g.actors:
+		if a.alive and (a == c or (a.faction == c.faction and a.kind in ["player", "bot"])) and a.pos.distance_to(c.pos) < 8.0:
+			targets.append(a)
+	for a in targets:
+		a.give_shield(133.85 * c.stats.get("heal_mul", 1.0), 60.0, GOLD)
+		if a is Player:
+			a.shield_hit_fx = 1.0
+		if has_fx(c, "baptism"):
+			a.cleanse()
+			a.immune = maxf(a.immune, 2.0)
+		if has_fx(c, "answer") and targets.size() >= 2:
+			a.add_speed(100.0, 1.0)
+	g.spawn_ring_burst(c.pos + Vector3(0, 1.0, 0), GOLD, 4.0)
+	g.sfx("shield", c.pos)
+	return true
+
+
+# ---- 파이로맨서
+static func pyro_stage_time(c, stage: int) -> float:
+	var t := 0.45 if stage == 1 else 1.4
+	if c.quick_cast_t > 0.0:
+		t *= 0.5
+	return t
+
+
+static func _pyroblast(c, aim: Dictionary, charge: float) -> bool:
+	# charge: 누른 시간 (초)
+	var g = c.game
+	if charge < pyro_stage_time(c, 1):
+		return false
+	var stage2: bool = charge >= pyro_stage_time(c, 2)
+	if not pay(c, 35.0 if stage2 else 15.0):
+		return false
+	c.quick_cast_t = 0.0
+	if stage2:
+		g.spawn_projectile(c, "pyroblast", aim.origin, aim.dir, 22.0, 182.82 * c.dmg_mul(), {"aoe": 4.5, "dtype": "fire", "burn": 5 if has_fx(c, "ignite") else 0, "fire_aoe": true})
+	else:
+		for i in 3:
+			var dir: Vector3 = aim.dir.rotated(Vector3.UP, (i - 1) * 0.16)
+			dir.y += 0.04 * i
+			g.spawn_projectile(c, "firebolt", aim.origin + Vector3(0, 0.1 * i, 0), dir.normalized(), 26.0, 45.70 * c.dmg_mul(), {"homing": 5.0, "dtype": "fire"})
+	if has_fx(c, "fire_eye"):
+		g.add_zone({"follow": c, "radius": 6.0, "dur": 8.0, "tick": 1.0, "dmg": 10.0, "burn": 3, "owner": c, "kind": "fire_eye", "dtype": "fire", "nearest": true})
+	return true
+
+
+static func _fireshock(c) -> bool:
+	if not pay(c, Data.SKILLS.pyro_fireshock.cost):
+		return false
+	var g = c.game
+	var hits := 0
+	for a in g.actors:
+		if not a.alive or a.extracted or not g.hostile(c, a):
+			continue
+		var dx: float = a.pos.x - c.pos.x
+		var dz: float = a.pos.z - c.pos.z
+		var d := sqrt(dx * dx + dz * dz)
+		if d > 5.5 + a.radius or not g.dungeon.los(c.pos.x, c.pos.z, a.pos.x, a.pos.z):
+			continue
+		var nd := maxf(d, 0.001)
+		g.hit(c, a, 48.82 * c.dmg_mul(), {"knock": Vector3(dx / nd * 16.0, 0, dz / nd * 16.0), "from": c.pos, "dtype": "fire"})
+		a.add_slow(1.0, 0.15)
+		if has_fx(c, "ignite"):
+			a.add_burn(5, c)
+		hits += 1
+	if hits and has_fx(c, "quick_cast"):
+		c.quick_cast_t = 10.0
+	if has_fx(c, "fire_heal"):
+		c.heal_now(minf(200.0, 50.0 + 50.0 * hits))
+	g.spawn_ring_burst(c.pos + Vector3(0, 0.6, 0), FIRE, 5.5)
+	g.explode_fx(c.pos + Vector3(0, 0.8, 0), 2.0, FIRE)
+	g.sfx("fire", c.pos)
+	return true
+
+
+# ---- 로그
+static func _petrify(c) -> bool:
+	c.petrify_coat = 12.0
+	c.game.notify(c, "toast", ["무기에 석화 독을 발랐습니다"])
+	c.game.sfx("magic", c.pos)
+	return true
+
+
+static func _blades(c, aim: Dictionary) -> bool:
+	var g = c.game
+	for i in 6:
+		var dir: Vector3 = aim.dir.rotated(Vector3.UP, (i - 2.5) * 0.12)
+		g.spawn_projectile(c, "knife", aim.origin, dir.normalized(), 40.0, 8.60 * c.dmg_mul(), {"slow": 3.0, "slow_mul": 0.3, "gravity": 2.0})
+	if has_fx(c, "formless"):
+		enter_stealth(c, 6.0)
+	return true
+
+
+static func _stealth(c, prep: float, kind: String) -> bool:
+	c.channel_t = prep
+	c.channel_kind = kind
 	c.break_stealth()
-	if c.kind == "player":
-		c.game.notify(c, "toast", ["은신 집중 중... (피격 시 취소)"])
+	c.game.notify(c, "toast", ["은신 준비 중... (피격 시 취소)" if kind == "stealth" else "어둠의 장막 준비 중..."])
 	return true
 
 
-# 은신 집중 진행 (매 프레임)
+static func _quick_conceal(c) -> bool:
+	enter_stealth(c, 6.0)
+	return true
+
+
+static func enter_stealth(c, t: float) -> void:
+	c.stealth = maxf(c.stealth, t)
+	if has_fx(c, "feather"):
+		c.add_speed(200.0, 5.0, true)
+	c.game.sfx("magic", c.pos, 0.0)
+
+
+# 은신 준비 진행 (매 프레임)
 static func tick_channel(c, dt: float) -> void:
 	if c.channel_t <= 0.0:
 		return
 	c.channel_t -= dt
 	if c.channel_t <= 0.0:
-		c.stealth = 15.0
-		c.game.sfx("magic", c.pos, 0.0)
-		if true:
-			c.game.notify(c, "toast", ["은신! 첫 공격 2.5배"])
+		if c.channel_kind == "veil":
+			for a in c.game.actors:
+				if a.alive and (a == c or (a.faction == c.faction and a.kind in ["player", "bot"])) and a.pos.distance_to(c.pos) < 8.0:
+					if a == c:
+						enter_stealth(c, 15.0)
+					else:
+						a.stealth = maxf(a.stealth, 15.0)
+			c.game.notify(c, "toast", ["어둠의 장막: 주변 아군 은신"])
+		else:
+			enter_stealth(c, 30.0)
+			c.game.notify(c, "toast", ["은신! (치명타 피해 증가)"])
 
 
-static func _soul_shroud(c) -> bool:
-	if not pay(c, 40.0):
+# ---- 데스나이트
+static func _wraith_guard(c) -> bool:
+	if not pay(c, Data.SKILLS.dk_wraith_guard.cost):
 		return false
-	c.game.add_zone({"follow": c, "radius": 4.5, "dur": 5.0, "tick": 0.5, "dmg": 6.0 * c.dmg_mul(), "slow": 0.8, "owner": c, "kind": "soul_shroud"})
-	c.game.sfx("growl", c.pos)
+	var g = c.game
+	for a in g.actors:
+		if a.alive and g.hostile(c, a) and a.pos.distance_to(c.pos) < 5.0:
+			a.add_slow(1.0, 0.75)
+	g.add_zone({"follow": c, "radius": 4.5, "dur": 6.0, "tick": 1.0, "dmg": 27.20 * c.dmg_mul(), "owner": c, "kind": "soul_shroud", "dtype": "shadow"})
+	c.add_dr("wraith", 0.15, 6.0)
+	g.sfx("growl", c.pos)
 	return true
 
 
-static func _grasp(c, aim: Dictionary) -> bool:
-	c.game.spawn_projectile(c, "grasp", aim.origin, aim.dir, 32.0, 10.0 * c.dmg_mul(), {"pull": true, "life": 0.6})
+static func _soul_storm(c) -> bool:
+	if c.res < 10.0:
+		c.game.notify(c, "toast", ["영혼 에너지가 부족합니다"])
+		return false
+	c.soul_storm = true
+	c.storm_tick = 0.0
+	c.game.add_zone({"follow": c, "radius": 5.0, "dur": 999.0, "tick": 0.5, "dmg": 13.60 * c.dmg_mul(), "owner": c, "kind": "soul_storm", "dtype": "shadow",
+		"slow": 0.5 if has_fx(c, "decay") else 0.0, "slow_mul": 0.85})
+	if has_fx(c, "soul_shield") and c.soul_shield_cd <= 0.0:
+		c.soul_shield_cd = 30.0
+		c.give_shield(200.0, 3.0, SOUL)
 	c.game.sfx("magic", c.pos)
 	return true
 
 
+static func stop_soul_storm(c) -> void:
+	c.soul_storm = false
+	c.game.end_zone(c, "soul_storm")
+
+
+# 영혼폭풍 유지: 영혼 에너지 소모, 받는 피해 15% 감소
+static func tick_soul_storm(c, dt: float) -> void:
+	if not c.soul_storm:
+		return
+	c.res -= 10.0 * dt
+	c.add_dr("storm", 0.15, 0.2)
+	if c.res <= 0.0 or not c.alive or c.incapacitated():
+		c.res = maxf(0.0, c.res)
+		stop_soul_storm(c)
+
+
+static func _soul_chain(c, aim: Dictionary) -> bool:
+	c.game.spawn_projectile(c, "grasp", aim.origin, aim.dir, 34.0, 73.38 * c.dmg_mul(), {"pull": true, "life": 0.7, "dtype": "shadow", "soul_gain": 30.0 if has_fx(c, "soul_harvest") else 10.0})
+	c.game.sfx("magic", c.pos)
+	return true
+
+
+# ---- 크라이오맨서
+static func _blizzard(c, aim: Dictionary) -> bool:
+	if not pay(c, Data.SKILLS.cryo_blizzard.cost):
+		return false
+	var g = c.game
+	var target: Vector3 = aim.get("point", g.aim_point(aim.origin, aim.dir, 22.0))
+	var start: Vector3 = c.pos + Actor.fwd(c.yaw) * 2.0
+	start = g.dungeon.resolve_circle(start, 0.5)
+	g.add_zone({"pos": start, "move_to": target, "speed": 6.0, "radius": 2.5, "dur": 6.5, "move_dur": 3.0, "tick": 0.5,
+		"dmg": 6.55 * c.dmg_mul(), "slow": 0.6, "slow_mul": 0.6, "owner": c, "kind": "ice_storm", "dtype": "cold",
+		"end_radius": 4.5, "end_dmg": 9.83 * c.dmg_mul(), "end_slow_mul": 0.2, "blizzard": true})
+	g.sfx("magic", target)
+	return true
+
+
+static func _frost_curse(c, aim: Dictionary) -> bool:
+	if not pay(c, Data.SKILLS.cryo_frost_curse.cost):
+		return false
+	var mult := 1.5 if has_fx(c, "bitter_cold") else 1.0
+	c.game.spawn_projectile(c, "icebolt", aim.origin, aim.dir, 38.0, 24.56 * mult * c.dmg_mul(), {"slow": 1.0, "slow_mul": 0.4, "curse": true, "dtype": "cold", "far_bonus": has_fx(c, "extreme_cold")})
+	return true
+
+
+static func _ice_armor(c, aim: Dictionary) -> bool:
+	if not pay(c, Data.SKILLS.cryo_ice_armor.cost):
+		return false
+	var t = null if aim.get("self", false) else _aimed_ally(c, aim)
+	if t == null:
+		t = c
+	var amt = 150.63 + c.frost_scale * 0.5
+	c.frost_scale = 0
+	t.give_shield(amt, 60.0, FROST)
+	t.ice_armor = true
+	c.game.spawn_ring_burst(t.pos + Vector3(0, 1.0, 0), FROST, 2.0)
+	c.game.sfx("shield", t.pos)
+	return true
+
+
+static func _ice_barrier(c) -> bool:
+	c.cleanse()
+	c.frozen = 8.0
+	c.barrier = true
+	c.game.on_frozen(c)
+	c.game.sfx("shield", c.pos)
+	return true
+
+
+# 얼음 베리어 중 초당 2.61% 회복
+static func tick_barrier(c, dt: float) -> void:
+	if c.barrier:
+		if c.frozen <= 0.0:
+			c.barrier = false
+		else:
+			c.heal_now(c.max_hp * 0.0261 * dt)
+
+
+# ---- 소드마스터
+static func _psionic_cd(c, n: int) -> float:
+	var base: float = [6.0, 6.0, 10.0, 15.0, 20.0][clampi(n, 0, 4)]
+	if has_fx(c, "blade_storm"):
+		if n == 3:
+			base = 10.0
+		elif n == 4:
+			base = 15.0
+	return base * c.stats.get("cd_mul", 1.0)
+
+
+static func _psionic(c, aim: Dictionary, n: int) -> bool:
+	var g = c.game
+	var slots := []
+	for s in Data.SWORD_SLOTS:
+		if c.equipment.get(s) != null:
+			slots.append(c.equipment[s])
+	for i in n:
+		var sword: Dictionary = slots[i]
+		var bonus := 1.2 if int(sword.get("rarity", 0)) >= 2 else 1.0
+		var off := (i - (n - 1) / 2.0) * 0.18
+		var dir: Vector3 = aim.dir.rotated(Vector3.UP, off)
+		dir.y += 0.08
+		g.spawn_projectile(c, "blade", aim.origin + Vector3(0, 0.15 * (i % 2), 0), dir.normalized(), 24.0 + i * 2.0, 62.75 * bonus * c.dmg_mul(),
+			{"homing": 6.0, "life": 3.0, "psionic": true})
+	g.sfx("magic", c.pos)
+	return true
+
+
+static func _blade_dance(c) -> bool:
+	c.game.add_zone({"follow": c, "radius": 2.6, "dur": 8.0, "tick": 0.5, "dmg": 35.30 * c.dmg_mul(), "owner": c, "kind": "orbit_blade"})
+	if has_fx(c, "evasion"):
+		c.add_dr("evasion", 0.5, 8.0)
+	c.game.sfx("swing", c.pos)
+	return true
+
+
+# ---- 드루이드
 static func set_panther(c, on: bool) -> void:
 	if c.panther == on:
 		return
@@ -352,10 +818,8 @@ static func set_panther(c, on: bool) -> void:
 
 
 static func _toggle_panther(c) -> bool:
-	if c.panther:
-		set_panther(c, false)
-		return true
-	if not pay(c, 30.0):
+	if wcat(c) == "" and Data.offhand_cat(c.equipment, c.wset) == "":
+		c.game.notify(c, "toast", ["무기를 착용해야 변신할 수 있습니다"])
 		return false
 	c.cleanse()
 	set_panther(c, true)
@@ -363,129 +827,53 @@ static func _toggle_panther(c) -> bool:
 	return true
 
 
-static func _force_of_nature(c) -> bool:
+static func _nature(c, aim: Dictionary) -> bool:
+	if c.charges <= 0:
+		c.game.notify(c, "toast", ["'자연의 힘' 충전 중 (%.0f초)" % c.charge_cd])
+		return false
 	var g = c.game
-	# 시야를 가리지 않도록 시전자 오른쪽 옆에 소환
-	var right := Vector3(cos(c.yaw), 0, -sin(c.yaw))
-	var p: Vector3 = c.pos + right * 1.8 - Actor.fwd(c.yaw) * 0.3
-	p = g.dungeon.resolve_circle(p, 0.6)
+	var p: Vector3 = aim.get("point", g.aim_point(aim.origin, aim.dir, 14.0))
+	p = g.dungeon.resolve_circle(p, 0.8)
+	c.charges -= 1
+	if c.charge_cd <= 0.0:
+		c.charge_cd = nature_recharge(c)
 	g.spawn_summon(c, p)
-	c.give_shield(30.0, 8.0, NATURE)
-	g.sfx("heal", c.pos)
+	c.give_shield(60.0 + (150.0 if has_fx(c, "nature_breath") else 0.0), 10.0, NATURE)
+	gain(c, 15.0)
+	g.sfx("heal", p)
 	return true
 
 
 static func _shadow_assault(c) -> bool:
-	if not pay(c, 15.0):
+	if not pay(c, Data.SKILLS.druid_shadow_assault.cost):
 		return false
-	c.dash = {"dir": Actor.fwd(c.yaw), "speed": 20.0, "t": 0.4, "hit": 28.0 * c.dmg_mul(), "stun": 0.3, "hit_done": false}
+	c.dash = {"dir": Actor.fwd(c.yaw), "speed": 20.0, "t": 0.42, "land": 74.43 * c.dmg_mul(), "hit_done": false}
 	c.game.sfx("growl", c.pos)
 	return true
 
 
-static func _pyroblast(c, aim: Dictionary) -> bool:
-	if not pay(c, 35.0):
-		return false
-	c.game.spawn_projectile(c, "pyroblast", aim.origin, aim.dir, 22.0, 55.0 * c.dmg_mul(), {"aoe": 4.0})
-	return true
-
-
-static func _fire_blast(c) -> bool:
-	if not pay(c, 25.0):
-		return false
-	var g = c.game
-	var f := Actor.fwd(c.yaw)
-	for a in g.actors:
-		if not a.alive or a.extracted or not g.hostile(c, a):
-			continue
-		var dx: float = a.pos.x - c.pos.x
-		var dz: float = a.pos.z - c.pos.z
-		var d := sqrt(dx * dx + dz * dz)
-		if d > 5.5 + a.radius:
-			continue
-		if d > 0.8 and absf(angle_difference(c.yaw, Actor.yaw_to(dx, dz))) > 1.1:
-			continue
-		if not g.dungeon.los(c.pos.x, c.pos.z, a.pos.x, a.pos.z):
-			continue
-		var nd := maxf(d, 0.001)
-		a.take_damage(28.0 * c.dmg_mul(), c, {"knock": Vector3(dx / nd * 16.0, 0, dz / nd * 16.0), "from": c.pos})
-	g.explode_fx(c.pos + f * 2.5 + Vector3(0, 1.0, 0), 3.0, Color(1.0, 0.42, 0.1))
-	g.sfx("fire", c.pos)
-	return true
-
-
-static func _ice_storm(c, aim: Dictionary) -> bool:
-	if not pay(c, 35.0):
-		return false
-	var g = c.game
-	var point: Vector3 = aim.get("point", g.aim_point(aim.origin, aim.dir, 18.0))
-	g.add_zone({"pos": point, "radius": 4.0, "dur": 4.0, "tick": 0.5, "dmg": 7.0 * c.dmg_mul(), "slow": 1.0, "owner": c, "kind": "ice_storm"})
-	g.sfx("magic", point)
-	return true
-
-
-static func _frostbite(c) -> bool:
-	if not pay(c, 30.0):
-		return false
-	c.cleanse()
-	c.frozen = 3.0
-	c.apply_heal(40.0, 3.0)
-	c.game.on_frozen(c)
-	c.game.sfx("shield", c.pos)
-	return true
-
-
-static func _divine_guidance(c) -> bool:
-	if not pay(c, 35.0):
-		return false
-	var g = c.game
-	for a in g.actors:
-		if not a.alive or a.extracted or a.pos.distance_to(c.pos) > 6.0:
-			continue
-		if a == c or a.faction == c.faction:
-			a.cleanse()
-			a.immune = 2.0
-			a.apply_heal(25.0 * c.stats.get("heal_mul", 1.0), 0.8)
-		elif g.hostile(c, a) and g.dungeon.los(c.pos.x, c.pos.z, a.pos.x, a.pos.z):
-			a.take_damage(20.0 * c.dmg_mul(), c, {"from": c.pos})
-	g.spawn_ring_burst(c.pos + Vector3(0, 0.2, 0), GOLD, 6.0)
-	g.sfx("heal", c.pos)
-	return true
-
-
-static func _guard(c) -> bool:
-	if not pay(c, 30.0):
-		return false
-	var g = c.game
-	for a in g.actors:
-		if a.alive and (a == c or a.faction == c.faction) and a.pos.distance_to(c.pos) < 6.0:
-			a.give_shield(50.0, 8.0, GOLD)
-			if a.kind == "player":
-				a.shield_hit_fx = 1.0
-	g.spawn_ring_burst(c.pos + Vector3(0, 1.0, 0), GOLD, 3.0)
-	g.sfx("shield", c.pos)
-	return true
-
-
-# 돌진류(돌진, 그림자 습격) 진행. 이동 처리 후 true면 돌진 중
+# 돌진류 진행. 이동 처리 후 true면 돌진 중
 static func tick_dash(c, dt: float) -> bool:
 	if c.dash == null:
 		return false
 	var dash: Dictionary = c.dash
 	dash.t -= dt
 	c.move(dash.dir.x * dash.speed, dash.dir.z * dash.speed, dt)
-	if dash.has("hit") and not dash.hit_done:
-		var g = c.game
-		for a in g.actors:
-			if not a.alive or a == c or a.extracted or not g.hostile(c, a):
-				continue
-			if Vector2(a.pos.x - c.pos.x, a.pos.z - c.pos.z).length() < a.radius + 1.2:
-				a.take_damage(dash.hit, c, {"knock": dash.dir * 12.0, "stun": dash.get("stun", 0.0), "from": c.pos})
-				g.sfx("hit", c.pos)
-				c.game.notify(c, "shake", [0.25])
-				dash.hit_done = true
-				dash.t = 0.0
-				break
 	if dash.t <= 0.0:
+		# 그림자 돌격: 착지 지점 주변 피해
+		if dash.has("land"):
+			var g = c.game
+			var hits := 0
+			for a in g.actors:
+				if a.alive and not a.extracted and g.hostile(c, a) and a.pos.distance_to(c.pos) < 3.0 + a.radius:
+					g.hit(c, a, dash.land, {"knock": (a.pos - c.pos).normalized() * 6.0, "from": c.pos, "dtype": "shadow"})
+					hits += 1
+			if hits:
+				gain(c, 20.0 if has_fx(c, "prey_aim") else 0.0)
+				gain(c, 20.0)
+				g.sfx("hit", c.pos)
+				g.notify(c, "shake", [0.25])
+				g.summon_focus(c)
+			g.spawn_ring_burst(c.pos + Vector3(0, 0.3, 0), SHADOW, 3.0)
 		c.dash = null
 	return true

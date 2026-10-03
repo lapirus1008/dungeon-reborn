@@ -12,7 +12,10 @@ signal server_begin(loadouts: Dictionary) # 서버: 모든 장비가 모였으�
 signal disconnected(reason: String)
 
 const PORT := 7777
-const VERSION := "dr-mp-2"
+const VERSION := "dr-mp-3"
+# 대기방: 같은 맵을 고른 사람끼리 모여 최소 10초 ~ 최대 60초 로딩 후 함께 입장
+const ROOM_MIN := 10.0
+const ROOM_MAX := 60.0
 const MAX_PLAYERS := 8
 
 var mode := "offline" # offline | host | server(전용) | client
@@ -29,6 +32,11 @@ var accounts: AccountStore = null # 서버: 계정 DB
 var peer_acct := {} # 서버: peer_id -> 계정 이름
 var pin := "" # 클라이언트: 로그인 PIN
 var account_mode := false # 클라이언트: 접속한 서버가 계정 서버
+var rooms := {} # 맵 id -> {"members": [peer id], "t": 경과 초} (서버가 관리, 모두에게 복사)
+var raid_map := "" # 서버: 시작할 레이드의 맵
+var local_loadout_cb: Callable # 호스트: 내 장비 꺼내기 (main)
+var _room_push_t := 0.0
+var _prep_members: Array = []
 
 
 func _ready() -> void:
@@ -161,6 +169,7 @@ func _on_peer_disconnected(id: int) -> void:
 		game.on_peer_left(id) # 계정 결과(사망) 반영 후 정리
 	roster.erase(id)
 	loadouts.erase(id)
+	_room_remove(id)
 	if peer_acct.has(id):
 		accounts.unload(peer_acct[id])
 		peer_acct.erase(id)
@@ -225,7 +234,7 @@ func set_roster(r: Dictionary, pvp_flag: bool) -> void:
 # 로비에서 직업을 바꾸면 대기실 목록에 반영
 func update_class(cls: String) -> void:
 	if account_mode:
-		return # 계정 서버는 select_class 조작으로 반영
+		return # 계정 서버는 select_char 조작으로 반영
 	if mode == "host":
 		if roster.has(1):
 			roster[1].cls = cls
@@ -255,29 +264,129 @@ func raid_running() -> bool:
 	return game != null and is_instance_valid(game) and is_server()
 
 
-# ------------------------------------------------------------------ 레이드 시작
-# 리더가 시작 요청 -> 서버가 모두에게 장비 제출 요청 -> 모이면 레이드 생성 -> 각자에게 시작 정보
-func request_start(local_loadout = null) -> void:
+# ------------------------------------------------------------------ 대기방 / 레이드 시작
+# 맵을 고르면 그 맵의 대기방에 들어감 -> 서버가 시간을 재다가 (최소 10초, 최대 60초)
+# 장비를 모아 레이드 생성 -> 대기방 사람들에게 시작 정보
+func my_room() -> String:
+	var me := my_id()
+	for m in rooms:
+		if me in rooms[m].members:
+			return m
+	return ""
+
+
+func join_room(map: String) -> void:
+	if not Data.MAPS.has(map):
+		return
 	if is_server():
-		server_prepare(local_loadout)
+		_room_join(1, map)
 	elif is_client():
-		req_start.rpc_id(1)
+		c_join_room.rpc_id(1, map)
+
+
+func leave_room() -> void:
+	if is_server():
+		_room_remove(1)
+		push_rooms()
+	elif is_client():
+		c_leave_room.rpc_id(1)
 
 
 @rpc("any_peer", "reliable")
-func req_start() -> void:
-	if is_server() and multiplayer.get_remote_sender_id() == leader():
-		server_prepare(null)
+func c_join_room(map: String) -> void:
+	if is_server() and Data.MAPS.has(map):
+		_room_join(multiplayer.get_remote_sender_id(), map)
 
 
-func server_prepare(local_loadout) -> void:
+@rpc("any_peer", "reliable")
+func c_leave_room() -> void:
+	if is_server():
+		_room_remove(multiplayer.get_remote_sender_id())
+		push_rooms()
+
+
+func _room_join(id: int, map: String) -> void:
+	if not roster.has(id) or roster[id].state != "lobby":
+		return
+	_room_remove(id)
+	if not rooms.has(map):
+		rooms[map] = {"members": [], "t": 0.0}
+	rooms[map].members.append(id)
+	_set_status("%s 님이 %s 대기방에 들어왔습니다" % [roster[id].name, Data.MAPS[map].name])
+	push_rooms()
+
+
+func _room_remove(id: int) -> void:
+	for m in rooms.keys():
+		rooms[m].members.erase(id)
+		if rooms[m].members.is_empty():
+			rooms.erase(m)
+
+
+func push_rooms() -> void:
+	if not is_server():
+		return
+	_room_push_t = 0.0
+	set_rooms.rpc(rooms)
+	roster_changed.emit()
+
+
+@rpc("authority", "reliable")
+func set_rooms(r: Dictionary) -> void:
+	rooms = r
+	roster_changed.emit()
+
+
+# 대기방 남은 시간 (표시용)
+func room_left(map: String) -> float:
+	if not rooms.has(map):
+		return ROOM_MAX
+	var t: float = rooms[map].t
+	return maxf(0.0, (ROOM_MIN if _nobody_else(map) else ROOM_MAX) - t)
+
+
+# 대기실의 다른 사람이 모두 어느 대기방에 들어갔으면 더 기다릴 사람이 없음
+func _nobody_else(_map: String) -> bool:
+	for id in roster:
+		if roster[id].state != "lobby":
+			continue
+		var inside := false
+		for m in rooms:
+			if id in rooms[m].members:
+				inside = true
+		if not inside:
+			return false
+	return true
+
+
+func _tick_rooms(dt: float) -> void:
+	_room_push_t += dt
+	var busy := preparing or raid_running()
+	for m in rooms.keys():
+		var r: Dictionary = rooms[m]
+		r.t += dt
+		if busy:
+			continue
+		if r.t >= ROOM_MAX or (r.t >= ROOM_MIN and _nobody_else(m)):
+			var members: Array = r.members.duplicate()
+			rooms.erase(m)
+			push_rooms()
+			server_prepare(m, members)
+			return
+	if _room_push_t >= 1.0 and rooms.size():
+		push_rooms()
+
+
+func server_prepare(map: String, members: Array) -> void:
 	if preparing or raid_running():
 		return
+	raid_map = map
+	_prep_members = members
 	if accounts != null:
 		# 온라인 서버: 서버가 각 계정에서 직접 장비를 꺼낸다 (클라이언트가 보낸 장비를 믿지 않음)
 		loadouts = {}
-		for id in roster:
-			if roster[id].state == "lobby" and peer_acct.has(id):
+		for id in members:
+			if roster.has(id) and roster[id].state == "lobby" and peer_acct.has(id):
 				var d: Dictionary = accounts.get_data(peer_acct[id])
 				loadouts[id] = Account.take_loadout(d)
 				accounts.save(peer_acct[id])
@@ -286,13 +395,13 @@ func server_prepare(local_loadout) -> void:
 		return
 	preparing = true
 	loadouts = {}
-	if mode == "host" and local_loadout != null:
-		loadouts[1] = local_loadout
+	if mode == "host" and 1 in members and local_loadout_cb.is_valid():
+		loadouts[1] = local_loadout_cb.call()
 	prepare_left = 5.0
-	for id in roster:
-		if id != 1 or mode == "server":
+	for id in members:
+		if (id != 1 or mode == "server") and roster.has(id):
 			prepare.rpc_id(id)
-	_set_status("레이드 준비 중...")
+	_set_status("%s 레이드 준비 중..." % Data.MAPS[map].name)
 	_check_prepared()
 
 
@@ -310,15 +419,15 @@ func submit_loadout(lo: Dictionary) -> void:
 	if not is_server() or not preparing:
 		return
 	var id := multiplayer.get_remote_sender_id()
-	if not roster.has(id) or not Data.CLASSES.has(lo.get("cls", "")):
+	if not roster.has(id) or not (id in _prep_members) or not Data.CLASSES.has(lo.get("cls", "")):
 		return
 	loadouts[id] = lo
 	_check_prepared()
 
 
 func _check_prepared() -> void:
-	for id in roster:
-		if not loadouts.has(id):
+	for id in _prep_members:
+		if roster.has(id) and not loadouts.has(id):
 			return
 	_begin()
 
@@ -328,6 +437,8 @@ func _process(dt: float) -> void:
 		prepare_left -= dt
 		if prepare_left <= 0.0:
 			_begin()
+	if is_server():
+		_tick_rooms(dt)
 
 
 func _begin() -> void:
@@ -489,7 +600,7 @@ func c_account_op(op: String, args: Array) -> void:
 	var res := Account.apply(d, op, args)
 	if res.ok:
 		accounts.save(nm)
-		if op == "select_class":
+		if op in ["select_char", "create_char", "delete_char"]:
 			roster[id].cls = d.cls
 			push_roster()
 	_sync_account(id, res)

@@ -1,13 +1,17 @@
-# 로비: 직업 선택, 장비, 가방, 보관함, 상인, 기록
+# 로비: 캐릭터(직업별) 선택/생성, 장비·Q/E 스킬, 가방, 보관함, 상인, 기록
 class_name Lobby
 extends Control
 
-signal start_raid
+signal start_raid(map: String)
 
 const SHOP := Account.SHOP
 
 var tab := "stash"
 var class_box: VBoxContainer
+var skill_box: VBoxContainer
+var create_cls := "fighter"
+var create_name := ""
+var creating := false
 var equip_view: EquipView
 var stats_label: RichTextLabel
 var bag_view: GridView
@@ -22,6 +26,15 @@ var mp_addr := "127.0.0.1"
 var mp_port := Net.PORT
 var mp_msg := ""
 var mp_pin := ""
+var map_panel: Control
+var wait_panel: Control
+var wait_title: Label
+var wait_info: Label
+var wait_list: VBoxContainer
+var wait_bar: ProgressBar
+var wait_map := "" # 오프라인 대기방
+var wait_left := 0.0
+var wait_total := 10.0
 
 
 func _ready() -> void:
@@ -88,14 +101,14 @@ func _ready() -> void:
 	var lv := VBoxContainer.new()
 	lv.add_theme_constant_override("separation", 8)
 	left.add_child(lv)
-	lv.add_child(UI.title("직업 선택"))
+	lv.add_child(UI.title("캐릭터"))
 	class_box = VBoxContainer.new()
 	class_box.add_theme_constant_override("separation", 8)
 	lv.add_child(class_box)
 	var howto := RichTextLabel.new()
 	howto.bbcode_enabled = true
 	howto.fit_content = true
-	howto.text = "[color=#e6dccb][b]조작법[/b][/color]\n[color=#9a8e7a][font_size=13]WASD 이동 · Shift 달리기 · Space 점프\n좌클릭 공격 · 우클릭 보조 · Q/E 스킬\nF 상호작용 · Tab 인벤토리 · M 지도\n1 체력 물약 · 2 붕대 · Esc 메뉴 (게임은 계속 진행)[/font_size][/color]"
+	howto.text = "[color=#e6dccb][b]조작법[/b][/color]\n[color=#9a8e7a][font_size=13]WASD 이동 · Shift 달리기 · Space 점프\n좌클릭 공격 · 우클릭 보조 · Q/E 스킬 · X 무기 세트 교체\nF 상호작용/줍기 · Tab 인벤토리 · M 지도 · G 투척\n1·2·3 소모품 · Esc 메뉴 (게임은 계속 진행)[/font_size][/color]"
 	lv.add_child(howto)
 	body.add_child(left)
 
@@ -119,6 +132,9 @@ func _ready() -> void:
 	stats_label.custom_minimum_size = Vector2(260, 0)
 	eq_row.add_child(stats_label)
 	cv.add_child(eq_row)
+	skill_box = VBoxContainer.new()
+	skill_box.add_theme_constant_override("separation", 4)
+	cv.add_child(skill_box)
 	var bag_title := UI.title("가방")
 	bag_title.text = "가방 (던전에 가져갈 물건 · 직업마다 크기가 다름)"
 	cv.add_child(bag_title)
@@ -127,13 +143,13 @@ func _ready() -> void:
 	bag_view.allow_sell = true
 	bag_view.hint = "드래그: 이동 (R 회전) · 우클릭: 장착 · Shift+클릭: 보관함으로 · Ctrl+클릭: 판매"
 	cv.add_child(bag_view)
-	cv.add_child(UI.label("드래그로 옮기기 · 드래그 중 R 회전 · 우클릭 장착/해제 · Shift+클릭 빠른 이동 · Ctrl+클릭 판매", 12, UI.MUTED))
+	cv.add_child(UI.label("드래그로 옮기기 · 드래그 중 R 회전 · 우클릭 장착/해제 · Shift+클릭 빠른 이동 · Ctrl+클릭 판매 · 판금/가죽/천 방어구는 모든 직업 착용 가능", 12, UI.MUTED))
 	relief_btn = UI.button("🎁 구호 물자 받기 (기본 무기 + 물약)", _on_relief)
 	cv.add_child(relief_btn)
 	var sp2 := Control.new()
 	sp2.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	cv.add_child(sp2)
-	start_btn = UI.big_button("⚔ 던전 입장", func(): start_raid.emit())
+	start_btn = UI.big_button("⚔ 던전 입장", _open_maps)
 	cv.add_child(start_btn)
 	start_hint = UI.label("", 13, Color("#8fd0ff"))
 	start_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -174,6 +190,8 @@ func _ready() -> void:
 	Net.roster_changed.connect(func(): if visible: refresh())
 	SaveData.changed.connect(func(): if visible: refresh())
 	Net.status_changed.connect(func(_t): if visible: refresh())
+	_build_map_panel()
+	_build_wait_panel()
 	refresh()
 
 
@@ -188,73 +206,29 @@ func persist() -> void:
 func refresh() -> void:
 	var s := save()
 	gold_label.text = ("☁ %s · " % SaveData.account_name if SaveData.online else "") + "💰 %d 골드" % s.gold
-	# 직업 카드: 2열 작은 카드 + 선택한 직업 상세 설명
 	UI.clear(class_box)
-	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 6)
-	grid.add_theme_constant_override("v_separation", 6)
-	class_box.add_child(grid)
-	for cid in Data.CLASS_ORDER:
-		var c: Dictionary = Data.CLASSES[cid]
-		var card := PanelContainer.new()
-		var sb := StyleBoxFlat.new()
-		var sel: bool = s.cls == cid
-		sb.bg_color = Color("#2a2014") if sel else Color("#1a1510")
-		sb.border_color = UI.GOLD if sel else UI.LINE
-		sb.set_border_width_all(2 if sel else 1)
-		sb.set_corner_radius_all(5)
-		sb.set_content_margin_all(8)
-		card.add_theme_stylebox_override("panel", sb)
-		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var hb := HBoxContainer.new()
-		hb.add_theme_constant_override("separation", 8)
-		hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var ic := UI.label(c.icon, 22)
-		ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var nm := UI.label(c.name, 16, UI.GOLD if sel else UI.TEXT)
-		nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		hb.add_child(ic)
-		hb.add_child(nm)
-		card.add_child(hb)
-		var id2: String = cid
-		card.gui_input.connect(func(ev):
-			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-				_select_class(id2))
-		card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		grid.add_child(card)
-	var cur: Dictionary = Data.CLASSES[s.cls]
-	var detail := RichTextLabel.new()
-	detail.bbcode_enabled = true
-	detail.fit_content = true
-	detail.custom_minimum_size = Vector2(300, 0)
-	var keys := {"lmb": "좌클릭", "rmb": "우클릭", "q": "Q", "e": "E", "lmb_p": "표범 좌클릭", "rmb_p": "표범 우클릭", "e_p": "표범 E"}
-	var t := "[font_size=18][color=#d9b45a][b]%s %s[/b][/color][/font_size]\n[font_size=13][color=#9a8e7a]%s[/color][/font_size]\n" % [cur.icon, cur.name, cur.desc]
-	if cur.res != "":
-		t += "[font_size=12][color=#8fd0ff]자원: %s[/color][/font_size]\n" % Data.RES_NAMES[cur.res]
-	for k in ["lmb", "rmb", "q", "e", "lmb_p", "rmb_p", "e_p"]:
-		if cur.skills.has(k):
-			var sk: Dictionary = cur.skills[k]
-			var cdt := (" · %d초" % sk.cd) if sk.cd >= 2.0 else ""
-			t += "[font_size=13][color=#d9b45a]%s[/color] [b]%s[/b]%s\n[color=#9a8e7a]   %s[/color][/font_size]\n" % [keys[k], sk.name, cdt, sk.desc]
-	detail.text = t
-	class_box.add_child(detail)
+	if creating:
+		_render_create()
+	else:
+		_render_chars()
 
 	# 장비 / 능력치 / 가방
 	UI.tip_cls = s.cls
-	equip_view.set_equipment(s.equipment, s.cls)
-	var st := Data.compute_stats(s.cls, s.equipment)
+	equip_view.set_equipment(s.equipment, s.cls, int(s.get("wset", 1)))
+	var st := Data.compute_stats(s.cls, s.equipment, int(s.get("wset", 1)))
 	var risk := []
 	for sl in Data.GEAR_SLOTS:
 		if s.equipment[sl] != null:
 			risk.append(s.equipment[sl])
 	risk.append_array(s.bag)
 	var txt := UI.stats_text(s.cls, st)
-	if s.equipment.weapon == null:
-		txt += "[color=#e0a050][font_size=13]⚠ 무기 없음 - 기본 무기(공격력 x0.85)로 싸웁니다[/font_size][/color]\n"
+	if Data.active_weapons(s.equipment, int(s.get("wset", 1))).is_empty():
+		txt += "\n[color=#e0a050][font_size=13]⚠ 사용 중인 세트에 무기 없음 - 맨손(공격력 x0.85)으로 싸웁니다[/font_size][/color]"
+	txt += "\n"
 	txt += "[color=#9a8e7a][font_size=12]위험 부담 장비 가치: 💰 %d[/font_size][/color]" % Data.items_value(risk)
 	stats_label.text = txt
 	bag_view.set_items(s.bag, Inv.bag_size(s.cls))
+	_render_skills()
 
 	for k in tab_btns:
 		tab_btns[k].button_pressed = k == tab
@@ -269,32 +243,178 @@ func refresh() -> void:
 		_:
 			_render_records()
 
-	var has_weapon_option := s.equipment.weapon != null
-	for it in s.stash:
-		if Data.base_of(it).slot == "weapon" and Data.can_equip(it, s.cls):
-			has_weapon_option = true
-	relief_btn.visible = not has_weapon_option and s.gold < 40
+	relief_btn.visible = Account.needs_relief(s)
 	_update_start()
 
 
-# 던전 입장 버튼: 함께하기 중에는 리더만 시작
+# 던전 입장 버튼: 맵 선택 -> 대기방
 func _update_start() -> void:
 	start_hint.text = ""
 	start_btn.disabled = false
-	if not Net.online():
-		start_btn.text = "⚔ 던전 입장"
-		return
-	if Net.raid_running():
-		start_btn.text = "⏳ 레이드 진행 중"
-		start_btn.disabled = true
-		start_hint.text = "진행 중인 레이드가 끝나면 다시 시작할 수 있습니다"
-	elif Net.is_leader():
-		start_btn.text = "⚔ 함께 입장 (%d명)" % Net.roster.size()
-		start_hint.text = "누르면 대기실의 모두가 함께 입장합니다"
+	start_btn.text = "⚔ 던전 입장 (맵 선택)"
+	if Net.online():
+		var mine: Dictionary = Net.roster.get(Net.my_id(), {})
+		if mine.get("state", "lobby") == "raid":
+			start_btn.text = "⏳ 레이드 진행 중"
+			start_btn.disabled = true
+		else:
+			start_hint.text = "같은 맵을 고른 사람끼리 대기방에서 모여 함께 입장합니다"
+
+
+# ------------------------------------------------------------------ 맵 선택 / 대기방
+func _overlay() -> Control:
+	var o := ColorRect.new()
+	(o as ColorRect).color = Color(0, 0, 0, 0.72)
+	o.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	o.mouse_filter = Control.MOUSE_FILTER_STOP
+	o.visible = false
+	add_child(o)
+	return o
+
+
+func _build_map_panel() -> void:
+	map_panel = _overlay()
+	var c := CenterContainer.new()
+	c.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	map_panel.add_child(c)
+	var p := UI.panel_box(Vector2(760, 0))
+	c.add_child(p)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	p.add_child(v)
+	v.add_child(UI.title("맵 선택"))
+	for mid in Data.MAP_ORDER:
+		var m: Dictionary = Data.MAPS[mid]
+		var card := _card(false)
+		var hb := HBoxContainer.new()
+		hb.add_theme_constant_override("separation", 12)
+		hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var ic := UI.label(m.icon, 36)
+		ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hb.add_child(ic)
+		var t := RichTextLabel.new()
+		t.bbcode_enabled = true
+		t.fit_content = true
+		t.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var names := []
+		for k in m.monsters:
+			names.append(Data.MONSTERS[k].name)
+		t.text = "[font_size=20][color=#d9b45a][b]%s[/b][/color][/font_size]\n[font_size=13][color=#c9c0b0]%s[/color]\n[color=#9a8e7a]출현: %s · 보스: %s[/color][/font_size]" % [m.name, m.desc, ", ".join(names), Data.MONSTERS[m.boss].name]
+		hb.add_child(t)
+		card.add_child(hb)
+		var id2: String = mid
+		_on_click(card, func(): _enter_map(id2))
+		v.add_child(card)
+	var locked := _card(false)
+	locked.modulate = Color(1, 1, 1, 0.45)
+	locked.mouse_default_cursor_shape = Control.CURSOR_ARROW
+	locked.add_child(UI.label("🪦  죄인의 끝 2층 — 준비 중 (지도 자료가 들어오면 추가됩니다)", 15, UI.MUTED))
+	v.add_child(locked)
+	v.add_child(UI.label("맵을 고르면 대기방으로 들어갑니다. 같은 맵을 고른 모험가끼리 최소 10초 ~ 최대 60초 동안 모인 뒤, 각자 정해진 시작 지점에서 출발합니다.", 12, UI.MUTED))
+	var close := UI.button("닫기", func(): map_panel.visible = false, 13)
+	v.add_child(close)
+
+
+func _build_wait_panel() -> void:
+	wait_panel = _overlay()
+	var c := CenterContainer.new()
+	c.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	wait_panel.add_child(c)
+	var p := UI.panel_box(Vector2(520, 0))
+	c.add_child(p)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	p.add_child(v)
+	wait_title = UI.title("대기방")
+	v.add_child(wait_title)
+	wait_info = UI.label("", 15)
+	v.add_child(wait_info)
+	wait_bar = ProgressBar.new()
+	wait_bar.custom_minimum_size = Vector2(480, 14)
+	wait_bar.show_percentage = false
+	wait_bar.max_value = 1.0
+	wait_bar.step = 0.0
+	v.add_child(wait_bar)
+	wait_list = VBoxContainer.new()
+	v.add_child(wait_list)
+	v.add_child(UI.label("최소 10초 · 최대 60초 동안 같은 맵을 고른 모험가를 기다린 뒤 함께 입장합니다. 입장하면 장착한 장비와 가방은 위험에 노출됩니다.", 12, UI.MUTED))
+	v.add_child(UI.button("대기방 나가기", _leave_wait, 13))
+
+
+func _open_maps() -> void:
+	map_panel.visible = true
+
+
+func _enter_map(mid: String) -> void:
+	map_panel.visible = false
+	Sfx.play("ui")
+	if Net.online():
+		Net.join_room(mid)
 	else:
-		start_btn.text = "⏳ 리더의 시작을 기다리는 중"
-		start_btn.disabled = true
-		start_hint.text = "리더가 시작하면 자동으로 입장합니다 (현재 장비/가방을 가지고)"
+		wait_map = mid
+		wait_total = Net.ROOM_MIN
+		wait_left = wait_total
+	wait_panel.visible = true
+	_update_wait(0.0)
+
+
+func _leave_wait() -> void:
+	if Net.online():
+		Net.leave_room()
+	wait_map = ""
+	wait_panel.visible = false
+
+
+func _process(dt: float) -> void:
+	if wait_panel == null or not visible:
+		return
+	if Net.online():
+		wait_panel.visible = Net.my_room() != ""
+	if wait_panel.visible:
+		_update_wait(dt)
+
+
+func _update_wait(dt: float) -> void:
+	var mid := wait_map
+	var members := []
+	var left := 0.0
+	var total := Net.ROOM_MAX
+	if Net.online():
+		mid = Net.my_room()
+		if mid == "":
+			return
+		left = Net.room_left(mid)
+		total = Net.ROOM_MIN if Net._nobody_else(mid) else Net.ROOM_MAX
+		for id in Net.rooms[mid].members:
+			members.append(Net.roster.get(id, {"name": "?", "cls": "fighter"}))
+		if Net.is_client():
+			# 서버 갱신 사이에는 직접 시간을 흘림
+			Net.rooms[mid].t += dt
+	else:
+		if mid == "":
+			wait_panel.visible = false
+			return
+		wait_left -= dt
+		left = wait_left
+		total = wait_total
+		var cur := Account.cur(save())
+		members.append({"name": cur.get("name", "나"), "cls": save().cls})
+		if wait_left <= 0.0:
+			wait_map = ""
+			wait_panel.visible = false
+			start_raid.emit(mid)
+			return
+	var m: Dictionary = Data.MAPS[mid]
+	wait_title.text = "%s %s 대기방" % [m.icon, m.name]
+	var stage := "던전을 불러오는 중" if left > total * 0.5 else ("모험가를 기다리는 중" if Net.online() else "입장 준비 중")
+	wait_info.text = "%s... %d초 (%d명)" % [stage, ceili(left), members.size()]
+	wait_bar.value = 1.0 - left / maxf(1.0, total)
+	if wait_list.get_child_count() != members.size():
+		UI.clear(wait_list)
+		for r in members:
+			var c: Dictionary = Data.CLASSES.get(r.get("cls", "fighter"), Data.CLASSES.fighter)
+			wait_list.add_child(UI.label("%s %s — %s" % [c.icon, r.get("name", "?"), c.name], 15))
 
 
 func _render_online() -> void:
@@ -354,7 +474,11 @@ func _render_online() -> void:
 		for id in ids:
 			var r: Dictionary = Net.roster[id]
 			var c: Dictionary = Data.CLASSES.get(r.cls, Data.CLASSES["fighter"])
-			var tag := " 👑" if id == Net.leader() else ""
+			var room := ""
+			for mm in Net.rooms:
+				if id in Net.rooms[mm].members:
+					room = " · %s 대기방" % Data.MAPS[mm].name
+			var tag := room
 			var me := " (나)" if id == Net.my_id() else ""
 			var st := "  ⚔ 레이드 중" if r.state == "raid" else ""
 			v.add_child(UI.label("%s %s%s%s — %s%s" % [c.icon, r.name, me, tag, c.name, st], 15, UI.GOLD if id == Net.my_id() else UI.TEXT))
@@ -425,7 +549,18 @@ func _render_shop() -> void:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 10)
 		row.add_child(UI.slot(Data.make_item(base, 0)))
-		var kind: String = ("%s 무기" % Data.class_names(b.classes)) if b.has("classes") else ("소모품" if b.slot == "consumable" else Data.SLOT_NAMES[b.slot])
+		var kind: String
+		match str(b.slot):
+			"weapon":
+				kind = "%s · %s" % [Data.WEAPON_NAMES.get(b.cat, b.cat), Data.class_names(Data.weapon_classes(b.cat))]
+			"consumable":
+				kind = "소모품"
+			"utility":
+				kind = "투척 도구"
+			"head", "chest", "hands", "legs", "feet":
+				kind = "%s %s" % [Data.ARMOR_TYPES.get(b.get("cat", ""), ""), Data.SLOT_NAMES[b.slot]]
+			_:
+				kind = Data.SLOT_NAMES.get(b.slot, "")
 		var nm := RichTextLabel.new()
 		nm.bbcode_enabled = true
 		nm.fit_content = true
@@ -471,11 +606,197 @@ func _confirm_reset() -> void:
 
 
 # 로비 조작은 SaveData.op -> Account 규칙 (온라인 서버면 서버가 처리)
-func _select_class(cid: String) -> void:
-	if save().cls == cid:
+func _select_char(id: String) -> void:
+	if save().get("active", "") == id:
 		return
-	SaveData.op("select_class", [cid])
-	Net.update_class(cid)
+	SaveData.op("select_char", [id])
+	Net.update_class(save().cls)
+
+
+func _card(sel: bool) -> PanelContainer:
+	var card := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color("#2a2014") if sel else Color("#1a1510")
+	sb.border_color = UI.GOLD if sel else UI.LINE
+	sb.set_border_width_all(2 if sel else 1)
+	sb.set_corner_radius_all(5)
+	sb.set_content_margin_all(8)
+	card.add_theme_stylebox_override("panel", sb)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	return card
+
+
+func _on_click(c: Control, f: Callable) -> void:
+	c.gui_input.connect(func(ev):
+		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+			f.call())
+
+
+# 캐릭터 목록 (던전본처럼 직업별 캐릭터를 만들어 선택)
+func _render_chars() -> void:
+	var s := save()
+	for c in s.characters:
+		var sel: bool = c.id == s.get("active", "")
+		var cd: Dictionary = Data.CLASSES[c.cls]
+		var card := _card(sel)
+		var hb := HBoxContainer.new()
+		hb.add_theme_constant_override("separation", 8)
+		hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var ic := UI.label(cd.icon, 22)
+		ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hb.add_child(ic)
+		var nv := VBoxContainer.new()
+		nv.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		nv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var nm := UI.label(c.name, 16, UI.GOLD if sel else UI.TEXT)
+		nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var cst: Dictionary = c.get("stats", {})
+		var sub := UI.label("%s · 입장 %d · 탈출 %d" % [cd.name, int(cst.get("raids", 0)), int(cst.get("extracts", 0))], 12, UI.MUTED)
+		sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		nv.add_child(nm)
+		nv.add_child(sub)
+		hb.add_child(nv)
+		if s.characters.size() > 1:
+			var cid: String = c.id
+			var cname: String = c.name
+			var del := UI.button("✕", func(): _confirm_delete(cid, cname), 12)
+			del.tooltip_text = "캐릭터 삭제"
+			hb.add_child(del)
+		card.add_child(hb)
+		var id2: String = c.id
+		_on_click(card, func(): _select_char(id2))
+		class_box.add_child(card)
+	if s.characters.size() < Account.MAX_CHARS:
+		class_box.add_child(UI.button("＋ 새 캐릭터 만들기", func():
+			creating = true
+			create_name = ""
+			refresh(), 14))
+	var cur: Dictionary = Data.CLASSES[s.cls]
+	class_box.add_child(_class_detail(cur))
+
+
+func _class_detail(cur: Dictionary) -> RichTextLabel:
+	var detail := RichTextLabel.new()
+	detail.bbcode_enabled = true
+	detail.fit_content = true
+	detail.custom_minimum_size = Vector2(300, 0)
+	var t := "[font_size=18][color=#d9b45a][b]%s %s[/b][/color][/font_size]\n[font_size=13][color=#9a8e7a]%s[/color][/font_size]\n" % [cur.icon, cur.name, cur.desc]
+	t += "[font_size=12][color=#9a8e7a]무기: %s[/color][/font_size]\n" % ", ".join(cur.weapons.map(func(w): return Data.WEAPON_NAMES.get(w, w)))
+	if cur.res != "":
+		t += "[font_size=12][color=#8fd0ff]자원: %s[/color][/font_size]\n" % Data.RES_NAMES[cur.res]
+	var keys := {"lmb": "좌클릭", "rmb": "우클릭", "lmb_p": "표범 좌클릭", "rmb_p": "표범 우클릭"}
+	for k in keys:
+		if cur.skills.has(k):
+			var sk: Dictionary = cur.skills[k]
+			t += "[font_size=13][color=#d9b45a]%s[/color] [b]%s[/b]\n[color=#9a8e7a]   %s[/color][/font_size]\n" % [keys[k], sk.name, sk.desc]
+	detail.text = t
+	return detail
+
+
+# 새 캐릭터: 직업 + 이름
+func _render_create() -> void:
+	class_box.add_child(UI.label("직업을 고르고 이름을 정하세요", 14, UI.MUTED))
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 6)
+	grid.add_theme_constant_override("v_separation", 6)
+	class_box.add_child(grid)
+	for cid in Data.CLASS_ORDER:
+		var c: Dictionary = Data.CLASSES[cid]
+		var card := _card(create_cls == cid)
+		var hb := HBoxContainer.new()
+		hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var l := UI.label("%s %s" % [c.icon, c.name], 15, UI.GOLD if create_cls == cid else UI.TEXT)
+		l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hb.add_child(l)
+		card.add_child(hb)
+		var id2: String = cid
+		_on_click(card, func():
+			create_cls = id2
+			refresh())
+		grid.add_child(card)
+	var nh := HBoxContainer.new()
+	nh.add_child(UI.label("이름", 14, UI.MUTED))
+	var ed := LineEdit.new()
+	ed.text = create_name
+	ed.max_length = 12
+	ed.placeholder_text = "2~12자"
+	ed.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ed.text_changed.connect(func(t): create_name = t)
+	ed.text_submitted.connect(func(_t): _create())
+	nh.add_child(ed)
+	class_box.add_child(nh)
+	var bh := HBoxContainer.new()
+	var ok := UI.button("만들기", _create, 14)
+	ok.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bh.add_child(ok)
+	bh.add_child(UI.button("취소", func():
+		creating = false
+		refresh(), 14))
+	class_box.add_child(bh)
+	class_box.add_child(UI.label("새 캐릭터는 직업 기본 무기와 낡은 방어구, 물약을 가지고 시작합니다. 골드와 보관함은 모든 캐릭터가 함께 씁니다.", 12, UI.MUTED))
+	class_box.add_child(_class_detail(Data.CLASSES[create_cls]))
+
+
+func _create() -> void:
+	var nm := create_name.strip_edges()
+	if not Account.valid_name(nm):
+		UI.toast("이름은 2~12자로 정해 주세요")
+		return
+	creating = false
+	SaveData.op("create_char", [nm, create_cls])
+	Net.update_class(save().cls)
+	refresh()
+
+
+func _confirm_delete(id: String, nm: String) -> void:
+	var dlg := ConfirmationDialog.new()
+	dlg.dialog_text = "캐릭터 '%s'를 삭제할까요?\n장착한 장비와 가방 속 물건도 함께 사라집니다." % nm
+	dlg.ok_button_text = "삭제"
+	dlg.cancel_button_text = "취소"
+	dlg.confirmed.connect(func():
+		SaveData.op("delete_char", [id])
+		Net.update_class(save().cls))
+	add_child(dlg)
+	dlg.popup_centered()
+
+
+# 인벤토리의 Q/E 스킬 선택 (던전에 들어가기 전에 고름)
+func _render_skills() -> void:
+	var s := save()
+	UI.clear(skill_box)
+	var cur: Dictionary = Data.CLASSES[s.cls]
+	var top := HBoxContainer.new()
+	top.add_child(UI.label("스킬 선택", 15, UI.GOLD))
+	var sp := Control.new()
+	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(sp)
+	top.add_child(UI.button("⇄ 무기 세트 교체 (현재 %d)" % int(s.get("wset", 1)), func(): SaveData.op("swap_set"), 12))
+	skill_box.add_child(top)
+	for slot in ["q", "e"]:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		var kl := UI.label(slot.to_upper(), 16, UI.GOLD)
+		kl.custom_minimum_size = Vector2(22, 0)
+		row.add_child(kl)
+		for sid in cur[slot]:
+			var sk: Dictionary = Data.SKILLS[sid]
+			var sel: bool = s.skills.get(slot, "") == sid
+			var card := _card(sel)
+			card.custom_minimum_size = Vector2(0, 34)
+			var l := UI.label("%s %s" % [sk.get("icon", ""), sk.name], 13, UI.GOLD if sel else UI.TEXT)
+			l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			card.add_child(l)
+			var sl: String = slot
+			var id2: String = sid
+			_on_click(card, func():
+				if save().skills.get(sl, "") != id2:
+					SaveData.op("set_skill", [sl, id2]))
+			card.mouse_entered.connect(func(): UI.show_tip(UI.skill_tip(id2)))
+			card.mouse_exited.connect(func(): UI.hide_tip())
+			row.add_child(card)
+		skill_box.add_child(row)
 
 
 func _sell_treasure() -> void:

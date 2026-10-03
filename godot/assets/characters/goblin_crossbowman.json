@@ -1,0 +1,26 @@
+{
+ "source": "res://assets/kaykit/characters/Skeleton_Minion.glb",
+ "scale": 0.72,
+ "tint": {
+  "*": "#86b862"
+ },
+ "attach": [
+  {
+   "from": "res://assets/kaykit/characters/Rogue.glb",
+   "mesh": "1H_Crossbow",
+   "slot": "r"
+  }
+ ],
+ "animations": {
+  "idle": "Idle_Combat",
+  "walk": "Running_B",
+  "run": "Running_B",
+  "death": "Death_B",
+  "hit": "Hit_B",
+  "block": "Blocking",
+  "cast": "1H_Ranged_Shoot",
+  "spin": "Hit_A",
+  "attack": "1H_Ranged_Shoot",
+  "aim": "1H_Ranged_Aiming"
+ }
+}

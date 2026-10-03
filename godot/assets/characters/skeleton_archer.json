@@ -8,7 +8,7 @@
  "attach": [
   {
    "from": "res://assets/kaykit/characters/Rogue.glb",
-   "mesh": "1H_Crossbow",
+   "mesh": "2H_Crossbow",
    "slot": "r"
   }
  ],
@@ -16,12 +16,12 @@
   "idle": "Idle_Combat",
   "walk": "Walking_D_Skeletons",
   "run": "Running_A",
-  "attack": "1H_Ranged_Shoot",
-  "aim": "1H_Ranged_Aiming",
   "death": "Death_C_Skeletons",
   "hit": "Hit_A",
   "block": "Blocking",
   "cast": "1H_Ranged_Shoot",
-  "spin": "Hit_A"
+  "spin": "Hit_A",
+  "attack": "1H_Ranged_Shoot",
+  "aim": "1H_Ranged_Aiming"
  }
 }

@@ -1,4 +1,4 @@
-# 던전 절차적 생성, 메시 구성, 충돌/시야/경로 탐색
+# 던전: 지도 파일(assets/maps/*.json) 또는 절차적 생성, 메시 구성, 충돌/시야/경로 탐색
 class_name Dungeon
 extends RefCounted
 
@@ -22,12 +22,19 @@ var root: Node3D
 var flame_mm: MultiMesh
 var rng := RandomNumberGenerator.new() # 멀티플레이: 같은 시드면 모든 접속자에게 같은 던전
 var seed_value := 0
+var map_id := ""
+# 지도 표식 (타일 좌표 Vector2i): spawns 시작 위치, shrines 성소, stones 부활석, exits 고정 탈출구, descent 아래층 계단
+var marks := {"spawns": [], "shrines": [], "stones": [], "exits": [], "descent": []}
 
 
-func _init(d: int = 1, seed_v: int = 0) -> void:
+func _init(d: int = 1, seed_v: int = 0, map := "") -> void:
 	depth = d
 	seed_value = seed_v if seed_v != 0 else randi()
 	rng.seed = seed_value
+	map_id = map
+	if map != "" and Data.MAPS.has(map):
+		_load_map(Data.MAPS[map])
+		return
 	W = 46 if d == 1 else 50
 	H = W
 	grid.resize(W * H)
@@ -192,6 +199,282 @@ func generate() -> void:
 			var c := center(tx, tz)
 			c.x += rng.randf_range(-1.0, 1.0)
 			c.z += -1.2 if top else 1.2
+			props.append({"type": "barrel" if rng.randf() < 0.6 else "bones", "pos": c})
+
+
+# ------------------------------------------------------------------ 지도 파일
+func _load_map(def: Dictionary) -> void:
+	var f := FileAccess.open(def.file, FileAccess.READ)
+	var j = JSON.parse_string(f.get_as_text()) if f != null else null
+	if not (j is Dictionary):
+		push_error("지도를 읽을 수 없음: %s" % def.file)
+		j = {"w": 8, "h": 8, "rows": ["########", "#......#", "#......#", "#......#", "#......#", "#......#", "#......#", "########"]}
+	W = int(j.w)
+	H = int(j.h)
+	grid.resize(W * H)
+	grid.fill(EMPTY)
+	room_id.resize(W * H)
+	room_id.fill(-1)
+	var rows: Array = j.rows
+	for z in H:
+		var row: String = rows[z]
+		for x in W:
+			if x < row.length() and row[x] != "#":
+				grid[idx(x, z)] = ROOM
+	for k in marks:
+		var seen := {}
+		for v in j.get(k, []):
+			var t := Vector2i(int(v[0]), int(v[1]))
+			if not seen.has(t) and get_t(t.x, t.y) != EMPTY:
+				seen[t] = true
+				marks[k].append(t)
+	# 지도 모양은 고정: 지도 이름으로 정한 난수 (멀티플레이 접속자 모두 같은 모양)
+	var map_rng := RandomNumberGenerator.new()
+	map_rng.seed = hash(map_id)
+	if def.get("castle", false):
+		_castle_walls(map_rng)
+	if marks.spawns.is_empty():
+		marks.spawns = _spread_points(10, [], map_rng)
+	_segment_rooms(map_rng)
+	for k in marks:
+		marks[k] = marks[k].filter(func(t): return get_t(t.x, t.y) != EMPTY)
+	if marks.spawns.size() < 4:
+		marks.spawns.append_array(_spread_points(10 - marks.spawns.size(), marks.spawns, map_rng))
+	# 보스 방: 시작 위치들에서 가장 먼 방
+	var best = null
+	var bd := -1.0
+	for r in rooms:
+		var md := 1e9
+		for sp in marks.spawns:
+			md = minf(md, Vector2(r.cx - sp.x, r.cz - sp.y).length())
+		if r.tiles.size() >= 12 and md > bd:
+			bd = md
+			best = r
+	if best != null:
+		best.boss = true
+	_decorate()
+
+
+# 성 지도: 이미지에서 외곽만 나오므로 안쪽을 방/복도로 나눔 (재귀 분할 + 문)
+func _castle_walls(r: RandomNumberGenerator) -> void:
+	var stack := [Rect2i(1, 1, W - 2, H - 2)]
+	var guard := 0
+	while stack.size() and guard < 400:
+		guard += 1
+		var rc: Rect2i = stack.pop_back()
+		var vertical := rc.size.x > rc.size.y if absi(rc.size.x - rc.size.y) > 3 else r.randf() < 0.5
+		var span := rc.size.x if vertical else rc.size.y
+		if span < 12:
+			continue
+		var cut := r.randi_range(5, span - 6)
+		# 선 위의 바닥을 벽으로, 이어진 바닥 구간마다 문(2칸)
+		var line := []
+		var other := rc.size.y if vertical else rc.size.x
+		for i in other:
+			var x := rc.position.x + cut if vertical else rc.position.x + i
+			var z := rc.position.y + i if vertical else rc.position.y + cut
+			line.append(Vector2i(x, z))
+		var run := []
+		for k in line.size() + 1:
+			var t = line[k] if k < line.size() else null
+			if t != null and get_t(t.x, t.y) != EMPTY:
+				run.append(t)
+				continue
+			if run.size() >= 3:
+				var door := r.randi_range(0, run.size() - 2)
+				for m in run.size():
+					if m != door and m != door + 1:
+						grid[idx(run[m].x, run[m].y)] = EMPTY
+				if run.size() > 14:
+					var d2 := (door + run.size() / 2) % (run.size() - 1)
+					grid[idx(run[d2].x, run[d2].y)] = ROOM
+					grid[idx(run[d2 + 1].x, run[d2 + 1].y)] = ROOM
+			run = []
+		if vertical:
+			stack.append(Rect2i(rc.position.x, rc.position.y, cut, rc.size.y))
+			stack.append(Rect2i(rc.position.x + cut + 1, rc.position.y, rc.size.x - cut - 1, rc.size.y))
+		else:
+			stack.append(Rect2i(rc.position.x, rc.position.y, rc.size.x, cut))
+			stack.append(Rect2i(rc.position.x, rc.position.y + cut + 1, rc.size.x, rc.size.y - cut - 1))
+	_keep_connected()
+
+
+# 가장 큰 연결 영역만 남기고, 끊긴 영역은 가장 가까운 곳으로 벽을 뚫어 연결
+func _keep_connected() -> void:
+	for _pass in 30:
+		var comp := PackedInt32Array()
+		comp.resize(W * H)
+		comp.fill(-1)
+		var sizes := []
+		for z in H:
+			for x in W:
+				if get_t(x, z) == EMPTY or comp[idx(x, z)] >= 0:
+					continue
+				var cid := sizes.size()
+				var n := 0
+				var st := [Vector2i(x, z)]
+				comp[idx(x, z)] = cid
+				while st.size():
+					var c: Vector2i = st.pop_back()
+					n += 1
+					for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+						var q: Vector2i = c + d
+						if get_t(q.x, q.y) != EMPTY and comp[idx(q.x, q.y)] < 0:
+							comp[idx(q.x, q.y)] = cid
+							st.append(q)
+				sizes.append(n)
+		if sizes.size() <= 1:
+			return
+		var main := sizes.find(sizes.max())
+		# 작은 영역 하나를 골라 주 영역까지 직선으로 뚫음 (벽 1~3칸)
+		var joined := false
+		for z in H:
+			for x in W:
+				var c0 := comp[idx(x, z)]
+				if c0 < 0 or c0 == main:
+					continue
+				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					for ln in range(2, 5):
+						var q = Vector2i(x, z) + d * ln
+						if q.x <= 0 or q.y <= 0 or q.x >= W - 1 or q.y >= H - 1:
+							break
+						if comp[idx(q.x, q.y)] == main:
+							for m in range(1, ln):
+								var w = Vector2i(x, z) + d * m
+								grid[idx(w.x, w.y)] = ROOM
+							joined = true
+							break
+					if joined:
+						break
+				if joined:
+					break
+			if joined:
+				break
+		if not joined:
+			# 연결할 수 없는 작은 영역은 메움
+			for z in H:
+				for x in W:
+					if comp[idx(x, z)] >= 0 and comp[idx(x, z)] != main:
+						grid[idx(x, z)] = EMPTY
+			return
+
+
+# 서로 멀리 떨어진 바닥 지점 n개 (시작 위치가 없는 지도용)
+func _spread_points(n: int, avoid: Array, r: RandomNumberGenerator) -> Array:
+	var floor_tiles := []
+	for z in H:
+		for x in W:
+			if get_t(x, z) != EMPTY and _open_around(x, z):
+				floor_tiles.append(Vector2i(x, z))
+	var out := []
+	if floor_tiles.is_empty():
+		return out
+	var first: Vector2i = floor_tiles[r.randi() % floor_tiles.size()]
+	out.append(first)
+	while out.size() < n:
+		var best: Vector2i = floor_tiles[0]
+		var bd := -1.0
+		for t in floor_tiles:
+			var md := 1e9
+			for o in out + avoid:
+				md = minf(md, Vector2(t - o).length())
+			if md > bd:
+				bd = md
+				best = t
+		out.append(best)
+	return out
+
+
+func _open_around(x: int, z: int) -> bool:
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if get_t(x + d.x, z + d.y) == EMPTY:
+			return false
+	return true
+
+
+# 방 나누기: 8x8 구역마다 중심을 정하고, 바닥을 따라 가장 가까운 중심의 방으로 (측지 보로노이)
+func _segment_rooms(_r: RandomNumberGenerator) -> void:
+	const B := 8
+	var seeds := []
+	for bz in range(0, H, B):
+		for bx in range(0, W, B):
+			var cnt := 0
+			var best := Vector2i(-1, -1)
+			var bd := 1e9
+			for z in range(bz, mini(bz + B, H)):
+				for x in range(bx, mini(bx + B, W)):
+					if get_t(x, z) == EMPTY:
+						continue
+					cnt += 1
+					var d := Vector2(x - bx - B / 2.0, z - bz - B / 2.0).length() - (2.0 if _open_around(x, z) else 0.0)
+					if d < bd:
+						bd = d
+						best = Vector2i(x, z)
+			if cnt >= 6:
+				seeds.append(best)
+	var queue := []
+	for i in seeds.size():
+		var t: Vector2i = seeds[i]
+		rooms.append({"id": i, "x": t.x, "z": t.y, "w": 1, "h": 1, "cx": t.x + 0.5, "cz": t.y + 0.5, "boss": false, "tiles": []})
+		room_id[idx(t.x, t.y)] = i
+		queue.append(t)
+	var head := 0
+	while head < queue.size():
+		var c: Vector2i = queue[head]
+		head += 1
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var q: Vector2i = c + d
+			if get_t(q.x, q.y) != EMPTY and room_id[idx(q.x, q.y)] < 0:
+				room_id[idx(q.x, q.y)] = room_id[idx(c.x, c.y)]
+				queue.append(q)
+	for z in H:
+		for x in W:
+			var id := room_id[idx(x, z)]
+			if id < 0:
+				if get_t(x, z) != EMPTY:
+					grid[idx(x, z)] = EMPTY # 어느 방과도 이어지지 않은 바닥
+				continue
+			rooms[id].tiles.append(Vector2i(x, z))
+	for rm in rooms:
+		var mn := Vector2i(W, H)
+		var mx := Vector2i(-1, -1)
+		for t in rm.tiles:
+			mn = Vector2i(mini(mn.x, t.x), mini(mn.y, t.y))
+			mx = Vector2i(maxi(mx.x, t.x), maxi(mx.y, t.y))
+		rm.x = mn.x
+		rm.z = mn.y
+		rm.w = mx.x - mn.x + 1
+		rm.h = mx.y - mn.y + 1
+
+
+# 지도용 횃불과 소품
+func _decorate() -> void:
+	var cand := []
+	for z in H:
+		for x in W:
+			if get_t(x, z) == EMPTY:
+				continue
+			for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				if get_t(x + d.x, z + d.y) == EMPTY:
+					cand.append([x, z, d])
+	var placed := {}
+	for c in cand:
+		if rng.randf() > 0.09:
+			continue
+		var key := Vector2i(c[0] / 3, c[1] / 3)
+		if placed.has(key):
+			continue
+		placed[key] = true
+		var d: Vector2i = c[2]
+		var nrm := Vector3(d.x, 0, d.y)
+		var ct := center(c[0], c[1])
+		torches.append({"tx": c[0], "tz": c[1], "pos": Vector3(ct.x + nrm.x * (T / 2.0 - 0.25), 3.2, ct.z + nrm.z * (T / 2.0 - 0.25)), "n": nrm})
+	for rm in rooms:
+		for i in rng.randi_range(0, 2):
+			var t: Vector2i = rm.tiles[rng.randi() % rm.tiles.size()]
+			if _open_around(t.x, t.y):
+				continue # 벽 옆에만
+			var c := center(t.x, t.y) + Vector3(rng.randf_range(-0.8, 0.8), 0, rng.randf_range(-0.8, 0.8))
 			props.append({"type": "barrel" if rng.randf() < 0.6 else "bones", "pos": c})
 
 
@@ -644,6 +927,17 @@ func path(a: Vector3, b: Vector3) -> Array:
 
 
 func random_point_in_room(room: Dictionary, margin: int = 1) -> Vector3:
+	if room.has("tiles"):
+		var tl: Array = room.tiles
+		for k in 30:
+			var t: Vector2i = tl[rng.randi() % tl.size()]
+			if margin > 0 and not _open_around(t.x, t.y) and k < 25:
+				continue
+			var c := center(t.x, t.y)
+			c.x += rng.randf_range(-1.0, 1.0)
+			c.z += rng.randf_range(-1.0, 1.0)
+			return c
+		return center(int(room.cx), int(room.cz))
 	for k in 30:
 		var tx := rng.randi_range(room.x + margin, room.x + room.w - 1 - margin)
 		var tz := rng.randi_range(room.z + margin, room.z + room.h - 1 - margin)

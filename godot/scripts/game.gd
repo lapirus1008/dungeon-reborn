@@ -49,6 +49,8 @@ var players: Array = [] # 사람 플레이어 (서버/오프라인)
 var humans: Array = [] # 서버: 참가자 [{peer, name, cls, equipment, bag}]
 var pvp := false
 var level_seed := 0
+var map_id := "sinners_end_1"
+var fixtures: Array = [] # 지도 고정 물체: 성소(회복), 부활석, 아래층 계단
 var nid_seq := 0
 var bag_seq := 0
 var portal_seq := 0
@@ -72,6 +74,8 @@ func _ready() -> void:
 
 func start(lo: Dictionary, hud_node) -> void:
 	loadout = lo
+	if lo.has("map") and Data.MAPS.has(lo.map):
+		map_id = lo.map
 	hud = hud_node
 	time = 0.0
 	time_left = RAID_TIME
@@ -82,12 +86,14 @@ func start(lo: Dictionary, hud_node) -> void:
 	running = true
 	if hud != null:
 		hud.start(self)
-		hud.announce("던전에 입장했습니다", "보물을 모아 탈출 포탈로 살아 나가세요" if not online() else "%d명이 함께 입장했습니다 · %s" % [players.size(), "개인전 (서로 적)" if pvp else "파티 (서로 아군)"])
+		hud.announce(Data.MAPS[map_id].name, "보물을 모아 탈출 포탈로 살아 나가세요" if not online() else "%d명이 함께 입장했습니다 · %s" % [players.size(), "개인전 (서로 적)" if pvp else "파티 (서로 아군)"])
 
 
 # 서버: 참가자 목록으로 레이드 생성 (host면 peer 1이 로컬 플레이어)
-func start_server(mode: String, hs: Array, is_pvp: bool, hud_node) -> void:
+func start_server(mode: String, hs: Array, is_pvp: bool, hud_node, map := "") -> void:
 	net = mode
+	if Data.MAPS.has(map):
+		map_id = map
 	humans = hs
 	pvp = is_pvp
 	level_seed = randi() % 2000000000 + 1
@@ -163,7 +169,7 @@ func describe(a) -> Dictionary:
 			d["t"] = a.type
 		"player", "bot":
 			d["c"] = a.cls
-			d["w"] = Data.weapon_model(a.cls, a.equipment)
+			d["w"] = Data.weapon_model(a.cls, a.equipment, a.wset)
 			d["hm"] = a.equipment.head != null
 	return d
 
@@ -192,92 +198,125 @@ func build_level(d: int) -> void:
 
 	if online():
 		seed(level_seed + d)
-	dungeon = Dungeon.new(d, level_seed + d if online() else 0)
+	dungeon = Dungeon.new(d, level_seed + d if online() else 0, map_id)
 	dungeon.build(world, false)
 	_reset_lists(d)
+	_spawn_fixtures()
 
+	var mdef: Dictionary = Data.MAPS.get(map_id, Data.MAPS[Data.MAP_ORDER[0]])
 	var rooms: Array = dungeon.rooms
-	var boss_room: Dictionary
-	var normal := []
+	var boss_room = null
 	for r in rooms:
 		if r.boss:
 			boss_room = r
-		else:
-			normal.append(r)
-	var dist_boss := func(r): return Vector2(r.cx - boss_room.cx, r.cz - boss_room.cz).length()
-	normal.sort_custom(func(a, b): return dist_boss.call(a) > dist_boss.call(b))
-	var start_room: Dictionary = normal[randi_range(0, mini(3, normal.size() - 1))]
-	# 경쟁 모험가/개인전 상대는 시작 방에서 먼 방
-	var others := []
-	for r in normal:
-		if r != start_room:
-			others.append(r)
-	others.sort_custom(func(a, b): return Vector2(a.cx - start_room.cx, a.cz - start_room.cz).length() > Vector2(b.cx - start_room.cx, b.cz - start_room.cz).length())
-	var used_rooms := [start_room]
-
+	# 시작 위치: 지도에 정해진 스폰 지점 (섞어서 배정)
+	var spawns: Array = dungeon.marks.spawns.duplicate()
+	spawns.shuffle()
+	var spawn_at := func(i: int, k: int) -> Vector3:
+		var t: Vector2i = spawns[i % spawns.size()]
+		var c := dungeon.center(t.x, t.y)
+		# 같은 지점의 파티원은 조금씩 떨어뜨림
+		var off := Vector3(cos(k * 2.1), 0, sin(k * 2.1)) * (1.2 if k > 0 else 0.0)
+		return dungeon.resolve_circle(c + off, 0.5)
+	var used_spawns := 0
+	var used_rooms := []
 	if players.is_empty():
 		if humans.is_empty():
-			player = Player.new(self, dungeon.random_point_in_room(start_room, 1), loadout.cls, loadout.equipment, loadout.bag)
+			player = Player.new(self, spawn_at.call(0, 0), loadout.cls, loadout.equipment, loadout.bag, "당신", "player", 0, loadout.get("skills", {}), int(loadout.get("wset", 1)))
+			player.char_id = loadout.get("char", "")
+			player.name = loadout.get("name", "당신")
 			players = [player]
+			used_spawns = 1
 		else:
+			# 개인전: 각자 다른 스폰 지점 · 파티: 같은 스폰 지점에 함께
 			var i := 0
 			for h in humans:
-				var room: Dictionary = start_room
-				if pvp and i > 0:
-					room = others[mini(others.size() - 1, i * 2 - 1)]
-					used_rooms.append(room)
-				var fac: String = ("player_%d" % h.peer) if pvp else "player"
-				var p := Player.new(self, dungeon.random_point_in_room(room, 1), h.cls, h.equipment, h.bag, h.name, fac, h.peer)
+				var si := i if pvp else 0
+				var p := Player.new(self, spawn_at.call(si, 0 if pvp else i), h.cls, h.equipment, h.bag, h.name, ("player_%d" % h.peer) if pvp else "player", h.peer, h.get("skills", {}), int(h.get("wset", 1)))
+				p.char_id = h.get("char", "")
 				players.append(p)
 				if h.peer == 1 and net == "host":
 					player = p
 				i += 1
+			used_spawns = humans.size() if pvp else 1
 	else:
-		player.pos = dungeon.random_point_in_room(start_room, 1)
+		player.pos = spawn_at.call(0, 0)
+		used_spawns = 1
 	for p in players:
+		var rr = dungeon.room_at(p.pos.x, p.pos.z)
+		if rr != null and not (rr in used_rooms):
+			used_rooms.append(rr)
+		# 시작할 때 가장 가까운 열린 쪽을 바라봄
 		p.yaw = randf() * TAU
 		add_actor(p)
 	if player != null:
 		_make_view()
 
-	var bot_count := 3 if deep else 4
+	# 다른 모험가 팀(봇): 남은 스폰 지점
+	var bot_count := 4
 	if online():
 		bot_count = maxi(1, bot_count - (players.size() - 1))
-	var bot_rooms := []
-	var bi := 0
-	for r in others:
-		if bot_rooms.size() >= bot_count:
-			break
-		if r in used_rooms or bi % 2 == 1:
-			bi += 1
-			continue
-		bi += 1
-		bot_rooms.append(r)
-		used_rooms.append(r)
-		add_actor(Bot.new(self, dungeon.random_point_in_room(r, 1), d))
+	for k in mini(bot_count, maxi(0, spawns.size() - used_spawns)):
+		var bp: Vector3 = spawn_at.call(used_spawns + k, 0)
+		var rr = dungeon.room_at(bp.x, bp.z)
+		if rr != null:
+			used_rooms.append(rr)
+		add_actor(Bot.new(self, bp, d))
 
-	# 몬스터와 상자
-	var mul := 1.5 if deep else 1.0
-	var luck := 1.2 if deep else 0.0
+	# 몬스터와 상자 (지도별 출현 몬스터 가중치)
+	var mul := 1.5 if d > 1 else 1.0
+	var luck := 1.2 if d > 1 else 0.0
+	var pool: Dictionary = mdef.monsters
+	var total := 0.0
+	for k in pool:
+		total += float(pool[k])
+	var pick := func() -> String:
+		var r := randf() * total
+		for k in pool:
+			r -= float(pool[k])
+			if r <= 0.0:
+				return k
+		return pool.keys()[0]
+	var elites: Array = mdef.get("elites", [])
+	var normal := rooms.filter(func(r): return not r.boss and not (r in used_rooms))
+	normal.shuffle()
+	var elite_rooms := normal.slice(0, mini(2, normal.size()))
+	# 시작 지점 근처 방에는 몬스터를 두지 않음 (입장하자마자 싸우지 않도록)
+	var starts := []
+	for a in actors:
+		if is_adventurer(a):
+			starts.append(Vector2(a.pos.x, a.pos.z) / Dungeon.T)
 	for r in rooms:
-		if r == start_room:
+		var near_start := false
+		for sp in starts:
+			if sp.distance_to(Vector2(r.cx, r.cz)) < 4.0:
+				near_start = true
+		if near_start and not r.boss and not (r in used_rooms):
+			used_rooms.append(r)
+	for r in rooms:
+		var area: int = r.tiles.size() if r.has("tiles") else r.w * r.h
+		if r in used_rooms:
 			spawn_chest(r, 0, luck)
 			continue
 		if r.boss:
-			add_actor(Monster.new(self, "wraith_knight", dungeon.center(int(r.cx), int(r.cz)), r, mul))
+			add_actor(Monster.new(self, mdef.boss, dungeon.center(int(r.cx), int(r.cz)), r, mul))
 			for i in 2:
-				add_actor(Monster.new(self, "skeleton", dungeon.random_point_in_room(r), r, mul))
+				add_actor(Monster.new(self, pick.call(), dungeon.random_point_in_room(r), r, mul))
 			spawn_chest(r, 2, luck + 2.5)
 			spawn_chest(r, 1, luck + 1.0)
 			continue
-		var area: int = r.w * r.h
-		var n := 0 if r in used_rooms else mini(4, 1 + area / 18 + (1 if deep else 0))
+		if r in elite_rooms and elites.size():
+			add_actor(Monster.new(self, elites.pick_random(), dungeon.random_point_in_room(r), r, mul))
+		var n := mini(4, 1 + area / 16)
 		for i in n:
-			var roll := randf()
-			var type := "skeleton" if roll < 0.35 else ("skeleton_archer" if roll < 0.55 else ("goblin" if roll < 0.8 else "ghoul"))
-			add_actor(Monster.new(self, type, dungeon.random_point_in_room(r), r, mul))
-		spawn_chest(r, 1 if randf() < 0.25 else 0, luck)
-		if area > 30 and randf() < 0.5:
+			var t: String = pick.call()
+			add_actor(Monster.new(self, t, dungeon.random_point_in_room(r), r, mul))
+		# 상자 (일부는 미믹)
+		if randf() < float(mdef.get("mimic", 0.0)):
+			add_actor(Monster.new(self, "mimic", dungeon.random_point_in_room(r, 0), r, mul))
+		else:
+			spawn_chest(r, 1 if randf() < 0.25 else 0, luck)
+		if area > 30 and randf() < 0.4:
 			spawn_chest(r, 0, luck)
 	if online():
 		randomize()
@@ -301,7 +340,6 @@ func _reset_lists(d: int) -> void:
 	else:
 		portal_schedule = [
 			{"at": 120.0, "kind": "exit", "n": 2},
-			{"at": 210.0, "kind": "descend", "n": 1},
 			{"at": 400.0, "kind": "exit", "n": 2},
 			{"at": 640.0, "kind": "exit", "n": 1},
 		]
@@ -324,7 +362,7 @@ func _make_view() -> void:
 	player_light.shadow_enabled = shadows_enabled()
 	player_light.shadow_bias = 0.08
 	world.add_child(player_light)
-	view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment), player.panther)
+	view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment, player.wset), player.panther)
 	camera.add_child(view_model)
 	shield_bubble = Models.shield_bubble(0.75)
 	shield_bubble.visible = false
@@ -357,6 +395,67 @@ func _make_env(deep: bool) -> void:
 	world.add_child(env)
 
 
+# ------------------------------------------------------------------ 지도 고정 물체
+# 성소: 길게 눌러 체력 회복(1회) · 부활석: 쓰러진 파티원 부활 · 계단: 아래층 (2층 준비 중)
+func _spawn_fixtures() -> void:
+	fixtures = []
+	var shrines: Array = dungeon.marks.shrines
+	if shrines.is_empty():
+		var rr := RandomNumberGenerator.new()
+		rr.seed = hash(map_id + "shrine")
+		shrines = dungeon._spread_points(8, dungeon.marks.spawns, rr)
+	var add := func(kind: String, t: Vector2i) -> void:
+		var p := dungeon.center(t.x, t.y)
+		var node := Models.fixture(kind)
+		node.position = p
+		world.add_child(node)
+		var nm: String = {"shrine": "회복의 성소", "stone": "부활석", "stairs": "아래층 계단"}[kind]
+		fixtures.append({"id": fixtures.size(), "kind": kind, "pos": p, "node": node, "used": false, "name": nm})
+	for t in shrines:
+		add.call("shrine", t)
+	for t in dungeon.marks.stones:
+		add.call("stone", t)
+	for t in dungeon.marks.descent:
+		add.call("stairs", t)
+
+
+func _fixture_used(id: int) -> void:
+	if id < 0 or id >= fixtures.size():
+		return
+	var f: Dictionary = fixtures[id]
+	f.used = true
+	if is_instance_valid(f.node):
+		Models.fixture_spent(f.node)
+
+
+func _use_fixture(p, f: Dictionary) -> void:
+	match f.kind:
+		"shrine":
+			if f.used:
+				return
+			p.apply_heal(p.max_hp * 0.5, 2.0)
+			p.dots.clear()
+			p.burn = 0
+			_fixture_used(f.id)
+			_bc("fix_used", [f.id])
+			spawn_ring_burst(f.pos + Vector3(0, 0.4, 0), Color(0.5, 1.0, 0.6), 2.5)
+			sfx("heal", f.pos)
+			notify(p, "toast", ["성소의 축복: 체력 회복"])
+		"stone":
+			var best = null
+			for q in players:
+				if q != p and not q.alive and not q.done and q.revive_wait > 0.0 and q.faction == p.faction:
+					best = q
+			if best == null:
+				notify(p, "toast", ["부활시킬 파티원이 없습니다"])
+				return
+			best.pos = dungeon.resolve_circle(f.pos + Vector3(1.2, 0, 0), best.radius)
+			revive_player(best, p)
+			spawn_ring_burst(f.pos + Vector3(0, 0.4, 0), Skills.GOLD, 3.0)
+		"stairs":
+			notify(p, "toast", ["2층은 준비 중입니다"])
+
+
 func spawn_chest(room: Dictionary, tier: int, luck: float) -> void:
 	var p := Vector3.ZERO
 	for k in 20:
@@ -378,6 +477,103 @@ func spawn_chest(room: Dictionary, tier: int, luck: float) -> void:
 
 
 # ------------------------------------------------------------------ 관계/검색
+func is_adventurer(a) -> bool:
+	return a != null and a.kind in ["player", "bot"]
+
+
+# 던전본: 파티원도 무기에 맞는다. '신중' 패시브가 있으면 서로 피해 없음
+func friendly_fire(a, b) -> bool:
+	if not is_adventurer(a) or not is_adventurer(b) or a == b or a.faction != b.faction:
+		return false
+	return not (Skills.has_fx(a, "careful") or Skills.has_fx(b, "careful"))
+
+
+# 모든 공격 피해의 관문: 치명타, 은신 일격, 광기의 포효, 약점, 패시브/고유 효과
+func hit(src, a, dmg: float, info: Dictionary = {}) -> float:
+	if a == null or not a.alive:
+		return 0.0
+	var hero: bool = src != null and src.is_hero()
+	var crit := false
+	var stealthed: bool = hero and src.stealth > 0.0
+	if hero:
+		if info.get("weapon", false):
+			dmg += src.stats.get("lightning_add", 0.0) + src.stats.get("cold_add", 0.0)
+		if not info.get("dot", false) and info.get("can_crit", true):
+			var ch: float = src.stats.get("crit", 0.05)
+			if src.pursuit_t > 0.0:
+				ch += 0.5
+			if src.hp >= src.max_hp - 0.5:
+				ch += src.stats.get("crit_full", 0.0)
+			if src.counter_ready and info.get("melee", false):
+				crit = true
+				src.counter_ready = false
+			elif randf() < ch:
+				crit = true
+			if crit:
+				var cm: float = src.stats.get("crit_mul", 1.5)
+				if stealthed and src.cls == "rogue":
+					cm += 0.6
+				dmg *= cm
+		if src.warcry_t > 0.0:
+			dmg *= 1.3
+	if a.kind == "monster" and a.def.get("weak", "") != "" and a.def.weak == info.get("dtype", "phys"):
+		dmg *= 2.5
+	info["crit"] = crit
+	var dealt: float = a.take_damage(dmg, src, info)
+	if not hero:
+		return dealt
+	if dealt > 0.0:
+		var ls: float = src.stats.get("lifesteal", 0.0) + (0.3 if src.warcry_t > 0.0 else 0.0) + (0.5 if stealthed and Skills.has_fx(src, "ambush") else 0.0)
+		if ls > 0.0:
+			src.heal_now(dealt * ls)
+		if src.warcry_t > 0.0 and info.get("weapon", false) and Skills.has_fx(src, "hamstring"):
+			a.add_slow(1.5, 0.8)
+		if stealthed and Skills.has_fx(src, "hidden_poison") and not info.get("blocked", false):
+			a.add_dot(50.0, 3.0, src)
+		if src.petrify_coat > 0.0 and info.get("weapon", false) and a != src:
+			src.petrify_coat = 0.0
+			a.petrify(4.0)
+			notify(src, "toast", ["석화!"])
+			spawn_ring_burst(a.pos + Vector3(0, 1.0, 0), Color(0.6, 0.6, 0.6), 1.5)
+		if info.get("dtype", "") == "cold" and Skills.has_fx(src, "frost_scale"):
+			src.frost_scale = mini(100, src.frost_scale + 1)
+		# 서리의 메아리: 눈보라 안의 적을 아군이 때리면 40 영구 실드
+		var echo = a.get_meta("blizz_owner") if a.has_meta("blizz_owner") else null
+		if echo != null and is_instance_valid_actor(echo) and Skills.has_fx(echo, "frost_echo") and float(a.get_meta("blizz_t", 0.0)) > time and not info.get("blocked", false):
+			if src.faction == echo.faction and src.shield < 40.0:
+				src.give_shield(40.0, 9999.0, Skills.FROST)
+		var u: Array = src.stats.get("uniques", [])
+		if info.get("melee", false):
+			if "elf_speed" in u and src.get_meta("elf_cd", 0.0) <= time:
+				src.set_meta("elf_cd", time + 8.0)
+				src.add_speed(150.0, 3.0, true)
+			if "grove_slow" in u:
+				a.add_slow(1.0, 0.2)
+				src.add_slow(1.0, 0.4)
+			if "lifesteal_stack" in u:
+				src.heal_now(dealt * 0.03 * mini(10, int(src.get_meta("ls_stack", 0)) + 1))
+				src.set_meta("ls_stack", mini(10, int(src.get_meta("ls_stack", 0)) + 1))
+	if crit:
+		if Skills.has_fx(src, "faith_mp"):
+			Skills.gain(src, 5.0)
+		if Skills.has_fx(src, "endless_chill"):
+			Skills.gain(src, 1.0)
+		if info.get("psionic", false) and Skills.has_fx(src, "hobble"):
+			a.add_speed(-60.0, 5.0)
+	if info.get("psionic", false) and dealt > 0.0:
+		if Skills.has_fx(src, "pursuit"):
+			src.pursuit_t = 5.0
+		if Skills.has_fx(src, "healing_sheath") and not info.get("blocked", false):
+			src.heal_now(30.0)
+	if stealthed and not info.get("dot", false):
+		src.break_stealth()
+	return dealt
+
+
+func is_instance_valid_actor(a) -> bool:
+	return a != null and a is Actor
+
+
 func hostile(a, b) -> bool:
 	if a == b or a.faction == b.faction:
 		return false
@@ -440,7 +636,7 @@ func melee_hit(attacker, dmg: float, rng: float, arc: float, opts: Dictionary = 
 		var info := {"knock": Vector3(dx / nd * k, 0, dz / nd * k), "from": attacker.pos}
 		if opts.has("stun"):
 			info["stun"] = opts.stun
-		a.take_damage(dmg, attacker, info)
+		hit(attacker, a, dmg, info)
 		hits += 1
 	if hits:
 		sfx("hit", attacker.pos)
@@ -464,7 +660,8 @@ func shoot_at(src, tgt, kind: String, dmg: float, speed: float, spread: float) -
 const PROJ_COLORS := {
 	"bolt": Color(0.48, 0.42, 1.0), "firebolt": Color(1.0, 0.45, 0.12), "pyroblast": Color(1.0, 0.4, 0.08),
 	"icebolt": Color(0.6, 0.9, 1.0), "thorn": Color(0.45, 0.95, 0.35), "poison": Color(0.4, 0.95, 0.2),
-	"grasp": Color(0.6, 0.25, 0.95), "blade": Color(0.55, 0.75, 1.0), "fireball": Color(1.0, 0.42, 0.1),
+	"grasp": Color(0.35, 0.95, 0.55), "blade": Color(0.55, 0.75, 1.0), "fireball": Color(1.0, 0.42, 0.1),
+	"holy": Color(1.0, 0.9, 0.5), "spit": Color(0.6, 0.9, 0.2), "magic_orb": Color(0.9, 0.3, 0.9),
 }
 
 
@@ -473,8 +670,8 @@ func spawn_projectile(owner, kind: String, p: Vector3, dir: Vector3, speed: floa
 	var gravity: float = extra.get("gravity", 0.0)
 	var rad := 0.15
 	match kind:
-		"arrow":
-			gravity = 5.0
+		"arrow", "bolt":
+			gravity = 5.0 if kind == "arrow" else 1.5
 			sfx("bow", p)
 		"knife":
 			gravity = 3.0
@@ -502,7 +699,7 @@ func _proj_node(kind: String) -> Node3D:
 	var node: Node3D
 	var color: Color = PROJ_COLORS.get(kind, Color.WHITE)
 	match kind:
-		"arrow":
+		"arrow", "bolt":
 			node = Models.arrow()
 		"knife":
 			node = Models.weapon("dagger")
@@ -554,8 +751,8 @@ func _homing_target(p: Dictionary):
 func _projectile_impact(p: Dictionary, pp: Vector3, hit) -> void:
 	var owner = p.owner
 	if p.get("aoe", 0.0) > 0.0:
-		var kind := "poison" if p.kind == "poison" else "fire"
-		explode(pp, p.aoe, p.dmg, owner, kind, {"root": p.get("root", 0.0), "dot": p.get("dot", 0.0)})
+		var kind := "fire" if p.get("fire_aoe", false) or p.kind != "poison" else "poison"
+		explode(pp, p.aoe, p.dmg, owner, kind, {"root": p.get("root", 0.0), "dot": p.get("dot", 0.0), "burn": p.get("burn", 0), "dtype": p.get("dtype", "fire")})
 		return
 	if hit == null:
 		spark(pp, PROJ_COLORS.get(p.kind, Color(0.55, 0.48, 1.0)))
@@ -564,18 +761,28 @@ func _projectile_impact(p: Dictionary, pp: Vector3, hit) -> void:
 	var head: bool = pp.y > a.pos.y + a.height * 0.82
 	var vel: Vector3 = p.vel
 	var vn := Vector3(vel.x, 0, vel.z).normalized()
-	var info := {"knock": vn * 2.0, "from": owner.pos if owner != null else pp, "headshot": head, "ranged": true}
-	if p.get("slow", 0.0) > 0.0:
-		info["slow"] = p.slow
+	var info := {"knock": vn * 2.0, "from": owner.pos if owner != null else pp, "headshot": head, "ranged": true,
+		"dtype": p.get("dtype", "phys"), "psionic": p.get("psionic", false), "weapon": p.get("weapon", false)}
 	if p.get("pull", false) and owner != null:
-		# 무덤의 손아귀: 시전자 앞 2m까지 끌어당김 + 기절
+		# 영혼의 족쇄: 시전자 앞 2m까지 끌어당김
 		var to: Vector3 = owner.pos - a.pos
 		to.y = 0.0
 		var dist := maxf(0.0, to.length() - 2.0)
 		info["knock"] = to.normalized() * dist * 8.0
-		info["stun"] = 0.6
-		Skills.gain(owner, 20.0)
-	a.take_damage(p.dmg * (1.5 if head else 1.0), owner, info)
+		if hostile(owner, a):
+			Skills.gain(owner, p.get("soul_gain", 10.0))
+	var pdmg: float = p.dmg * (1.5 if head else 1.0)
+	if p.get("far_bonus", false) and owner != null:
+		var fd: float = owner.pos.distance_to(a.pos)
+		if fd > 15.0:
+			pdmg *= 1.0 + minf(0.3, (fd - 15.0) / 10.0 * 0.3)
+	hit(owner, a, pdmg, info)
+	if p.get("slow", 0.0) > 0.0:
+		a.add_slow(p.slow, p.get("slow_mul", 0.55))
+	if p.get("curse", false) and owner != null:
+		a.curse_t = 10.0
+		a.curse_src = owner
+		a.curse_dps = 10.32 * owner.dmg_mul() * (1.0 + (0.3 if p.get("far_bonus", false) and owner.pos.distance_to(a.pos) > 25.0 else 0.0))
 	if p.get("heal_owner", 0.0) > 0.0 and owner != null:
 		owner.heal_now(p.heal_owner)
 	sfx("hit", a.pos)
@@ -667,7 +874,9 @@ func explode(p: Vector3, rad: float, dmg: float, owner, kind: String, extra: Dic
 		var f := 1.0 - minf(1.0, d / rad) * 0.5
 		var nd := maxf(d, 0.001)
 		var kp := 2.0 if kind == "poison" else 8.0
-		a.take_damage(dmg * f, owner, {"knock": Vector3(dx / nd * kp, 0, dz / nd * kp), "from": p, "stun": 0.4 if kind == "slam" else 0.0})
+		hit(owner, a, dmg * f, {"knock": Vector3(dx / nd * kp, 0, dz / nd * kp), "from": p, "stun": 0.4 if kind == "slam" else 0.0, "dtype": extra.get("dtype", "fire" if kind == "fire" else "phys"), "ranged": true})
+		if extra.get("burn", 0) > 0:
+			a.add_burn(int(extra.burn), owner)
 		if extra.get("root", 0.0) > 0.0:
 			a.add_root(extra.root)
 		if extra.get("dot", 0.0) > 0.0:
@@ -828,6 +1037,54 @@ func _zone_node(z: Dictionary) -> Node3D:
 				(m as GeometryInstance3D).material_overlay = Models.glow_mat(Color(0.4, 0.6, 1.0, 0.5), 1.5)
 			pivot.add_child(blade)
 			node.add_child(pivot)
+		"revelation":
+			var pillar := MeshInstance3D.new()
+			var cm := CylinderMesh.new()
+			cm.top_radius = z.radius
+			cm.bottom_radius = z.radius
+			cm.height = 0.1
+			cm.radial_segments = 32
+			pillar.mesh = cm
+			pillar.material_override = Models.glow_mat(Color(1.0, 0.85, 0.4, 0.35), 2.0)
+			pillar.position.y = 0.06
+			node.add_child(pillar)
+			var l := OmniLight3D.new()
+			l.light_color = Color(1.0, 0.85, 0.5)
+			l.light_energy = 3.0
+			l.omni_range = z.radius * 2.0
+			l.position.y = 2.0
+			node.add_child(l)
+		"soul_storm":
+			var parts := CPUParticles3D.new()
+			parts.amount = 80
+			parts.lifetime = 0.9
+			parts.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
+			parts.emission_ring_axis = Vector3.UP
+			parts.emission_ring_radius = z.radius
+			parts.emission_ring_inner_radius = 1.0
+			parts.emission_ring_height = 1.5
+			parts.direction = Vector3.UP
+			parts.gravity = Vector3(0, 2.0, 0)
+			parts.initial_velocity_min = 0.5
+			parts.initial_velocity_max = 2.0
+			parts.orbit_velocity_min = 0.4
+			parts.orbit_velocity_max = 0.8
+			var pm := SphereMesh.new()
+			pm.radius = 0.08
+			pm.height = 0.16
+			pm.radial_segments = 4
+			pm.rings = 2
+			pm.material = Models.glow_mat(Skills.SOUL, 4.0)
+			parts.mesh = pm
+			parts.position.y = 0.6
+			node.add_child(parts)
+		"fire_eye":
+			var pivot := Node3D.new()
+			pivot.name = "Pivot"
+			var eye := Models.orb(Skills.FIRE, 0.25)
+			eye.position = Vector3(1.4, 1.8, 0)
+			pivot.add_child(eye)
+			node.add_child(pivot)
 	return node
 
 
@@ -842,38 +1099,166 @@ func update_zones(dt: float) -> void:
 				z.t = 0.0
 			else:
 				z.pos = follow.pos
+		# 눈보라: 조준 지점으로 이동하다가 채널링이 끝나면 제자리에서 펼쳐짐
+		if z.has("move_to") and not z.get("expanded", false):
+			z["move_t"] = z.get("move_t", 0.0) + dt
+			var to: Vector3 = z.move_to - z.pos
+			to.y = 0.0
+			var step: float = z.speed * dt
+			if to.length() > step:
+				var np: Vector3 = z.pos + to.normalized() * step
+				if not dungeon.is_solid(np.x, np.z):
+					z.pos = np
+			if to.length() <= step or z.move_t >= z.get("move_dur", 3.0) or z.owner == null or not z.owner.alive:
+				z.expanded = true
+				z.radius = z.end_radius
+				z.dmg = z.end_dmg
+				z.slow_mul = z.end_slow_mul
+				z.t = minf(z.t, 3.0)
+				z.node.scale = Vector3.ONE * (z.end_radius / 2.5)
 		var node: Node3D = z.node
 		node.position = z.pos
-		if z.kind == "orbit_blade":
-			node.get_node("Pivot").rotation.y += dt * 9.0
+		if z.kind == "orbit_blade" or z.kind == "fire_eye":
+			node.get_node("Pivot").rotation.y += dt * (9.0 if z.kind == "orbit_blade" else 3.0)
+		if z.get("delay", 0.0) > 0.0:
+			z.delay -= dt
+			if z.t <= 0.0:
+				node.queue_free()
+				zones.remove_at(i)
+			i -= 1
+			continue
 		z.tick_t -= dt
 		if z.tick_t <= 0.0 and z.t > 0.0:
-			z.tick_t = z.tick
-			var owner = z.owner
-			var hits := 0
-			for a in actors:
-				if not a.alive or a.extracted or (owner != null and not hostile(owner, a)):
-					continue
-				var d: float = Vector2(a.pos.x - z.pos.x, a.pos.z - z.pos.z).length()
-				if d > z.radius + a.radius or not dungeon.los(z.pos.x, z.pos.z, a.pos.x, a.pos.z):
-					continue
-				a.take_damage(z.dmg, owner, {"from": z.pos, "ranged": true})
-				if z.get("slow", 0.0) > 0.0:
-					a.add_slow(z.slow, 0.5)
-				hits += 1
-			if hits and z.kind == "orbit_blade":
-				sfx("hit", z.pos, 0.2)
+			z.tick_t = z.get("tick", 0.5)
+			_zone_tick(z)
+			if z.get("once", false):
+				z.t = minf(z.t, 0.25)
 		if z.t <= 0.0:
 			node.queue_free()
 			zones.remove_at(i)
 		i -= 1
 
 
+func _zone_tick(z: Dictionary) -> void:
+	var owner = z.owner
+	var hits := 0
+	var cands := []
+	for a in actors:
+		if not a.alive or a.extracted:
+			continue
+		var d: float = Vector2(a.pos.x - z.pos.x, a.pos.z - z.pos.z).length()
+		if d > z.radius + a.radius or not dungeon.los(z.pos.x, z.pos.z, a.pos.x, a.pos.z):
+			continue
+		if owner != null and not hostile(owner, a):
+			# 아군 치유 (신의 계시)
+			if z.get("heal", 0.0) > 0.0 and (a == owner or (a.faction == owner.faction and is_adventurer(a))):
+				a.apply_heal(z.heal, 0.4)
+			continue
+		cands.append([d, a])
+	if z.get("nearest", false) and cands.size() > 1:
+		cands.sort_custom(func(x, y): return x[0] < y[0])
+		cands = [cands[0]]
+	for c in cands:
+		var a = c[1]
+		if z.get("dmg", 0.0) > 0.0:
+			hit(owner, a, z.dmg, {"from": z.pos, "ranged": true, "dtype": z.get("dtype", "phys"), "can_crit": z.kind != "soul_storm"})
+		if z.get("slow", 0.0) > 0.0:
+			a.add_slow(z.slow, z.get("slow_mul", 0.5))
+		if z.get("burn", 0) > 0:
+			a.add_burn(int(z.burn), owner)
+		if z.get("blizzard", false):
+			a.set_meta("blizz_owner", owner)
+			a.set_meta("blizz_t", time + 0.8)
+		hits += 1
+	if hits and z.kind in ["orbit_blade", "revelation"]:
+		sfx("hit", z.pos, 0.2)
+	if z.kind == "revelation":
+		spawn_ring_burst(z.pos + Vector3(0, 0.3, 0), Skills.GOLD, z.radius)
+
+
+func end_zone(owner, kind: String) -> void:
+	for z in zones:
+		if z.owner == owner and z.kind == kind:
+			z.t = 0.0
+
+
 # ------------------------------------------------------------------ 직업 스킬 연동
 func spawn_summon(owner, p: Vector3) -> void:
-	var s := Summon.new(self, owner, p)
+	var s := Summon.new(self, owner, p, 98.37 * owner.dmg_mul())
 	add_actor(s)
 	spawn_ring_burst(p + Vector3(0, 0.2, 0), Skills.NATURE, 2.5)
+
+
+# 드루이드가 그림자 돌격으로 때린 적을 나무 정령이 즉시 공격
+func summon_focus(c) -> void:
+	for a in actors:
+		if a.kind == "summon" and a.alive and a.owner_actor == c:
+			var best = null
+			var bd := 8.0
+			for e in actors:
+				if e.alive and hostile(c, e) and e.pos.distance_to(c.pos) < 3.5 and e.pos.distance_to(a.pos) < bd:
+					bd = e.pos.distance_to(a.pos)
+					best = e
+			if best != null:
+				a.target = best
+				a.atk_cd = 0.0
+
+
+# 부활 (프리스트 '부활' 패시브 또는 부활석)
+func revive_player(t, by) -> void:
+	if t.alive or t.done:
+		return
+	t.alive = true
+	t.hp = t.max_hp * 0.3
+	t.revive_wait = 0.0
+	t.death_t = 0.0
+	spawn_ring_burst(t.pos + Vector3(0, 0.5, 0), Skills.GOLD, 3.0)
+	sfx("heal", t.pos)
+	notify(t, "toast", ["%s 님이 부활시켰습니다" % (by.name if by != null else "부활석")])
+	notify(t, "revived", [])
+	for h in players:
+		notify(h, "killfeed", ["%s 부활" % t.name, false, true])
+
+
+# ------------------------------------------------------------------ 영혼 에너지볼 (데스나이트/크라이오맨서)
+var soul_orbs: Array = []
+var orb_seq := 0
+
+
+func spawn_soul_orb(p: Vector3) -> void:
+	orb_seq += 1
+	_add_orb_node(orb_seq, p)
+	_bc("orb_add", [orb_seq, p])
+
+
+func _add_orb_node(id: int, p: Vector3) -> void:
+	var m := Models.sphere(0.22, Models.glow_mat(Skills.SOUL, 3.0), 8)
+	m.position = Vector3(p.x, 1.0, p.z)
+	world.add_child(m)
+	soul_orbs.append({"id": id, "pos": Vector3(p.x, 0, p.z), "node": m, "life": 60.0})
+
+
+func update_soul_orbs(dt: float) -> void:
+	var i := soul_orbs.size() - 1
+	while i >= 0:
+		var o: Dictionary = soul_orbs[i]
+		o.life -= dt
+		o.node.position.y = 1.0 + sin(time * 3.0 + o.id) * 0.15
+		var taken := false
+		if is_auth():
+			for a in actors:
+				if a.alive and not a.extracted and a.is_hero() and a.res_type() == "soul" and a.pos.distance_to(o.pos) < 2.6:
+					Skills.gain(a, 15.0)
+					if Skills.has_fx(a, "life_drain"):
+						a.heal_now(14.0)
+					notify(a, "sfx", ["magic"])
+					taken = true
+					break
+		if taken or (o.life <= 0.0 and is_auth()):
+			o.node.queue_free()
+			soul_orbs.remove_at(i)
+			_bc("orb_del", [o.id])
+		i -= 1
 
 
 # 드루이드 변신: 플레이어는 뷰모델 교체, AI는 모델 전환 (AIActor.active_rig)
@@ -894,7 +1279,7 @@ func _rebuild_view_model() -> void:
 		return
 	if view_model != null and is_instance_valid(view_model):
 		view_model.queue_free()
-	view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment), player.panther)
+	view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment, player.wset), player.panther)
 	camera.add_child(view_model)
 
 
@@ -1029,6 +1414,9 @@ func on_death(actor, src) -> void:
 				notify(h, "killfeed", ["%s ➜ %s" % [sname if src != h else "당신", actor.display_name() if actor != h else "당신"], src == h or actor == h])
 	sfx("death", actor.pos)
 	actor.windup = 0.0
+	if actor.kind in ["player", "bot"] or (actor.kind == "monster" and actor.def.get("ai", "") != "harmless"):
+		spawn_soul_orb(actor.pos)
+	_kill_hooks(actor, src)
 	if actor.kind == "monster":
 		if is_human(src):
 			src.kills += 1
@@ -1036,10 +1424,10 @@ func on_death(actor, src) -> void:
 		var luck := (1.2 if depth > 1 else 0.0) + (3.0 if is_boss else 0.0)
 		if is_boss:
 			boss_dead = true
-			notify_all("announce", ["망령 기사가 쓰러졌습니다", "황금 보물상자를 차지하세요"])
-			drop_bag(actor.pos, Data.roll_loot(5, luck), "망령 기사의 유해", Color(1, 0.8, 0.2))
+			notify_all("announce", ["%s 처치!" % actor.name, "보스의 전리품이 떨어졌습니다"])
+			drop_items(actor.pos, Data.roll_loot(5, luck))
 		elif randf() < 0.4:
-			drop_bag(actor.pos, Data.roll_loot(randi_range(1, 2), luck), actor.name + "의 유해", Color(0.42, 0.31, 0.19))
+			drop_items(actor.pos, Data.roll_loot(randi_range(1, 2), luck))
 	elif actor.kind == "bot":
 		if is_human(src):
 			src.pvp_kills += 1
@@ -1048,7 +1436,44 @@ func on_death(actor, src) -> void:
 	elif is_human(actor):
 		if is_human(src) and src != actor:
 			src.pvp_kills += 1
-		finish_player(actor, false, src.display_name() if src != null else "어둠")
+		# 파티 플레이: 살아 있는 파티원이 있으면 20초 동안 부활을 기다림
+		var ally_alive := false
+		if online() and not pvp:
+			for h in players:
+				if h != actor and not h.done and h.alive and h.faction == actor.faction:
+					ally_alive = true
+		if ally_alive:
+			actor.revive_wait = 20.0
+			actor.killer_name = src.display_name() if src != null else "어둠"
+			notify(actor, "toast", ["쓰러졌습니다 - 20초 안에 파티원이 부활시킬 수 있습니다"])
+		else:
+			finish_player(actor, false, src.display_name() if src != null else "어둠")
+
+
+# 처치 시 효과: 처치 시 생명력, 미다스의 손, 직업 패시브(흥분/화환 갱신/사신/암살), 실수
+func _kill_hooks(actor, src) -> void:
+	if src == null or not src.is_hero() or src == actor:
+		return
+	var st: Dictionary = src.stats
+	if st.get("life_on_kill", 0.0) > 0.0:
+		src.heal_now(st.life_on_kill)
+	if Data.set_tier(st, "midas") >= 1 and src.get("bag") != null:
+		var coins := Data.make_item("gold_coins")
+		coins.count = 30
+		Inv.add_auto(src.bag, Inv.bag_size(src.cls), coins)
+		inv_changed(src)
+	if Skills.has_fx(src, "assassinate"):
+		Skills.enter_stealth(src, 6.0)
+	if is_adventurer(actor):
+		var e_id := Skills.skill_id(src, "e")
+		if Skills.has_fx(src, "excite") and e_id == "fighter_inspire":
+			src.cd.e = 0.0
+		if Skills.has_fx(src, "wreath") and e_id == "pyro_fireshock":
+			src.cd.e = 0.0
+		if Skills.has_fx(src, "reaper") and e_id == "dk_soul_chain":
+			src.cd.e = 0.0
+		if "mistake" in st.get("uniques", []):
+			src.hp = src.max_hp
 
 
 func drop_bag(p: Vector3, items: Array, nm: String, color := Color(0.42, 0.31, 0.19)) -> void:
@@ -1062,6 +1487,51 @@ func drop_bag(p: Vector3, items: Array, nm: String, color := Color(0.42, 0.31, 0
 	b["gw"] = pk.gw
 	b["gh"] = pk.gh
 	_bc("bag_add", [bag_seq, pp, color, nm, items.size()])
+
+
+# 바닥에 아이템 하나를 떨어뜨림 (아이템 모양 + 등급 빛줄기, F로 줍기)
+func drop_item(p: Vector3, it: Dictionary, scatter := 0.0) -> void:
+	var pp := Vector3(p.x, 0, p.z)
+	if scatter > 0.0:
+		for _i in 6:
+			var q := pp + Vector3(randf_range(-scatter, scatter), 0, randf_range(-scatter, scatter))
+			if not dungeon.is_solid(q.x, q.z):
+				pp = q
+				break
+	bag_seq += 1
+	var b := _add_item_node(bag_seq, pp, str(it.base), int(it.get("rarity", 0)))
+	b.items = [it]
+	b.n = 1
+	_bc("item_add", [bag_seq, pp, str(it.base), int(it.get("rarity", 0))])
+
+
+func drop_items(p: Vector3, items: Array) -> void:
+	for it in items:
+		drop_item(p, it, 1.2 if items.size() > 1 else 0.4)
+
+
+func _add_item_node(id: int, pp: Vector3, base_id: String, rar: int) -> Dictionary:
+	var node := Models.ground_item(base_id, rar)
+	node.position = pp
+	world.add_child(node)
+	var nm: String = Data.ITEM_BASES.get(base_id, {}).get("name", "아이템")
+	var b := {"id": id, "pos": pp, "node": node, "items": [], "name": nm, "kind": "item", "n": 1, "rarity": rar}
+	loot_bags.append(b)
+	return b
+
+
+func pickup_item(p, o: Dictionary) -> void:
+	if o.items.is_empty():
+		return
+	var it: Dictionary = o.items[0]
+	if not Inv.add_auto(p.bag, Inv.bag_size(p.cls), it):
+		notify(p, "toast", ["가방에 자리가 없습니다"])
+		return
+	o.items.clear()
+	notify(p, "sfx", ["pickup"])
+	refresh_bag(o)
+	p.recalc()
+	inv_changed(p)
 
 
 func _add_bag_node(id: int, pp: Vector3, color: Color, nm: String) -> Dictionary:
@@ -1151,8 +1621,8 @@ func inv_changed(p) -> void:
 	if p == player:
 		if hud != null:
 			hud.refresh_panels()
-	elif p.peer_id > 1 and is_auth():
-		Net.send_ev(p.peer_id, "inv", [p.equipment, p.bag])
+	elif p is Player and p.peer_id > 1 and is_auth():
+		Net.send_ev(p.peer_id, "inv", [p.equipment, p.bag, p.wset])
 
 
 # HUD의 인벤토리 조작 요청 (클라이언트는 서버로 보냄)
@@ -1208,6 +1678,10 @@ func inv_op(p, op: String, args: Array) -> void:
 			if args.size() < 2:
 				return
 			var src := str(args[0])
+			# 던전본처럼: 상자가 열려 있지 않으면 Shift+클릭 = 바닥에 버리기
+			if src != "cont" and p.container == null:
+				inv_op(p, "drop", args)
+				return
 			res = Inv.transfer(_ctx_of(p), src, str(args[1]), ["cont", "bag"] if src == "equip" else (["bag"] if src == "cont" else ["cont"]))
 		"use":
 			var i := Inv.index_of(p.bag, str(args[0]) if args.size() else "")
@@ -1223,7 +1697,8 @@ func inv_op(p, op: String, args: Array) -> void:
 			if it == null or str(args[0]) == "cont":
 				return
 			Inv._take(ctx, str(args[0]), it.id)
-			drop_bag(p.pos + Actor.fwd(p.yaw) * 1.2, [it], "버려진 물건")
+			drop_item(p.pos + Actor.fwd(p.yaw) * 1.1, it, 0.3)
+			notify(p, "sfx", ["drop"])
 			res = {"ok": true}
 		"take_all":
 			var c = p.container
@@ -1261,6 +1736,19 @@ func _use_item(p, it: Dictionary) -> void:
 
 # ------------------------------------------------------------------ 포탈
 func spawn_portal(kind: String) -> void:
+	# 지도에 정해진 탈출 지점이 있으면 먼저 사용
+	if kind == "exit":
+		for t in dungeon.marks.exits:
+			var ep := dungeon.center(t.x, t.y)
+			var taken := false
+			for p in portals:
+				if p.pos.distance_to(ep) < 4.0:
+					taken = true
+			if not taken:
+				portal_seq += 1
+				_add_portal_node(portal_seq, kind, ep)
+				_bc("portal_add", [portal_seq, kind, ep])
+				return
 	var candidates := []
 	for r in dungeon.rooms:
 		if r.boss:
@@ -1375,13 +1863,13 @@ func finish_player(p, success: bool, killer := "") -> void:
 		return
 	p.done = true
 	var items := []
-	for s in Data.GEAR_SLOTS:
+	for s in Data.ALL_SLOTS:
 		if p.equipment[s] != null:
 			items.append(p.equipment[s])
 	items.append_array(p.bag)
 	var r := {
 		"success": success, "killer": killer, "items": items, "value": Data.items_value(items),
-		"kills": p.kills, "pvp_kills": p.pvp_kills, "depth": depth, "time": time,
+		"kills": p.kills, "pvp_kills": p.pvp_kills, "depth": depth, "time": time, "char": p.char_id,
 		"equipment": p.equipment, "bag": p.bag,
 	}
 	close_container_for(p)
@@ -1444,7 +1932,7 @@ func find_interactable(pl = null):
 	var f := Actor.fwd(pl.yaw)
 	var best = null
 	var bs := -1e9
-	for list in [chests, loot_bags]:
+	for list in [chests, loot_bags, fixtures]:
 		for o in list:
 			var dx: float = o.pos.x - pl.pos.x
 			var dz: float = o.pos.z - pl.pos.z
@@ -1470,6 +1958,15 @@ func _prompt_for(o) -> String:
 		return ""
 	if o.kind == "chest" and not o.opened:
 		return "[F] 길게 눌러 %s 열기" % o.name
+	if o.kind == "item":
+		return "[F] 줍기: %s" % o.name
+	match o.kind:
+		"shrine":
+			return "%s (사용함)" % o.name if o.used else "[F] 길게 눌러 %s 사용 (체력 회복)" % o.name
+		"stone":
+			return "[F] 길게 눌러 %s 사용 (쓰러진 파티원 부활)" % o.name
+		"stairs":
+			return "%s — 2층 준비 중" % o.name
 	return "[F] %s 살펴보기 (%d)" % [o.name, _item_count(o)]
 
 
@@ -1502,7 +1999,21 @@ func _interact_for(p, dt: float) -> void:
 		return
 	if local and hud != null:
 		hud.prompt(_prompt_for(o))
-	if o.kind == "chest" and not o.opened:
+	if o.kind in ["shrine", "stone"] and not o.get("used", false):
+		if p.inp.pressed("interact") and not panel and not menu:
+			p.interact_t += dt
+			var need := 1.5 if o.kind == "shrine" else 3.0
+			channel_for(p, "%s 사용 중..." % o.name, p.interact_t / need)
+			if p.interact_t >= need:
+				p.interact_t = 0.0
+				if is_auth():
+					_use_fixture(p, o)
+		else:
+			p.interact_t = 0.0
+	elif o.kind in ["shrine", "stone", "stairs"]:
+		if p.inp.just_pressed("interact") and o.kind == "stairs" and is_auth():
+			_use_fixture(p, o)
+	elif o.kind == "chest" and not o.opened:
 		if p.inp.pressed("interact") and not panel and not menu:
 			p.interact_t += dt
 			channel_for(p, "상자 여는 중...", p.interact_t / 1.2)
@@ -1513,7 +2024,11 @@ func _interact_for(p, dt: float) -> void:
 		else:
 			p.interact_t = 0.0
 	elif p.inp.just_pressed("interact") and not menu:
-		open_container_for(p, o)
+		if o.kind == "item":
+			if is_auth():
+				pickup_item(p, o)
+		else:
+			open_container_for(p, o)
 
 
 # ------------------------------------------------------------------ 메인 루프
@@ -1556,9 +2071,11 @@ func _process(delta: float) -> void:
 	update_projectiles(dt)
 	update_zones(dt)
 	update_effects(dt)
+	update_soul_orbs(dt)
 	for b in loot_bags:
 		b.node.rotation.y += dt
 	update_portals(dt)
+	_update_revive_wait(dt)
 	_update_view(dt)
 
 	# 죽은 몬스터/봇 정리 (시체는 잠시 남김)
@@ -1593,6 +2110,16 @@ func _process(delta: float) -> void:
 	# 함께하기: 모두 끝났고 내 결과 화면도 넘어갔으면 레이드 종료
 	if over and net != "offline" and (player == null or (result != null and end_timer < 0.0)):
 		_finish_raid()
+
+
+# 쓰러진 파티원: 부활 대기 시간이 끝나면 사망 처리
+func _update_revive_wait(dt: float) -> void:
+	for p in players:
+		if not p.alive and not p.done and p.revive_wait > 0.0:
+			p.revive_wait -= dt
+			channel_for(p, "부활 대기 중... 파티원이 부활석이나 '부활'로 살릴 수 있습니다", p.revive_wait / 20.0)
+			if p.revive_wait <= 0.0:
+				finish_player(p, false, p.killer_name)
 
 
 func _finish_raid() -> void:
@@ -1758,7 +2285,7 @@ func net_inv(id: int, op: String, args: Array) -> void:
 # 스냅샷 한 줄 (float 10개): id, x, y, z, yaw, hp, flags, move, windup_k, attack
 const ACT_STRIDE := 10
 const PROJ_STRIDE := 10
-const PROJ_KINDS := ["arrow", "knife", "blade", "bolt", "firebolt", "pyroblast", "icebolt", "thorn", "poison", "grasp", "fireball"]
+const PROJ_KINDS := ["arrow", "knife", "blade", "bolt", "firebolt", "pyroblast", "icebolt", "thorn", "poison", "grasp", "fireball", "holy", "spit", "magic_orb"]
 
 
 func _pack_actor(out: PackedFloat32Array, a) -> void:
@@ -1830,8 +2357,9 @@ func client_info(p) -> Dictionary:
 	for c in chests:
 		cs.append([c.id, c.pos, c.rot, c.tier, c.name, c.opened])
 	return {
-		"seed": level_seed, "depth": depth, "time_left": time_left, "pvp": pvp,
-		"me": {"nid": p.nid, "pos": p.pos, "yaw": p.yaw, "cls": p.cls, "equipment": p.equipment, "bag": p.bag, "name": p.name, "faction": p.faction},
+		"seed": level_seed, "depth": depth, "time_left": time_left, "pvp": pvp, "map": map_id,
+		"fix_used": fixtures.filter(func(f): return f.used).map(func(f): return f.id),
+		"me": {"nid": p.nid, "pos": p.pos, "yaw": p.yaw, "cls": p.cls, "equipment": p.equipment, "bag": p.bag, "name": p.name, "faction": p.faction, "skills": p.skills, "wset": p.wset},
 		"actors": acts, "chests": cs, "players": players.size(),
 	}
 
@@ -1853,12 +2381,16 @@ func start_client(info: Dictionary, hud_node) -> void:
 	world.name = "World"
 	add_child(world)
 	_make_env(depth > 1)
-	dungeon = Dungeon.new(depth, level_seed + depth)
+	map_id = info.get("map", map_id)
+	dungeon = Dungeon.new(depth, level_seed + depth, map_id)
 	dungeon.build(world, false)
 	_reset_lists(depth)
+	_spawn_fixtures()
+	for fid in info.get("fix_used", []):
+		_fixture_used(int(fid))
 	portal_schedule = []
 	var me: Dictionary = info.me
-	player = Player.new(self, me.pos, me.cls, me.equipment, me.bag, me.name, me.faction, 0)
+	player = Player.new(self, me.pos, me.cls, me.equipment, me.bag, me.name, me.faction, 0, me.get("skills", {}), int(me.get("wset", 1)))
 	player.nid = me.nid
 	player.yaw = me.yaw
 	players = [player]
@@ -1924,6 +2456,7 @@ func _process_client(dt: float) -> void:
 		if z.kind == "orbit_blade":
 			z.node.get_node("Pivot").rotation.y += dt * 9.0
 	update_effects(dt)
+	update_soul_orbs(dt)
 	for b in loot_bags:
 		b.node.rotation.y += dt
 	_animate_portals(dt)
@@ -1948,7 +2481,7 @@ func _client_send_input(dt: float) -> void:
 	var bits := InputState.pack_held()
 	if not acting:
 		# 메뉴/인벤토리가 열려 있어도 이동은 가능, 공격은 불가
-		bits &= ~((1 << 5) | (1 << 6))
+		bits &= ~((1 << 5) | (1 << 6) | (1 << 8) | (1 << 9))
 	var panel: bool = hud.is_panel_open() or menu_open
 	Net.send_input(player.pos, player.yaw, player.pitch, bits, acting, panel)
 
@@ -2072,6 +2605,10 @@ func net_event(n: String, args: Array) -> void:
 		"bag_add":
 			var b := _add_bag_node(args[0], args[1], args[2], args[3])
 			b.n = args[4]
+		"fix_used":
+			_fixture_used(int(args[0]))
+		"item_add":
+			_add_item_node(args[0], args[1], args[2], args[3])
 		"bag_n":
 			var b = _find_by_id(loot_bags, args[0])
 			if b != null:
@@ -2081,6 +2618,13 @@ func net_event(n: String, args: Array) -> void:
 			if b != null:
 				b.node.queue_free()
 				loot_bags.erase(b)
+		"orb_add":
+			_add_orb_node(args[0], args[1])
+		"orb_del":
+			var o = _find_by_id(soul_orbs, args[0])
+			if o != null:
+				o.node.queue_free()
+				soul_orbs.erase(o)
 		"portal_add":
 			_add_portal_node(args[0], args[1], args[2])
 		"portal_del":
@@ -2091,7 +2635,9 @@ func net_event(n: String, args: Array) -> void:
 		"inv":
 			player.equipment = args[0]
 			player.bag = args[1]
-			player.stats = Data.compute_stats(player.cls, player.equipment)
+			if args.size() > 2:
+				player.wset = int(args[2])
+			player.stats = Data.compute_stats(player.cls, player.equipment, player.wset)
 			player.armor = player.stats.armor
 			_rebuild_view_model()
 			if hud != null:

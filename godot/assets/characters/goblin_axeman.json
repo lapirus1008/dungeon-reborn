@@ -1,0 +1,29 @@
+{
+ "source": "res://assets/kaykit/characters/Skeleton_Minion.glb",
+ "scale": 0.72,
+ "tint": {
+  "*": "#8fbf6a",
+  "1H_Axe": "#b0b0b0"
+ },
+ "attach": [
+  {
+   "from": "res://assets/kaykit/characters/Barbarian.glb",
+   "mesh": "1H_Axe",
+   "slot": "r"
+  }
+ ],
+ "animations": {
+  "idle": "Idle_Combat",
+  "walk": "Running_B",
+  "run": "Running_B",
+  "death": "Death_B",
+  "hit": "Hit_B",
+  "block": "Blocking",
+  "cast": "Spellcast_Shoot",
+  "spin": "Hit_A",
+  "attack": [
+   "1H_Melee_Attack_Chop",
+   "1H_Melee_Attack_Stab"
+  ]
+ }
+}

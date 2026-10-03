@@ -35,7 +35,22 @@ var last_pos := Vector3.ZERO
 var cls := ""
 var stats: Dictionary = {}
 var res := 0.0 # 마나/영혼/원시 에너지
-var cd := {"lmb": 0.0, "rmb": 0.0, "q": 0.0, "e": 0.0, "potion": 0.0}
+var cd := {"lmb": 0.0, "rmb": 0.0, "q": 0.0, "e": 0.0, "potion": 0.0, "util": 0.0}
+var skills: Dictionary = {} # {"q": 스킬 id, "e": 스킬 id}
+var wset := 1 # 사용 중인 무기 세트
+var channel_kind := "" # 은신 준비 종류 (stealth/veil)
+var soul_storm := false
+var storm_tick := 0.0
+var barrier := false # 얼음 베리어
+var charges := 1 # 자연의 힘 / 수호 충전
+var charge_cd := 0.0
+var pursuit_t := 0.0 # 승리의 추격
+var quick_cast_t := 0.0 # 급속 시전
+var petrify_coat := 0.0 # 석화 중독 발라 둔 시간
+var soul_shield_cd := 0.0
+var revive_used := false
+var frost_scale := 0
+var counter_ready := false # 방어 반격
 var dash = null # {dir, speed, t, hit, hit_done, stun}
 var spin_t := 0.0 # 파이터 회오리 베기
 var spin_tick := 0.0
@@ -61,6 +76,23 @@ var shield := 0.0
 var blocking := false
 var block_mul := 0.25
 var dots: Array = [] # {dps, t, src}
+# 던전본 스킬 상태
+var burn := 0 # 연소 중첩 (2초마다 1중첩 제거, 10 화염 피해)
+var burn_t := 0.0
+var burn_src = null
+var petrified := 0.0 # 석화: 행동 불가, 피해 무효, 공격받으면 해제
+var curse_t := 0.0 # 서리의 저주
+var curse_src = null
+var curse_dps := 0.0
+var speed_buffs: Array = [] # {v: 이동 속도 포인트, t, dur, decay}
+var dr_list := {} # 피해 감소 출처 -> [비율, 남은 시간]
+var warcry_t := 0.0 # 광기의 포효
+var ice_armor := false # 아이스 아머 근접 반격 둔화 (1회)
+var combat_t := 99.0 # 마지막 전투 후 시간
+var pity_used := false
+var dragon_cd := 0.0
+var dragon_hits := 0
+var vuln_t := 0.0 # 취약 (받는 피해 +20%)
 
 
 func _init(g, o: Dictionary) -> void:
@@ -121,7 +153,36 @@ func can_move() -> bool:
 
 
 func speed_factor() -> float:
-	return slow_mul if slow > 0.0 else 1.0
+	var f := slow_mul if slow > 0.0 else 1.0
+	var bonus := 0.0
+	for b in speed_buffs:
+		bonus += b.v * (b.t / b.dur if b.decay else 1.0)
+	return maxf(0.2, f * (1.0 + bonus / 300.0))
+
+
+# 이동 속도 증감 (던전본 이동 속도 포인트, 300 = 기본 속도)
+func add_speed(v: float, t: float, decay := false) -> void:
+	speed_buffs.append({"v": v, "t": t, "dur": t, "decay": decay})
+
+
+func add_dr(key: String, amount: float, t: float) -> void:
+	dr_list[key] = [amount, t]
+
+
+func add_burn(stacks: int, src) -> void:
+	if immune > 0.0 or frozen > 0.0:
+		return
+	burn = mini(10, burn + stacks)
+	burn_src = src
+	if burn_t <= 0.0:
+		burn_t = 2.0
+
+
+func petrify(t: float) -> void:
+	if immune > 0.0 or frozen > 0.0:
+		return
+	petrified = t
+	stun = maxf(stun, t)
 
 
 # ------------------------------------------------------------------ 상태이상
@@ -158,6 +219,10 @@ func cleanse() -> void:
 	root = 0.0
 	stun = 0.0
 	dots.clear()
+	burn = 0
+	curse_t = 0.0
+	petrified = 0.0
+	speed_buffs = speed_buffs.filter(func(b): return b.v > 0)
 
 
 func break_stealth() -> void:
@@ -181,6 +246,13 @@ func give_shield(amount: float, t: float, color := Color(0.35, 0.65, 1.0)) -> vo
 func take_damage(amount: float, src, info: Dictionary = {}) -> float:
 	if not alive or invuln > 0.0 or frozen > 0.0:
 		return 0.0
+	combat_t = 0.0
+	# 석화: 공격을 받으면 해제되고 그 피해는 무효
+	if petrified > 0.0:
+		petrified = 0.0
+		stun = 0.0
+		hit_flash = 0.15
+		return 0.0
 	var from = info.get("from", src.pos if src != null else null)
 	# 패링: 모든 피해 무효, 가까운 근접 공격자는 기절
 	if parry > 0.0:
@@ -197,9 +269,39 @@ func take_damage(amount: float, src, info: Dictionary = {}) -> float:
 			blocked = true
 			dmg *= block_mul
 			on_block(amount)
-	dmg *= 100.0 / (100.0 + armor)
+			if is_hero():
+				# 방어 반격: 블로킹 성공 시 다음 공격 치명타 / 고유 방패 효과
+				if Skills.has_fx(self, "counter"):
+					counter_ready = true
+				var u: Array = stats.get("uniques", [])
+				if "block_slow" in u and src != null and src != self:
+					src.add_slow(1.5, 0.5)
+				if "block_speed" in u:
+					add_speed(150.0, 2.0, true)
+	info["blocked"] = blocked
+	var st: Dictionary = stats
+	var dtype: String = info.get("dtype", "phys")
+	if dtype == "phys":
+		dmg *= 100.0 / (100.0 + armor)
+		dmg *= 1.0 - st.get("pres", 0.0) - (0.3 if warcry_t > 0.0 else 0.0)
+	elif dtype != "true":
+		dmg *= 1.0 - st.get("mres", 0.0)
 	if dr > 0.0:
 		dmg *= 1.0 - dr
+	for k in dr_list:
+		dmg *= 1.0 - dr_list[k][0]
+	if vuln_t > 0.0:
+		dmg *= 1.2
+	# 용비늘 세트: 피격 시 50% 감소 (60초마다, 2단계는 3회/3초)
+	var dragon := Data.set_tier(st, "dragon") if st.has("sets") else 0
+	if dragon > 0 and dmg > 0.0:
+		if dragon_hits > 0:
+			dmg *= 0.5
+			dragon_hits -= 1
+		elif dragon_cd <= 0.0:
+			dmg *= 0.5
+			dragon_cd = 30.0 if "cloudwall" in st.get("uniques", []) else 60.0
+			dragon_hits = 2 if dragon >= 2 else 0
 	var absorbed := 0.0
 	if shield > 0.0:
 		absorbed = minf(shield, dmg)
@@ -207,6 +309,10 @@ func take_damage(amount: float, src, info: Dictionary = {}) -> float:
 		dmg -= absorbed
 		on_shield_hit(absorbed)
 	dmg = maxf(0.0, dmg)
+	# 아이스 아머: 근접 공격자 둔화 (1회)
+	if ice_armor and absorbed > 0.0 and src != null and src != self and not info.get("ranged", false):
+		ice_armor = false
+		src.add_slow(2.0, 0.4)
 	hp -= dmg
 	hit_flash = 0.15
 	if dmg > 0.0:
@@ -224,6 +330,13 @@ func take_damage(amount: float, src, info: Dictionary = {}) -> float:
 	game.on_damage(self, dmg, src, blocked, info)
 	on_hurt(src)
 	if hp <= 0.0:
+		# 죽음의 연민 세트: 치명상을 1회 버팀
+		var pity := Data.set_tier(st, "pity") if st.has("sets") else 0
+		if pity > 0 and not pity_used:
+			pity_used = true
+			hp = 70.0
+			game.notify(self, "toast", ["죽음의 연민: 치명상을 버텼습니다"])
+			return dmg
 		hp = 0.0
 		alive = false
 		game.on_death(self, src)
@@ -262,6 +375,42 @@ func tick_common(dt: float) -> void:
 			set(k, v - dt)
 	if frozen > 0.0:
 		frozen -= dt
+	combat_t += dt
+	for k in ["petrified", "warcry_t", "dragon_cd", "vuln_t"]:
+		var v2: float = get(k)
+		if v2 > 0.0:
+			set(k, v2 - dt)
+	for k in dr_list.keys():
+		dr_list[k][1] -= dt
+		if dr_list[k][1] <= 0.0:
+			dr_list.erase(k)
+	if speed_buffs.size():
+		for b in speed_buffs:
+			b.t -= dt
+		speed_buffs = speed_buffs.filter(func(b): return b.t > 0.0)
+	# 연소: 2초마다 1중첩 제거하며 10 화염 피해
+	if burn > 0:
+		burn_t -= dt
+		if burn_t <= 0.0:
+			burn_t = 2.0
+			burn -= 1
+			if alive:
+				take_damage(10.0, burn_src, {"dtype": "fire", "ranged": true, "dot": true})
+	# 서리의 저주: 지속 피해, 시전자 회복
+	if curse_t > 0.0:
+		curse_t -= dt
+		if alive:
+			hp -= curse_dps * dt * (1.0 - stats.get("mres", 0.0))
+			hit_flash = maxf(hit_flash, 0.02)
+			if curse_src != null and curse_src.alive:
+				curse_src.heal_now(6.55 * dt)
+			if hp <= 0.0:
+				hp = 0.0
+				alive = false
+				game.on_death(self, curse_src)
+	# 비전투 생명력 재생
+	if combat_t > 6.0 and stats.get("regen_ooc", 0.0) > 0.0 and alive:
+		hp = minf(max_hp, hp + stats.regen_ooc * dt)
 	if dr_t > 0.0:
 		dr_t -= dt
 		if dr_t <= 0.0:

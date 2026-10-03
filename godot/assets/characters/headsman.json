@@ -1,0 +1,32 @@
+{
+ "source": "res://assets/kaykit/characters/Barbarian.glb",
+ "scale": 1.05,
+ "show": [
+  "Barbarian_Hat"
+ ],
+ "attach": [
+  {
+   "from": "res://assets/kaykit/characters/Barbarian.glb",
+   "mesh": "2H_Axe",
+   "slot": "r"
+  }
+ ],
+ "tint": {
+  "*": "#5a4a40",
+  "2H_Axe": "#8a8a8a"
+ },
+ "animations": {
+  "idle": "Idle",
+  "walk": "Walking_A",
+  "run": "Running_A",
+  "block": "Blocking",
+  "cast": "Spellcast_Shoot",
+  "death": "Death_A",
+  "hit": "Hit_A",
+  "spin": "2H_Melee_Attack_Spinning",
+  "attack": [
+   "2H_Melee_Attack_Chop",
+   "2H_Melee_Attack_Slice"
+  ]
+ }
+}

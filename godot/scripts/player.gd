@@ -38,21 +38,34 @@ var net_pos := Vector3.ZERO
 var has_net := false
 var forced_t := 0.0 # 넉백/돌진 중에는 서버 위치를 우선
 var done := false # 탈출/사망으로 레이드 종료
+var revive_wait := 0.0 # 쓰러진 뒤 부활을 기다리는 시간 (파티)
+var killer_name := ""
+var char_id := ""
+var hold_q := -1.0 # 누르고 있는 Q/E (화염 폭발, 치료)
+var hold_e := -1.0
 var puppet = null # 호스트 화면에 원격 플레이어를 그리는 NetActor
 var ch: Array = [] # 이번 프레임 진행 바 [문구, 비율] (원격 전송용)
 
 
-func _init(g, p: Vector3, c: String, eq: Dictionary, b: Array, pname := "당신", fac := "player", peer := 0) -> void:
-	var st := Data.compute_stats(c, eq)
+func _init(g, p: Vector3, c: String, eq: Dictionary, b: Array, pname := "당신", fac := "player", peer := 0, sk := {}, ws := 1) -> void:
+	var st := Data.compute_stats(c, eq, ws)
 	super(g, {"kind": "player", "name": pname, "faction": fac, "pos": p, "hp": st.max_hp, "armor": st.armor, "radius": 0.4})
 	peer_id = peer
 	inp = InputState.new(peer > 1)
 	cls = c
 	equipment = eq
+	for k in Data.ALL_SLOTS:
+		if not equipment.has(k):
+			equipment[k] = null
 	bag = b
+	wset = ws
+	skills = sk.duplicate() if sk.size() else Account.default_skills(c)
 	stats = st
-	res = st.res_max if st.res != "soul" else 30.0
-	block_mul = 0.25 if c == "fighter" else 0.4
+	res = st.res_max if st.res == "mana" else st.res_max * 0.4
+	block_mul = 1.0 - st.block_pct / 100.0 if st.block_pct > 0.0 else 0.4
+	charges = 1
+	if c == "druid" and Skills.has_fx(self, "nature_seed"):
+		charges = 2
 
 
 func display_name() -> String:
@@ -64,13 +77,27 @@ func is_remote() -> bool:
 
 
 func recalc() -> void:
-	var st := Data.compute_stats(cls, equipment)
+	var st := Data.compute_stats(cls, equipment, wset)
 	var ratio := hp / max_hp
 	stats = st
 	max_hp = st.max_hp
 	hp = clampf(ratio * max_hp, 1.0, max_hp)
 	armor = st.armor
 	res = minf(res, st.res_max)
+	block_mul = 1.0 - st.block_pct / 100.0 if st.block_pct > 0.0 else 0.4
+	game.on_weapon_changed(self)
+
+
+# 무기 세트 교체 (X)
+func swap_weapon_set() -> void:
+	if swing != null or spin_t > 0.0 or dash != null:
+		return
+	wset = 2 if wset == 1 else 1
+	if panther and Skills.wcat(self) == "":
+		Skills.set_panther(self, false)
+	recalc()
+	game.notify(self, "toast", ["무기 세트 %d" % wset])
+	game.inv_changed(self)
 	game.on_weapon_changed(self)
 
 
@@ -143,6 +170,8 @@ func update(dt: float) -> void:
 	Skills.tick_resource(self, dt)
 	Skills.tick_channel(self, dt)
 	Skills.tick_spin(self, dt)
+	Skills.tick_soul_storm(self, dt)
+	Skills.tick_barrier(self, dt)
 	if cast > 0.0:
 		cast -= dt
 
@@ -153,25 +182,26 @@ func update(dt: float) -> void:
 	var act := can_act and not locked and channel_t <= 0.0
 	_combat(dt, act)
 
-	# 물약
+	# 소모품 칸 1/2/3 (비어 있으면 가방에서 같은 종류)
 	if not locked and can_act and cd.potion <= 0.0:
-		var want := ""
-		if inp.just_pressed("potion1"):
-			want = "health_potion"
-		elif inp.just_pressed("potion2"):
-			want = "bandage"
-		if want != "":
-			var idx := ""
-			for it in bag:
-				if it.base == want:
-					idx = it.id
-					break
-			if idx == "":
-				game.notify(self, "toast", ["%s이(가) 없습니다" % Data.ITEM_BASES[want].name])
-			elif hp >= max_hp:
-				game.notify(self, "toast", ["체력이 가득 찼습니다"])
-			else:
-				use_consumable(idx)
+		for i in 3:
+			if inp.just_pressed("potion%d" % (i + 1)):
+				var it = equipment.get("q%d" % (i + 1))
+				if it == null:
+					game.notify(self, "toast", ["소모품 칸 %d이 비어 있습니다" % (i + 1)])
+				else:
+					var b: Dictionary = Data.base_of(it)
+					if b.has("heal") and hp >= max_hp:
+						game.notify(self, "toast", ["체력이 가득 찼습니다"])
+					elif b.has("mana") and (res_type() != "mana" or res >= res_max()):
+						game.notify(self, "toast", ["마나가 가득 찼거나 쓸 수 없습니다"])
+					else:
+						use_consumable(it.id)
+	# 무기 세트 교체 / 투척
+	if can_act and not locked and inp.just_pressed("swap_weapon"):
+		swap_weapon_set()
+	if can_act and not locked and inp.just_pressed("throw"):
+		Skills.throw_utility(self, aim())
 
 	# 원격 플레이어: 클라이언트가 보낸 위치를 검증 후 채택 (넉백/돌진 중에는 서버 위치 유지)
 	if inp.remote and has_net:
@@ -300,33 +330,20 @@ func _combat(dt: float, act: bool) -> void:
 	var lmb_held := act and inp.pressed("attack")
 	var free := swing == null and spin_t <= 0.0 and dash == null
 
-	# 우클릭
+	# 우클릭: 방패/무기 방어, 패링, 단검 투척, 지팡이 치기, 표범 포효
 	blocking = false
 	if Skills.uses_block(self):
 		blocking = rmb_held and stamina > 0.0 and free
 	elif rmb_pressed:
-		match cls:
-			"swordmaster":
-				Skills.start_parry(self)
-			"rogue":
-				Skills.throw_knife(self, aim())
-			"druid":
-				if panther:
-					Skills.roar(self)
-				elif free and cd.rmb <= 0.0:
-					cd.rmb = Skills.skill_def(self, "rmb").cd
-					_start_swing(Skills.melee_profile(self, true), true)
-			"pyromancer", "cryomancer":
-				if free and cd.rmb <= 0.0:
-					cd.rmb = Skills.skill_def(self, "rmb").cd
-					_start_swing(Skills.melee_profile(self, true), true)
-	# 프리스트 정화: 누르고 있다 놓으면 발동
-	if cls == "priest":
-		if rmb_held and cd.rmb <= 0.0:
-			charge_t = maxf(charge_t, 0.0) + dt
-		elif charge_t >= 0.0:
-			Skills.cleanse_heal(self, charge_t / 1.2)
-			charge_t = -1.0
+		if cls == "swordmaster":
+			Skills.start_parry(self)
+		elif cls == "rogue":
+			Skills.throw_knife(self, aim())
+		elif panther:
+			Skills.roar(self)
+		elif free and cd.rmb <= 0.0:
+			cd.rmb = 0.8
+			_start_swing(Skills.melee_profile(self, true), true)
 
 	# 좌클릭
 	if lmb_held and free and not blocking and cd.lmb <= 0.0:
@@ -337,13 +354,32 @@ func _combat(dt: float, act: bool) -> void:
 		elif Skills.fire_basic(self, aim()):
 			cast = 0.2
 
-	# Q / E
-	if act and inp.just_pressed("skill_q"):
-		if Skills.use_q(self, aim()):
-			cast = 0.3
-	if act and inp.just_pressed("skill_e"):
-		if Skills.use_e(self, aim()):
-			cast = 0.3
+	# Q / E (화염 폭발·치료는 누르고 있다가 놓으면 발동, F를 누른 채면 자신에게)
+	for slot in ["q", "e"]:
+		var key = "skill_" + slot
+		var sid := Skills.skill_id(self, slot)
+		var holding: float = hold_q if slot == "q" else hold_e
+		if sid in Skills.HOLD_SKILLS:
+			if act and inp.pressed(key) and cd[slot] <= 0.0:
+				holding = maxf(holding, 0.0) + dt
+				charge_t = holding
+			elif holding >= 0.0:
+				var a := aim()
+				a["self"] = inp.pressed("interact")
+				var charge := holding if sid == "pyro_pyroblast" else clampf(holding / 1.5, 0.0, 1.0)
+				if Skills._use(self, slot, a, charge):
+					cast = 0.3
+				holding = -1.0
+				charge_t = -1.0
+			if slot == "q":
+				hold_q = holding
+			else:
+				hold_e = holding
+		elif act and inp.just_pressed(key):
+			var a := aim()
+			a["self"] = inp.pressed("interact")
+			if Skills._use(self, slot, a, 1.0):
+				cast = 0.3
 
 	swinging = swing != null or spin_t > 0.0
 	if swing != null:
@@ -356,13 +392,26 @@ func _combat(dt: float, act: bool) -> void:
 
 
 func use_consumable(id: String) -> void:
+	var it = null
+	var slot := Inv.slot_of(equipment, id)
 	var i := Inv.index_of(bag, id)
-	if i < 0:
+	if slot != "":
+		it = equipment[slot]
+	elif i >= 0:
+		it = bag[i]
+	if it == null:
 		return
-	var it: Dictionary = bag[i]
 	var b: Dictionary = Data.ITEM_BASES[it.base]
-	bag.remove_at(i)
-	apply_heal(b.heal, 3.0 if it.base == "health_potion" else 2.0)
+	it.count = int(it.get("count", 1)) - 1
+	if it.count <= 0:
+		if slot != "":
+			equipment[slot] = null
+		else:
+			bag.remove_at(i)
+	if b.has("heal"):
+		apply_heal(b.heal * stats.get("heal_mul", 1.0), 3.0 if it.base == "health_potion" else 2.0)
+	if b.has("mana"):
+		Skills.gain(self, b.mana)
 	cd.potion = 1.2
 	add_slow(1.0, 0.6)
 	game.sfx("heal", pos)
@@ -426,7 +475,8 @@ func net_state() -> Dictionary:
 		"p": pos, "f": forced_t > 0.0 or dash != null, "a": alive,
 		"hp": hp, "mh": max_hp, "he": heal, "sh": shield, "sm": shield_max, "st": shield_t, "sc": shield_color, "shf": shield_hit_fx,
 		"r": res, "sta": stamina, "ex": exhausted,
-		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion],
+		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion, cd.util],
+		"chg": charges, "hold": [hold_q, hold_e],
 		"s": [stun, slow, root, stealth, frozen, parry, immune, dr, spin_t, channel_t, charge_t, cast],
 		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther,
 		"k": [kills, pvp_kills], "ch": ch,
@@ -457,6 +507,12 @@ func apply_net_state(d: Dictionary) -> void:
 	cd.q = c[2]
 	cd.e = c[3]
 	cd.potion = c[4]
+	if c.size() > 5:
+		cd.util = c[5]
+	charges = int(d.get("chg", charges))
+	var hold: Array = d.get("hold", [-1.0, -1.0])
+	hold_q = hold[0]
+	hold_e = hold[1]
 	var s: Array = d.s
 	stun = s[0]
 	slow = s[1]

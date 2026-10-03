@@ -213,7 +213,7 @@ func _ready() -> void:
 
 	skills_row = HBoxContainer.new()
 	skills_row.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	skills_row.position = Vector2(-200, -80)
+	skills_row.position = Vector2(-256, -80)
 	skills_row.add_theme_constant_override("separation", 6)
 	root.add_child(skills_row)
 
@@ -249,9 +249,9 @@ func _bar(color: Color, sz: Vector2, transparent_bg := false) -> ProgressBar:
 
 
 func _build_inventory() -> void:
-	inv_panel = UI.panel_box(Vector2(560, 0))
+	inv_panel = UI.panel_box(Vector2(600, 0))
 	inv_panel.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
-	inv_panel.position = Vector2(-600, -330)
+	inv_panel.position = Vector2(-640, -360)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 8)
 	inv_panel.add_child(v)
@@ -262,6 +262,7 @@ func _build_inventory() -> void:
 	inv_equip = EquipView.new(32.0)
 	inv_equip.on_op = _inv_op
 	inv_equip.drop_outside = true
+	inv_equip.hint = "우클릭: 해제 · Shift+클릭: 바닥에 버리기 · 드래그: 옮기기"
 	row.add_child(inv_equip)
 	inv_stats = RichTextLabel.new()
 	inv_stats.bbcode_enabled = true
@@ -274,7 +275,7 @@ func _build_inventory() -> void:
 	inv_bag.on_op = _inv_op
 	inv_bag.drop_outside = true
 	v.add_child(inv_bag)
-	v.add_child(UI.label("드래그 이동 (R 회전) · 우클릭: 장착/해제/물약 사용 · Shift+클릭: 상자↔가방 · 패널 밖에 놓기: 버리기", 12, UI.MUTED))
+	v.add_child(UI.label("드래그 이동 (R 회전) · 우클릭: 장착/해제/물약 사용 · Shift+클릭: 바닥에 버리기 (상자 열림: 상자로) · X: 무기 세트 교체", 12, UI.MUTED))
 	v.add_child(UI.label("Tab / Esc 닫기 · 게임은 계속 진행 중입니다", 12, UI.MUTED))
 	inv_panel.visible = false
 	root.add_child(inv_panel)
@@ -384,7 +385,7 @@ func start(g) -> void:
 	var cls: Dictionary = Data.CLASSES[g.player.cls]
 	UI.clear(skills_row)
 	skill_boxes.clear()
-	for k in ["rmb", "q", "e", "p1", "p2"]:
+	for k in ["rmb", "q", "e", "q1", "q2", "q3", "util"]:
 		var box := PanelContainer.new()
 		var sb := StyleBoxFlat.new()
 		sb.bg_color = Color(0.04, 0.03, 0.02, 0.85)
@@ -393,23 +394,22 @@ func start(g) -> void:
 		sb.set_corner_radius_all(4)
 		sb.set_content_margin_all(4)
 		box.add_theme_stylebox_override("panel", sb)
-		box.custom_minimum_size = Vector2(74 if not k.begins_with("p") else 56, 58)
+		var small: bool = k.begins_with("q") and k.length() == 2 or k == "util"
+		box.custom_minimum_size = Vector2(56 if small else 84, 58)
 		var v := VBoxContainer.new()
 		v.add_theme_constant_override("separation", 0)
-		var key_text: String = "우클릭" if k == "rmb" else (k.to_upper() if not k.begins_with("p") else k.substr(1))
+		var key_text: String = {"rmb": "우클릭", "q": "Q", "e": "E", "q1": "1", "q2": "2", "q3": "3", "util": "G"}[k]
 		v.add_child(_centered(UI.label(key_text, 11, UI.GOLD)))
-		var nm := _centered(UI.label("", 13))
-		if k.begins_with("p"):
-			nm.text = "🧪" if k == "p1" else "🩹"
-		else:
-			nm.text = Skills.skill_def(g.player, k).name
+		var nm := _centered(UI.label("", 13 if not small else 15))
+		nm.clip_text = true
+		nm.custom_minimum_size = Vector2(48 if small else 76, 0)
 		v.add_child(nm)
-		var cd_bar := _bar(Color(0, 0, 0, 0.0), Vector2(60, 4))
+		var cd_bar := _bar(Color(0, 0, 0, 0.0), Vector2(48 if small else 76, 4))
 		v.add_child(cd_bar)
 		box.add_child(v)
-		box.tooltip_text = Skills.skill_def(g.player, k).desc if not k.begins_with("p") else ""
+		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		skills_row.add_child(box)
-		skill_boxes[k] = {"box": box, "style": sb, "name": nm, "cd": cd_bar}
+		skill_boxes[k] = {"box": box, "style": sb, "name": nm, "cd": cd_bar, "sid": ""}
 	var rt: String = g.player.res_type()
 	mana_bar.get_parent().visible = rt != ""
 	if rt != "":
@@ -484,11 +484,11 @@ func refresh_panels() -> void:
 func render_inventory() -> void:
 	var p = game.player
 	UI.tip_cls = p.cls
-	inv_equip.set_equipment(p.equipment, p.cls)
-	inv_bag.hint = ("우클릭: 장착/사용 · Shift+클릭: 상자에 넣기" if container != null else "우클릭: 장착/사용 · 패널 밖에 놓기: 버리기") + " · R: 회전"
+	inv_equip.set_equipment(p.equipment, p.cls, p.wset)
+	inv_bag.hint = ("우클릭: 장착/사용 · Shift+클릭: 상자에 넣기" if container != null else "우클릭: 장착/사용 · Shift+클릭: 바닥에 버리기") + " · R: 회전"
 	inv_bag.set_items(p.bag, Inv.bag_size(p.cls))
 	var items := []
-	for s in Data.GEAR_SLOTS:
+	for s in Data.ALL_SLOTS:
 		if p.equipment[s] != null:
 			items.append(p.equipment[s])
 	items.append_array(p.bag)
@@ -644,7 +644,7 @@ func update_hud(dt: float) -> void:
 	var tl := maxf(0.0, g.time_left)
 	timer_label.text = "%d:%02d" % [int(tl / 60.0), int(tl) % 60]
 	timer_label.add_theme_color_override("font_color", Color("#ff4a3a") if tl < 120.0 else UI.TEXT)
-	depth_label.text = "심연 %d층" % g.depth if g.depth > 1 else "고대 지하묘지 1층"
+	depth_label.text = Data.MAPS.get(g.map_id, {}).get("name", "던전")
 	var ex: int = g.exit_portals().size()
 	portal_label.text = "🌀 탈출 포탈 %d개 열림" % ex if ex > 0 else "🌀 포탈 대기 중"
 
@@ -653,8 +653,7 @@ func update_hud(dt: float) -> void:
 		var def := Skills.skill_def(p, k)
 		if sbx.name.text != def.name:
 			sbx.name.text = def.name
-			sbx.box.tooltip_text = def.desc
-		var mx: float = def.cd
+		var mx: float = Skills.cd_of(p, Skills.skill_id(p, k)) if k != "rmb" else float(def.get("cd", 0.0))
 		var c: float = p.cd[k]
 		var cooling := mx > 0.0 and c > 0.0
 		var cd_bar: ProgressBar = sbx.cd
@@ -665,22 +664,29 @@ func update_hud(dt: float) -> void:
 			"rmb":
 				active = p.blocking or p.parry > 0.0 or p.charge_t >= 0.0
 			"q":
-				active = p.panther or p.spin_t > 0.0
+				active = p.panther or p.spin_t > 0.0 or p.hold_q >= 0.0
 			"e":
-				active = p.stealth > 0.0 or p.channel_t > 0.0 or p.dr > 0.0 or p.frozen > 0.0 or p.dash != null
+				active = p.stealth > 0.0 or p.channel_t > 0.0 or p.dr > 0.0 or p.frozen > 0.0 or p.dash != null or p.hold_e >= 0.0
+		if k != "rmb":
+			var sid := Skills.skill_id(p, k)
+			if sid in ["druid_nature", "priest_protection"] and p.charges > 0:
+				sbx.name.text = "%s ×%d" % [def.name, p.charges]
+				cooling = p.charges <= 0
 		var st: StyleBoxFlat = sbx.style
 		st.border_color = Color("#ffd060") if active else Color("#5a4a32")
 		st.set_border_width_all(2 if active else 1)
 		sbx.name.modulate = Color(0.5, 0.5, 0.5) if cooling else Color.WHITE
-	var pots := 0
-	var bands := 0
-	for it in p.bag:
-		if it.base == "health_potion":
-			pots += 1
-		elif it.base == "bandage":
-			bands += 1
-	skill_boxes.p1.name.text = "🧪 %d" % pots
-	skill_boxes.p2.name.text = "🩹 %d" % bands
+	for k in ["q1", "q2", "q3", "util"]:
+		var sbx: Dictionary = skill_boxes[k]
+		var it = p.equipment.get(k)
+		var txt := "-"
+		if it != null:
+			txt = Data.base_of(it).icon + (" %d" % int(it.get("count", 1)))
+		if sbx.name.text != txt:
+			sbx.name.text = txt
+		var c2: float = p.cd.util if k == "util" else p.cd.potion
+		(sbx.cd as ProgressBar).value = clampf(c2, 0.0, 1.0)
+		sbx.name.modulate = Color(0.5, 0.5, 0.5) if it == null or c2 > 0.0 else Color.WHITE
 
 	var t = g.aimed_actor()
 	if t != null:
