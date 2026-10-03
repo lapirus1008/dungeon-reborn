@@ -117,6 +117,7 @@ func build_level(d: int) -> void:
 	explored.resize(dungeon.W * dungeon.H)
 	actors = []
 	projectiles = []
+	zones = []
 	effects = []
 	chests = []
 	loot_bags = []
@@ -166,7 +167,7 @@ func build_level(d: int) -> void:
 	player_light.shadow_enabled = shadows_enabled()
 	player_light.shadow_bias = 0.08
 	world.add_child(player_light)
-	view_model = Models.view_model(player.cls)
+	view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment), player.panther)
 	camera.add_child(view_model)
 	shield_bubble = Models.shield_bubble(0.75)
 	shield_bubble.visible = false
@@ -231,7 +232,7 @@ func spawn_chest(room: Dictionary, tier: int, luck: float) -> void:
 
 # ------------------------------------------------------------------ 관계/검색
 func hostile(a, b) -> bool:
-	if a == b:
+	if a == b or a.faction == b.faction:
 		return false
 	if a.faction == "monster" and b.faction == "monster":
 		return false
@@ -312,25 +313,105 @@ func shoot_at(src, tgt, kind: String, dmg: float, speed: float, spread: float) -
 	spawn_projectile(src, kind, from, dir.normalized(), speed, dmg)
 
 
-func spawn_projectile(owner, kind: String, p: Vector3, dir: Vector3, speed: float, dmg: float) -> void:
+# 투사체 종류별 외형/색
+const PROJ_COLORS := {
+	"bolt": Color(0.48, 0.42, 1.0), "firebolt": Color(1.0, 0.45, 0.12), "pyroblast": Color(1.0, 0.4, 0.08),
+	"icebolt": Color(0.6, 0.9, 1.0), "thorn": Color(0.45, 0.95, 0.35), "poison": Color(0.4, 0.95, 0.2),
+	"grasp": Color(0.6, 0.25, 0.95), "blade": Color(0.55, 0.75, 1.0), "fireball": Color(1.0, 0.42, 0.1),
+}
+
+
+# extra: homing(선회 강도), slow(초), aoe(반경), root(초), dot(초당 피해), pull, heal_owner, gravity, life
+func spawn_projectile(owner, kind: String, p: Vector3, dir: Vector3, speed: float, dmg: float, extra: Dictionary = {}) -> void:
 	var node: Node3D
-	var gravity := 0.0
+	var gravity: float = extra.get("gravity", 0.0)
 	var rad := 0.15
+	var color: Color = PROJ_COLORS.get(kind, Color.WHITE)
 	match kind:
 		"arrow":
 			node = Models.arrow()
 			gravity = 5.0
 			Sfx.play("bow", dist_to_player(p))
-		"bolt":
-			node = Models.orb(Color(0.48, 0.42, 1.0), 0.12)
-			Sfx.play("magic", dist_to_player(p))
-		_:
-			node = Models.orb(Color(1.0, 0.42, 0.1), 0.25)
-			rad = 0.3
+		"knife":
+			node = Models.weapon("dagger")
+			node.scale = Vector3.ONE * 0.8
+			gravity = 3.0
+			Sfx.play("swing", dist_to_player(p))
+		"blade":
+			node = Models.weapon("longsword")
+			node.scale = Vector3.ONE * 0.6
+			for m in node.find_children("*", "GeometryInstance3D", true, false):
+				(m as GeometryInstance3D).material_overlay = Models.glow_mat(Color(0.4, 0.6, 1.0, 0.5), 1.5)
+		"pyroblast", "fireball":
+			node = Models.orb(color, 0.42)
+			rad = 0.45
 			Sfx.play("fire", dist_to_player(p))
+		"poison":
+			node = Models.orb(color, 0.16, false)
+		_:
+			node = Models.orb(color, 0.13, kind != "thorn")
+			Sfx.play("magic", dist_to_player(p))
 	node.position = p
 	world.add_child(node)
-	projectiles.append({"owner": owner, "kind": kind, "node": node, "pos": p, "vel": dir * speed, "dmg": dmg, "gravity": gravity, "radius": rad, "life": 4.0, "stuck": 0.0})
+	var pr := {"owner": owner, "kind": kind, "node": node, "pos": p, "vel": dir * speed, "speed": speed, "dmg": dmg,
+		"gravity": gravity, "radius": rad, "life": extra.get("life", 4.0), "stuck": 0.0, "tgt": null, "retarget": 0.0}
+	pr.merge(extra)
+	projectiles.append(pr)
+
+
+# 유도 투사체의 표적 (전방, 시야 내, 은신 제외)
+func _homing_target(p: Dictionary):
+	var best = null
+	var bs := 1e9
+	var v: Vector3 = p.vel.normalized()
+	for a in actors:
+		if not a.alive or a.extracted or a == p.owner or (p.owner != null and not hostile(p.owner, a)):
+			continue
+		var to: Vector3 = a.center() - p.pos
+		var d := to.length()
+		if d > 30.0 or (a.stealth > 0.0 and d > 3.0):
+			continue
+		if to.normalized().dot(v) < 0.35:
+			continue
+		if not dungeon.los(p.pos.x, p.pos.z, a.pos.x, a.pos.z):
+			continue
+		var score := d * (2.0 - to.normalized().dot(v))
+		if score < bs:
+			bs = score
+			best = a
+	return best
+
+
+func _projectile_impact(p: Dictionary, pp: Vector3, hit) -> void:
+	var owner = p.owner
+	if p.get("aoe", 0.0) > 0.0:
+		var kind := "poison" if p.kind == "poison" else "fire"
+		explode(pp, p.aoe, p.dmg, owner, kind, {"root": p.get("root", 0.0), "dot": p.get("dot", 0.0)})
+		return
+	if hit == null:
+		spark(pp, PROJ_COLORS.get(p.kind, Color(0.55, 0.48, 1.0)))
+		return
+	var a = hit
+	var head: bool = pp.y > a.pos.y + a.height * 0.82
+	var vel: Vector3 = p.vel
+	var vn := Vector3(vel.x, 0, vel.z).normalized()
+	var info := {"knock": vn * 2.0, "from": owner.pos if owner != null else pp, "headshot": head, "ranged": true}
+	if p.get("slow", 0.0) > 0.0:
+		info["slow"] = p.slow
+	if p.get("pull", false) and owner != null:
+		# 무덤의 손아귀: 시전자 앞 2m까지 끌어당김 + 기절
+		var to: Vector3 = owner.pos - a.pos
+		to.y = 0.0
+		var dist := maxf(0.0, to.length() - 2.0)
+		info["knock"] = to.normalized() * dist * 8.0
+		info["stun"] = 0.6
+		Skills.gain(owner, 20.0)
+	a.take_damage(p.dmg * (1.5 if head else 1.0), owner, info)
+	if p.get("heal_owner", 0.0) > 0.0 and owner != null:
+		owner.heal_now(p.heal_owner)
+	Sfx.play("hit", dist_to_player(a.pos))
+	if p.kind != "arrow" and p.kind != "knife":
+		spark(pp, PROJ_COLORS.get(p.kind, Color(0.55, 0.48, 1.0)))
 
 
 func update_projectiles(dt: float) -> void:
@@ -346,6 +427,15 @@ func update_projectiles(dt: float) -> void:
 			continue
 		p.life -= dt
 		var vel: Vector3 = p.vel
+		# 유도
+		if p.get("homing", 0.0) > 0.0:
+			p.retarget -= dt
+			if p.retarget <= 0.0 or p.tgt == null or not p.tgt.alive:
+				p.retarget = 0.2
+				p.tgt = _homing_target(p)
+			if p.tgt != null:
+				var want: Vector3 = (p.tgt.center() - p.pos).normalized()
+				vel = vel.normalized().lerp(want, minf(1.0, p.homing * dt)).normalized() * p.speed
 		var steps := maxi(1, int(ceil(vel.length() * dt / 0.3)))
 		var sdt := dt / steps
 		var done := false
@@ -357,13 +447,12 @@ func update_projectiles(dt: float) -> void:
 			var pp: Vector3 = p.pos
 			if dungeon.is_solid(pp.x, pp.z) or pp.y < 0.02 or pp.y > Dungeon.WALL_H - 0.05:
 				done = true
-				if p.kind == "fireball":
-					explode(pp, 4.0, p.dmg, p.owner, "fire")
-				elif p.kind == "arrow":
+				p.vel = vel
+				if p.kind in ["arrow", "knife"]:
 					p.stuck = 6.0
 					p.node.position = pp
 				else:
-					spark(pp, Color(0.55, 0.48, 1.0))
+					_projectile_impact(p, pp, null)
 				break
 			for a in actors:
 				if not a.alive or a == p.owner or a.extracted:
@@ -377,29 +466,27 @@ func update_projectiles(dt: float) -> void:
 				if pp.y < a.pos.y - 0.1 or pp.y > a.pos.y + a.height + 0.1:
 					continue
 				done = true
-				if p.kind == "fireball":
-					explode(pp, 4.0, p.dmg, p.owner, "fire")
-				else:
-					var head: bool = pp.y > a.pos.y + a.height * 0.82
-					var vn := Vector3(vel.x, 0, vel.z).normalized()
-					a.take_damage(p.dmg * (1.5 if head else 1.0), p.owner, {"knock": vn * 2.0, "from": p.owner.pos if p.owner != null else pp, "headshot": head})
-					Sfx.play("hit", dist_to_player(a.pos))
-					if p.kind == "bolt":
-						spark(pp, Color(0.55, 0.48, 1.0))
+				p.vel = vel
+				_projectile_impact(p, pp, a)
 				break
 		p.vel = vel
 		if (done and p.stuck <= 0.0) or p.life <= 0.0:
+			if not done and p.get("aoe", 0.0) > 0.0:
+				_projectile_impact(p, p.pos, null)
 			p.node.queue_free()
 			projectiles.remove_at(i)
 			i -= 1
 			continue
 		p.node.position = p.pos
-		if p.kind == "arrow" and vel.length_squared() > 0.01 and p.stuck <= 0.0:
-			p.node.look_at(p.pos + vel, Vector3.UP)
+		if p.kind in ["arrow", "knife", "blade"] and vel.length_squared() > 0.01 and p.stuck <= 0.0:
+			p.node.look_at(p.pos + vel, Vector3.UP if absf(vel.normalized().y) < 0.95 else Vector3.RIGHT)
+			if p.kind != "arrow":
+				p.node.rotate_object_local(Vector3.RIGHT, -PI / 2)
 		i -= 1
 
 
-func explode(p: Vector3, rad: float, dmg: float, owner, kind: String) -> void:
+# extra: root(초), dot(초당 피해, 4초)
+func explode(p: Vector3, rad: float, dmg: float, owner, kind: String, extra: Dictionary = {}) -> void:
 	for a in actors:
 		if not a.alive or a.extracted or (owner != null and not hostile(owner, a)):
 			continue
@@ -412,8 +499,26 @@ func explode(p: Vector3, rad: float, dmg: float, owner, kind: String) -> void:
 			continue
 		var f := 1.0 - minf(1.0, d / rad) * 0.5
 		var nd := maxf(d, 0.001)
-		a.take_damage(dmg * f, owner, {"knock": Vector3(dx / nd * 8.0, 0, dz / nd * 8.0), "from": p, "stun": 0.4 if kind == "slam" else 0.0})
-	var color := Color(1.0, 0.42, 0.1) if kind == "fire" else Color(0.6, 0.23, 1.0)
+		var kp := 2.0 if kind == "poison" else 8.0
+		a.take_damage(dmg * f, owner, {"knock": Vector3(dx / nd * kp, 0, dz / nd * kp), "from": p, "stun": 0.4 if kind == "slam" else 0.0})
+		if extra.get("root", 0.0) > 0.0:
+			a.add_root(extra.root)
+		if extra.get("dot", 0.0) > 0.0:
+			a.add_dot(extra.dot, 4.0, owner)
+	var color := Color(1.0, 0.42, 0.1)
+	match kind:
+		"slam":
+			color = Color(0.6, 0.23, 1.0)
+		"poison":
+			color = Color(0.35, 0.9, 0.2)
+	explode_fx(p if kind != "slam" else Vector3(p.x, 0.2, p.z), rad, color)
+	Sfx.play("fire" if kind != "poison" else "magic", dist_to_player(p))
+	if dist_to_player(p) < 10.0 and kind != "poison":
+		player.shake = 0.3
+
+
+# 폭발 시각 효과만 (피해 없음)
+func explode_fx(p: Vector3, rad: float, color: Color) -> void:
 	var m := MeshInstance3D.new()
 	var sm := SphereMesh.new()
 	sm.radius = 1.0
@@ -425,7 +530,7 @@ func explode(p: Vector3, rad: float, dmg: float, owner, kind: String) -> void:
 	mt.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	mt.albedo_color = Color(color.r, color.g, color.b, 0.7)
 	m.material_override = mt
-	m.position = p if kind != "slam" else Vector3(p.x, 0.2, p.z)
+	m.position = p
 	m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	world.add_child(m)
 	var l := OmniLight3D.new()
@@ -435,9 +540,191 @@ func explode(p: Vector3, rad: float, dmg: float, owner, kind: String) -> void:
 	l.position = p + Vector3(0, 0.5, 0)
 	world.add_child(l)
 	effects.append({"node": m, "light": l, "t": 0.0, "dur": 0.45, "kind": "explode", "rad": rad, "mat": mt})
-	Sfx.play("fire", dist_to_player(p))
-	if dist_to_player(p) < 10.0:
-		player.shake = 0.3
+
+
+# 조준선이 벽/바닥에 닿는 지점 (얼음 폭풍 위치)
+func aim_point(origin: Vector3, dir: Vector3, max_d: float) -> Vector3:
+	var p := origin
+	var d := 0.0
+	while d < max_d:
+		var n := p + dir * 0.25
+		if dungeon.is_solid(n.x, n.z) or n.y <= 0.0:
+			break
+		p = n
+		d += 0.25
+	return Vector3(p.x, 0.0, p.z)
+
+
+# ------------------------------------------------------------------ 지속 지역 효과 (얼음 폭풍, 영혼의 장막, 회오리 검)
+var zones: Array = []
+
+
+func add_zone(z: Dictionary) -> void:
+	z["t"] = z.get("dur", 3.0)
+	z["tick_t"] = 0.0
+	if not z.has("pos"):
+		z["pos"] = z.follow.pos
+	var node := Node3D.new()
+	match z.kind:
+		"ice_storm":
+			var disc := MeshInstance3D.new()
+			var cm := CylinderMesh.new()
+			cm.top_radius = z.radius
+			cm.bottom_radius = z.radius
+			cm.height = 3.5
+			cm.radial_segments = 32
+			disc.mesh = cm
+			var mt := StandardMaterial3D.new()
+			mt.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			mt.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mt.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+			mt.albedo_color = Color(0.45, 0.75, 1.0, 0.18)
+			mt.cull_mode = BaseMaterial3D.CULL_DISABLED
+			disc.material_override = mt
+			disc.position.y = 1.75
+			node.add_child(disc)
+			var parts := CPUParticles3D.new()
+			parts.amount = 120
+			parts.lifetime = 0.8
+			parts.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+			parts.emission_box_extents = Vector3(z.radius * 0.8, 0.1, z.radius * 0.8)
+			parts.position.y = 3.6
+			parts.direction = Vector3.DOWN
+			parts.spread = 10.0
+			parts.gravity = Vector3(0, -6, 0)
+			parts.initial_velocity_min = 3.0
+			parts.initial_velocity_max = 5.0
+			var pm := BoxMesh.new()
+			pm.size = Vector3(0.05, 0.18, 0.05)
+			pm.material = Models.glow_mat(Color(0.75, 0.92, 1.0), 2.0)
+			parts.mesh = pm
+			node.add_child(parts)
+			var l := OmniLight3D.new()
+			l.light_color = Color(0.5, 0.8, 1.0)
+			l.light_energy = 2.5
+			l.omni_range = z.radius * 2.0
+			l.position.y = 2.0
+			node.add_child(l)
+		"soul_shroud":
+			var ring := MeshInstance3D.new()
+			var tm := TorusMesh.new()
+			tm.inner_radius = z.radius - 0.3
+			tm.outer_radius = z.radius
+			tm.rings = 48
+			tm.ring_segments = 3
+			ring.mesh = tm
+			ring.material_override = Models.glow_mat(Color(0.55, 0.2, 0.9), 2.5)
+			ring.scale = Vector3(1, 0.08, 1)
+			ring.position.y = 0.1
+			node.add_child(ring)
+			var parts := CPUParticles3D.new()
+			parts.amount = 50
+			parts.lifetime = 1.2
+			parts.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
+			parts.emission_ring_axis = Vector3.UP
+			parts.emission_ring_radius = z.radius
+			parts.emission_ring_inner_radius = 0.5
+			parts.emission_ring_height = 0.1
+			parts.direction = Vector3.UP
+			parts.gravity = Vector3(0, 1.0, 0)
+			parts.initial_velocity_min = 0.5
+			parts.initial_velocity_max = 1.2
+			var pm := SphereMesh.new()
+			pm.radius = 0.06
+			pm.height = 0.12
+			pm.radial_segments = 4
+			pm.rings = 2
+			pm.material = Models.glow_mat(Color(0.5, 0.15, 0.85), 4.0)
+			parts.mesh = pm
+			node.add_child(parts)
+		"orbit_blade":
+			var pivot := Node3D.new()
+			pivot.name = "Pivot"
+			var blade := Models.weapon("longsword")
+			blade.rotation = Vector3(0, 0, PI / 2)
+			blade.position = Vector3(z.radius * 0.7, 1.1, 0)
+			blade.scale = Vector3.ONE * 0.8
+			for m in blade.find_children("*", "GeometryInstance3D", true, false):
+				(m as GeometryInstance3D).material_overlay = Models.glow_mat(Color(0.4, 0.6, 1.0, 0.5), 1.5)
+			pivot.add_child(blade)
+			node.add_child(pivot)
+	node.position = z.pos
+	world.add_child(node)
+	z["node"] = node
+	zones.append(z)
+
+
+func update_zones(dt: float) -> void:
+	var i := zones.size() - 1
+	while i >= 0:
+		var z: Dictionary = zones[i]
+		z.t -= dt
+		var follow = z.get("follow")
+		if follow != null:
+			if not follow.alive:
+				z.t = 0.0
+			else:
+				z.pos = follow.pos
+		var node: Node3D = z.node
+		node.position = z.pos
+		if z.kind == "orbit_blade":
+			node.get_node("Pivot").rotation.y += dt * 9.0
+		z.tick_t -= dt
+		if z.tick_t <= 0.0 and z.t > 0.0:
+			z.tick_t = z.tick
+			var owner = z.owner
+			var hits := 0
+			for a in actors:
+				if not a.alive or a.extracted or (owner != null and not hostile(owner, a)):
+					continue
+				var d: float = Vector2(a.pos.x - z.pos.x, a.pos.z - z.pos.z).length()
+				if d > z.radius + a.radius or not dungeon.los(z.pos.x, z.pos.z, a.pos.x, a.pos.z):
+					continue
+				a.take_damage(z.dmg, owner, {"from": z.pos, "ranged": true})
+				if z.get("slow", 0.0) > 0.0:
+					a.add_slow(z.slow, 0.5)
+				hits += 1
+			if hits and z.kind == "orbit_blade":
+				Sfx.play("hit", dist_to_player(z.pos), 0.2)
+		if z.t <= 0.0:
+			node.queue_free()
+			zones.remove_at(i)
+		i -= 1
+
+
+# ------------------------------------------------------------------ 직업 스킬 연동
+func spawn_summon(owner, p: Vector3) -> void:
+	var s := Summon.new(self, owner, p)
+	actors.append(s)
+	spawn_ring_burst(p + Vector3(0, 0.2, 0), Skills.NATURE, 2.5)
+
+
+# 드루이드 변신: 플레이어는 뷰모델 교체, AI는 모델 전환 (AIActor.active_rig)
+func on_shapeshift(c) -> void:
+	if c == player:
+		_rebuild_view_model()
+	spawn_ring_burst(c.pos + Vector3(0, 0.5, 0), Skills.NATURE, 2.0)
+
+
+func on_weapon_changed() -> void:
+	_rebuild_view_model()
+
+
+func _rebuild_view_model() -> void:
+	if view_model != null and is_instance_valid(view_model):
+		view_model.queue_free()
+	view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment), player.panther)
+	camera.add_child(view_model)
+
+
+# 서리 장벽: 얼음 덩어리를 시전자 위치에 3초간 표시
+func on_frozen(c) -> void:
+	var ice := Models.ice_block(c.height + 0.4)
+	var holder := Node3D.new()
+	holder.add_child(ice)
+	holder.position = c.pos
+	world.add_child(holder)
+	effects.append({"node": holder, "t": 0.0, "dur": c.frozen, "kind": "ice", "follow": c})
 
 
 func spark(p: Vector3, color: Color) -> void:
@@ -516,6 +803,10 @@ func update_effects(dt: float) -> void:
 				e.mat.albedo_color.a = 1.0 - k
 			"telegraph":
 				n.scale = Vector3(maxf(0.01, k) * e.rad, 1.0, maxf(0.01, k) * e.rad)
+			"ice":
+				n.position = e.follow.pos
+				if not e.follow.alive or e.follow.frozen <= 0.0:
+					k = 1.0
 		if k >= 1.0:
 			n.queue_free()
 			if e.has("extra"):
@@ -538,6 +829,9 @@ func on_damage(target, dmg: float, src, blocked: bool, info: Dictionary) -> void
 
 
 func on_death(actor, src) -> void:
+	if actor.kind == "summon":
+		spawn_ring_burst(actor.pos + Vector3(0, 0.3, 0), Skills.NATURE, 2.0)
+		return
 	var sname: String = src.display_name() if src != null else "어둠"
 	if actor.kind != "monster" or src == player:
 		hud.killfeed("%s ➜ %s" % [sname, actor.display_name()], src == player or actor == player)
@@ -820,6 +1114,7 @@ func _process(delta: float) -> void:
 			a.node.position = a.pos
 
 	update_projectiles(dt)
+	update_zones(dt)
 	update_effects(dt)
 	for b in loot_bags:
 		b.node.rotation.y += dt
@@ -902,6 +1197,8 @@ func aimed_actor():
 	var bd := 30.0
 	for a in actors:
 		if a == player or not a.alive or a.extracted:
+			continue
+		if a.stealth > 0.0 and a.pos.distance_to(player.pos) > 4.0:
 			continue
 		var to: Vector3 = a.center() - cp
 		var d := to.length()

@@ -121,7 +121,7 @@ static func item_tip(item: Dictionary, extra := "") -> String:
 	var kind := ""
 	match b.slot:
 		"weapon":
-			kind = "무기 · %s 전용" % Data.CLASSES[b.cls].name
+			kind = "무기 · %s" % Data.class_names(b.classes)
 		"consumable":
 			kind = "소모품"
 		"treasure":

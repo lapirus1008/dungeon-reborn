@@ -21,6 +21,8 @@ var shield_bar: ProgressBar
 var hp_text: Label
 var st_bar: ProgressBar
 var mana_bar: ProgressBar
+var res_label: Label
+var status_label: Label
 var timer_label: Label
 var depth_label: Label
 var portal_label: Label
@@ -171,9 +173,11 @@ func _ready() -> void:
 	# 하단 왼쪽: 체력/스태미나/마나
 	var bars := VBoxContainer.new()
 	bars.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	bars.position = Vector2(20, -110)
+	bars.position = Vector2(20, -140)
 	bars.custom_minimum_size = Vector2(340, 0)
 	bars.add_theme_constant_override("separation", 5)
+	status_label = UI.label("", 13, Color(1.0, 0.75, 0.5))
+	bars.add_child(status_label)
 	shield_label = UI.label("", 14, Color(0.55, 0.8, 1.0))
 	bars.add_child(shield_label)
 	var hp_stack := Control.new()
@@ -192,7 +196,19 @@ func _ready() -> void:
 	st_bar = _bar(Color(0.85, 0.75, 0.31), Vector2(340, 10))
 	mana_bar = _bar(Color(0.29, 0.48, 1.0), Vector2(340, 10))
 	bars.add_child(st_bar)
-	bars.add_child(mana_bar)
+	var res_stack := Control.new()
+	res_stack.custom_minimum_size = Vector2(340, 14)
+	mana_bar.custom_minimum_size = Vector2(340, 14)
+	mana_bar.size = Vector2(340, 14)
+	res_label = UI.label("", 11)
+	res_label.custom_minimum_size = Vector2(340, 14)
+	res_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	res_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	res_label.add_theme_color_override("font_shadow_color", Color.BLACK)
+	res_label.add_theme_constant_override("shadow_outline_size", 4)
+	res_stack.add_child(mana_bar)
+	res_stack.add_child(res_label)
+	bars.add_child(res_stack)
 	root.add_child(bars)
 
 	skills_row = HBoxContainer.new()
@@ -378,15 +394,18 @@ func start(g) -> void:
 		if k.begins_with("p"):
 			nm.text = "🧪" if k == "p1" else "🩹"
 		else:
-			nm.text = cls.skills[k].name
+			nm.text = Skills.skill_def(g.player, k).name
 		v.add_child(nm)
 		var cd_bar := _bar(Color(0, 0, 0, 0.0), Vector2(60, 4))
 		v.add_child(cd_bar)
 		box.add_child(v)
-		box.tooltip_text = cls.skills[k].desc if not k.begins_with("p") else ""
+		box.tooltip_text = Skills.skill_def(g.player, k).desc if not k.begins_with("p") else ""
 		skills_row.add_child(box)
 		skill_boxes[k] = {"box": box, "style": sb, "name": nm, "cd": cd_bar}
-	mana_bar.visible = g.player.stats.max_mana > 0
+	var rt: String = g.player.res_type()
+	mana_bar.get_parent().visible = rt != ""
+	if rt != "":
+		(mana_bar.get_theme_stylebox("fill") as StyleBoxFlat).bg_color = Data.RES_COLORS[rt]
 
 
 func on_level_changed() -> void:
@@ -510,7 +529,7 @@ func _bag_click(i: int) -> void:
 		p.recalc()
 		refresh_panels()
 	elif b.slot == "weapon":
-		toast("%s 전용 무기입니다" % Data.CLASSES[b.cls].name)
+		toast("%s 전용 무기입니다" % Data.class_names(b.classes))
 
 
 func _bag_drop(i: int) -> void:
@@ -649,10 +668,37 @@ func update_hud(dt: float) -> void:
 	shield_bar.value = p.shield / p.max_hp
 	shield_bar.visible = p.shield > 0.0
 	hp_text.text = "%d / %d" % [ceili(p.hp), roundi(p.max_hp)] + (" (+%d)" % ceili(p.shield) if p.shield > 0.0 else "")
-	shield_label.text = ("🔷 비전 보호막 %d · %.1f초" % [ceili(p.shield), maxf(0.0, p.shield_t)]) if p.shield > 0.0 else ""
+	shield_label.text = ("🔷 보호막 %d · %.1f초" % [ceili(p.shield), maxf(0.0, p.shield_t)]) if p.shield > 0.0 else ""
 	st_bar.value = p.stamina / 100.0
-	if p.stats.max_mana > 0:
-		mana_bar.value = p.mana / p.stats.max_mana
+	# 스태미나 고갈 시 붉게 (30%까지 회복해야 다시 달리기 가능)
+	(st_bar.get_theme_stylebox("fill") as StyleBoxFlat).bg_color = Color(0.6, 0.25, 0.2) if p.exhausted else Color(0.85, 0.75, 0.31)
+	if p.res_type() != "":
+		mana_bar.value = p.res / maxf(1.0, p.res_max())
+		res_label.text = "%s %d / %d" % [Data.RES_NAMES[p.res_type()], roundi(p.res), roundi(p.res_max())]
+	var sts := []
+	if p.stun > 0.0:
+		sts.append("기절")
+	if p.root > 0.0:
+		sts.append("속박")
+	if p.slow > 0.0:
+		sts.append("둔화")
+	if p.dots.size():
+		sts.append("중독")
+	if p.channel_t > 0.0:
+		sts.append("은신 집중 %.1f" % p.channel_t)
+	if p.stealth > 0.0:
+		sts.append("👁 은신 %.0f초" % p.stealth)
+	if p.frozen > 0.0:
+		sts.append("❄ 서리 장벽 %.1f" % p.frozen)
+	if p.panther:
+		sts.append("🐆 표범 형태")
+	if p.dr > 0.0:
+		sts.append("회오리 검")
+	if p.immune > 0.0:
+		sts.append("면역")
+	if p.exhausted:
+		sts.append("지침")
+	status_label.text = " · ".join(sts)
 	var tl := maxf(0.0, g.time_left)
 	timer_label.text = "%d:%02d" % [int(tl / 60.0), int(tl) % 60]
 	timer_label.add_theme_color_override("font_color", Color("#ff4a3a") if tl < 120.0 else UI.TEXT)
@@ -660,16 +706,26 @@ func update_hud(dt: float) -> void:
 	var ex: int = g.exit_portals().size()
 	portal_label.text = "🌀 탈출 포탈 %d개 열림" % ex if ex > 0 else "🌀 포탈 대기 중"
 
-	var cls_sk: Dictionary = Data.CLASSES[p.cls].skills
 	for k in ["rmb", "q", "e"]:
 		var sbx: Dictionary = skill_boxes[k]
-		var mx: float = cls_sk[k].cd
+		var def := Skills.skill_def(p, k)
+		if sbx.name.text != def.name:
+			sbx.name.text = def.name
+			sbx.box.tooltip_text = def.desc
+		var mx: float = def.cd
 		var c: float = p.cd[k]
 		var cooling := mx > 0.0 and c > 0.0
 		var cd_bar: ProgressBar = sbx.cd
 		cd_bar.value = c / mx if cooling else 0.0
 		(cd_bar.get_theme_stylebox("fill") as StyleBoxFlat).bg_color = Color(0.9, 0.7, 0.3, 0.9)
-		var active: bool = (p.cls == "fighter" and k == "rmb" and p.blocking) or (p.cls == "ranger" and k == "rmb" and p.zoom) or (p.cls == "mage" and k == "rmb" and p.shield > 0.0) or (p.cls == "fighter" and k == "e" and p.rage > 0.0)
+		var active := false
+		match k:
+			"rmb":
+				active = p.blocking or p.parry > 0.0 or p.charge_t >= 0.0
+			"q":
+				active = p.panther or p.spin_t > 0.0
+			"e":
+				active = p.stealth > 0.0 or p.channel_t > 0.0 or p.dr > 0.0 or p.frozen > 0.0 or p.dash != null
 		var st: StyleBoxFlat = sbx.style
 		st.border_color = Color("#ffd060") if active else Color("#5a4a32")
 		st.set_border_width_all(2 if active else 1)
@@ -696,8 +752,8 @@ func update_hud(dt: float) -> void:
 	if channel_t > 0.0:
 		channel_t -= dt
 	channel_box.visible = channel_t > 0.0
-	var draw_k: float = minf(1.0, p.draw / 0.9) if p.cls == "ranger" and p.draw >= 0.0 else -1.0
-	crosshair.scale = Vector2.ONE * ((1.6 - draw_k * 0.8) if draw_k >= 0.0 else 1.0)
+	var charge_k: float = minf(1.0, p.charge_t / 1.2) if p.charge_t >= 0.0 else -1.0
+	crosshair.scale = Vector2.ONE * ((1.6 - charge_k * 0.6) if charge_k >= 0.0 else 1.0)
 	crosshair.visible = not inv_open and not menu_visible
 
 	var low_hp := 0.35 + sin(g.time * 6.0) * 0.1 if p.hp / p.max_hp < 0.3 else 0.0
@@ -705,5 +761,8 @@ func update_hud(dt: float) -> void:
 	vig_mat.set_shader_parameter("hurt", minf(1.0, hurt_v + low_hp))
 	vig_mat.set_shader_parameter("shield", 1.0 if p.shield > 0.0 else 0.0)
 	vig_mat.set_shader_parameter("shield_hit", p.shield_hit_fx)
+	vig_mat.set_shader_parameter("tint", p.shield_color)
+	vig_mat.set_shader_parameter("frost", 1.0 if p.frozen > 0.0 else 0.0)
+	vig_mat.set_shader_parameter("stealth", 1.0 if p.stealth > 0.0 or p.channel_t > 0.0 else 0.0)
 
 	fps_label.text = "%d FPS" % Engine.get_frames_per_second()

@@ -79,9 +79,54 @@ static func sphere(radius: float, material: Material, seg := 10) -> MeshInstance
 	return m
 
 
-static func weapon(type: String) -> Node3D:
+# 무기 색: 지팡이 구슬은 직업별 (파이로 빨강, 크라이오 하늘, 드루이드 초록)
+static func weapon(type: String, orb_color := Color(0.4, 0.67, 1.0)) -> Node3D:
+	var custom := AssetRegistry.scene("weapons", type)
+	if custom != null:
+		return custom
 	var g := Node3D.new()
+	var steel := mat(Color(0.78, 0.8, 0.83), 0.3, 0.9)
+	var leather := mat(Color(0.23, 0.14, 0.08))
 	match type:
+		"longsword":
+			var blade := box(Vector3(0.06, 1.25, 0.025), steel)
+			blade.position.y = 0.82
+			var guard := box(Vector3(0.22, 0.05, 0.06), mat(Color(0.2, 0.2, 0.22), 0.4, 0.7))
+			guard.position.y = 0.18
+			var grip := box(Vector3(0.045, 0.34, 0.045), leather)
+			grip.position.y = 0.0
+			for n in [blade, guard, grip]:
+				g.add_child(n)
+		"dagger":
+			var blade := box(Vector3(0.05, 0.38, 0.02), steel)
+			blade.position.y = 0.3
+			var guard := box(Vector3(0.14, 0.03, 0.05), mat(Color(0.3, 0.3, 0.32), 0.4, 0.7))
+			guard.position.y = 0.1
+			var grip := box(Vector3(0.04, 0.16, 0.04), leather)
+			for n in [blade, guard, grip]:
+				g.add_child(n)
+		"greatsword":
+			var blade := box(Vector3(0.14, 1.5, 0.035), mat(Color(0.35, 0.36, 0.4), 0.35, 0.9))
+			blade.position.y = 0.98
+			var guard := box(Vector3(0.42, 0.08, 0.1), mat(Color(0.15, 0.12, 0.18), 0.4, 0.7))
+			guard.position.y = 0.2
+			var gem := box(Vector3(0.06, 0.06, 0.11), glow_mat(Color(0.6, 0.2, 0.9), 3.0))
+			gem.position.y = 0.2
+			var grip := box(Vector3(0.05, 0.4, 0.05), leather)
+			for n in [blade, guard, gem, grip]:
+				g.add_child(n)
+		"mace":
+			var shaft := cyl(0.03, 0.035, 0.7, mat(Color(0.3, 0.22, 0.12)), 6)
+			shaft.position.y = 0.25
+			var head := sphere(0.13, mat(Color(0.75, 0.68, 0.45), 0.35, 0.8), 8)
+			head.position.y = 0.62
+			for i in 4:
+				var fl := box(Vector3(0.05, 0.2, 0.2), mat(Color(0.75, 0.68, 0.45), 0.35, 0.8))
+				fl.position.y = 0.62
+				fl.rotation.y = i * PI / 4
+				g.add_child(fl)
+			g.add_child(shaft)
+			g.add_child(head)
 		"sword", "boss_sword":
 			var big := type == "boss_sword"
 			var blade := box(Vector3(0.08, 1.6 if big else 1.0, 0.03), mat(Color(0.78, 0.8, 0.83), 0.3, 0.9))
@@ -113,7 +158,7 @@ static func weapon(type: String) -> Node3D:
 		"staff":
 			var shaft := cyl(0.035, 0.045, 1.6, mat(Color(0.36, 0.23, 0.11)), 6)
 			shaft.position.y = 0.5
-			var orb := sphere(0.11, glow_mat(Color(0.4, 0.67, 1.0), 4.0), 8)
+			var orb := sphere(0.11, glow_mat(orb_color, 4.0), 8)
 			orb.position.y = 1.35
 			g.add_child(shaft)
 			g.add_child(orb)
@@ -199,11 +244,19 @@ static func humanoid(o: Dictionary) -> Node3D:
 	rig.add_child(leg_l)
 	rig.add_child(leg_r)
 
-	var wpn := weapon(wpn_type)
+	var wpn := weapon(wpn_type, o.get("orb", Color(0.4, 0.67, 1.0)))
 	if wpn_type == "bow":
 		wpn.rotation = Vector3(0, PI / 2, 0)
 		wpn.position = Vector3(0, -0.65, -0.05)
 		arm_l.add_child(wpn)
+	elif wpn_type == "dagger":
+		wpn.position = Vector3(0, -0.68, 0)
+		wpn.rotation.x = -PI / 2
+		arm_r.add_child(wpn)
+		var w2 := weapon("dagger")
+		w2.position = Vector3(0, -0.68, 0)
+		w2.rotation.x = -PI / 2
+		arm_l.add_child(w2)
 	else:
 		wpn.position = Vector3(0, -0.68, 0)
 		wpn.rotation.x = -PI / 2
@@ -224,6 +277,12 @@ static func humanoid(o: Dictionary) -> Node3D:
 
 
 static func chest(tier: int) -> Node3D:
+	var custom := AssetRegistry.scene("props", "chest_%d" % tier)
+	if custom != null:
+		# 교체 모델은 뚜껑 노드 이름을 "Lid"로 둔다
+		var lid_node = custom.find_child("Lid", true, false)
+		custom.set_meta("lid", lid_node if lid_node != null else Node3D.new())
+		return custom
 	var g := Node3D.new()
 	var tint := Color(1.0, 0.82, 0.48) if tier == 2 else (Color(0.85, 0.65, 0.45) if tier == 1 else Color.WHITE)
 	var key := "chest%d" % tier
@@ -427,12 +486,125 @@ static func hp_bar() -> MeshInstance3D:
 	return m
 
 
-# 1인칭 뷰모델 (카메라 자식)
-static func view_model(cls: String) -> Node3D:
+# ------------------------------------------------------------------ 직업별 외형
+const CLASS_LOOK := {
+	"fighter": {"body": Color(0.48, 0.5, 0.53), "legs": Color(0.23, 0.23, 0.25), "helmet": Color(0.54, 0.56, 0.6), "shield": true, "metal": 0.6},
+	"swordmaster": {"body": Color(0.45, 0.12, 0.12), "legs": Color(0.12, 0.1, 0.1), "helmet": Color(0.15, 0.12, 0.12), "shield": false, "metal": 0.2},
+	"rogue": {"body": Color(0.14, 0.14, 0.16), "legs": Color(0.1, 0.1, 0.11), "helmet": Color(0.09, 0.09, 0.1), "shield": false, "metal": 0.0},
+	"deathknight": {"body": Color(0.1, 0.1, 0.13), "legs": Color(0.07, 0.07, 0.09), "helmet": Color(0.15, 0.13, 0.2), "shield": false, "metal": 0.8, "eyes": Color(0.6, 0.3, 1.0)},
+	"druid": {"body": Color(0.3, 0.4, 0.2), "legs": Color(0.3, 0.22, 0.13), "helmet": Color(0.35, 0.5, 0.25), "shield": false, "metal": 0.0},
+	"pyromancer": {"body": Color(0.55, 0.16, 0.08), "legs": Color(0.3, 0.08, 0.05), "helmet": Color(0.45, 0.12, 0.06), "shield": false, "metal": 0.0},
+	"cryomancer": {"body": Color(0.6, 0.75, 0.88), "legs": Color(0.3, 0.4, 0.55), "helmet": Color(0.7, 0.85, 0.95), "shield": false, "metal": 0.0},
+	"priest": {"body": Color(0.85, 0.82, 0.72), "legs": Color(0.55, 0.5, 0.4), "helmet": Color(0.9, 0.8, 0.45), "shield": false, "metal": 0.3},
+}
+const ORB_COLORS := {"druid": Color(0.4, 1.0, 0.45), "pyromancer": Color(1.0, 0.45, 0.15), "cryomancer": Color(0.6, 0.9, 1.0)}
+
+
+static func orb_color(cls: String) -> Color:
+	return ORB_COLORS.get(cls, Color(0.4, 0.67, 1.0))
+
+
+# 모험가(플레이어/AI) 모델: res://assets/characters/<직업>.glb 가 있으면 교체됨
+static func hero_rig(cls: String, wmodel: String, helmet: bool) -> CharacterRig:
+	return CharacterRig.create(cls, func():
+		var look: Dictionary = CLASS_LOOK[cls]
+		var root := humanoid({
+			"body": look.body, "legs": look.legs, "helmet": look.helmet if helmet else null,
+			"weapon": wmodel, "shield": look.shield, "metal": look.metal, "eyes": look.get("eyes", null),
+			"orb": orb_color(cls),
+		})
+		return root)
+
+
+# 드루이드 표범 형태
+static func panther_rig() -> CharacterRig:
+	return CharacterRig.create("panther", func():
+		var root := Node3D.new()
+		var rig := Node3D.new()
+		root.add_child(rig)
+		var fur := mat(Color(0.08, 0.08, 0.09), 0.6)
+		var body := box(Vector3(0.5, 0.45, 1.3), fur)
+		body.position.y = 0.75
+		var head := box(Vector3(0.36, 0.34, 0.42), fur)
+		head.position = Vector3(0, 0.95, -0.8)
+		var tail := box(Vector3(0.08, 0.08, 0.8), fur)
+		tail.position = Vector3(0, 0.85, 1.0)
+		tail.rotation.x = -0.4
+		var meshes := [body, head, tail]
+		for n in meshes:
+			rig.add_child(n)
+		for s in [-1, 1]:
+			var e := box(Vector3(0.07, 0.04, 0.02), glow_mat(Color(0.5, 1.0, 0.4), 6.0))
+			e.position = Vector3(s * 0.09, 1.0, -1.02)
+			rig.add_child(e)
+		var legs := []
+		for p in [Vector3(-0.18, 0.55, -0.45), Vector3(0.18, 0.55, -0.45), Vector3(-0.18, 0.55, 0.45), Vector3(0.18, 0.55, 0.45)]:
+			var pivot := Node3D.new()
+			pivot.position = p
+			var leg := box(Vector3(0.13, 0.55, 0.13), fur)
+			leg.position.y = -0.27
+			pivot.add_child(leg)
+			rig.add_child(pivot)
+			legs.append(pivot)
+			meshes.append(leg)
+		var dummy := Node3D.new()
+		rig.add_child(dummy)
+		root.set_meta("parts", {"rig": rig, "leg_l": dummy, "leg_r": dummy, "arm_l": dummy, "arm_r": dummy, "panther_legs": legs})
+		root.set_meta("meshes", meshes)
+		return root)
+
+
+# 드루이드 소환수 트렌트
+static func treant_rig() -> CharacterRig:
+	return CharacterRig.create("treant", func():
+		var root := humanoid({"skin": Color(0.35, 0.25, 0.15), "body": Color(0.32, 0.22, 0.12), "legs": Color(0.28, 0.2, 0.1), "weapon": "claws", "scale": 1.6, "eyes": Color(0.5, 1.0, 0.3), "hunch": 0.2})
+		var leaves := sphere(0.45, mat(Color(0.2, 0.45, 0.15)), 8)
+		leaves.position.y = 3.25
+		root.add_child(leaves)
+		return root)
+
+
+# 크라이오맨서 서리 장벽 얼음 덩어리
+static func ice_block(h: float) -> MeshInstance3D:
+	var m := MeshInstance3D.new()
+	var b := BoxMesh.new()
+	b.size = Vector3(1.4, h, 1.4)
+	m.mesh = b
+	var mt := StandardMaterial3D.new()
+	mt.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mt.albedo_color = Color(0.6, 0.85, 1.0, 0.45)
+	mt.roughness = 0.05
+	mt.metallic = 0.2
+	mt.emission_enabled = true
+	mt.emission = Color(0.3, 0.6, 1.0)
+	mt.emission_energy_multiplier = 0.6
+	mt.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.material_override = mt
+	m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	m.position.y = h / 2.0
+	return m
+
+
+# ------------------------------------------------------------------ 1인칭 뷰모델 (카메라 자식)
+# res://assets/viewmodels/<직업>.glb 가 있으면 교체 (자식 노드 "R", "L"이 있으면 손 애니메이션이 적용됨)
+static func view_model(cls: String, wmodel: String, panther := false) -> Node3D:
+	var key := "panther" if panther else cls
+	var custom := AssetRegistry.scene("viewmodels", key)
+	if custom != null:
+		for n in ["R", "L"]:
+			if custom.find_child(n, true, false) == null:
+				var d := Node3D.new()
+				d.name = n
+				custom.add_child(d)
+		custom.set_meta("R", custom.find_child("R", true, false))
+		custom.set_meta("L", custom.find_child("L", true, false))
+		custom.set_meta("weapon", Node3D.new())
+		return custom
 	var g := Node3D.new()
-	var sleeve_c := Color(0.18, 0.2, 0.44) if cls == "mage" else (Color(0.2, 0.33, 0.18) if cls == "ranger" else Color(0.45, 0.47, 0.52))
-	var arm_mat := mat(sleeve_c, 0.6, 0.0 if cls != "fighter" else 0.6)
-	var hand_mat := mat(Color(0.7, 0.52, 0.4))
+	var look: Dictionary = CLASS_LOOK[cls]
+	var sleeve_c: Color = Color(0.06, 0.06, 0.07) if panther else look.body
+	var arm_mat := mat(sleeve_c, 0.6, look.metal if not panther else 0.0)
+	var hand_mat := mat(Color(0.08, 0.08, 0.09) if panther else Color(0.7, 0.52, 0.4))
 	var make_arm := func(side: float) -> Node3D:
 		var a := Node3D.new()
 		var sleeve := box(Vector3(0.09, 0.09, 0.4), arm_mat)
@@ -447,41 +619,77 @@ static func view_model(cls: String) -> Node3D:
 	var L: Node3D = make_arm.call(-1.0)
 	g.add_child(R)
 	g.add_child(L)
-	var w: Node3D
-	if cls == "fighter":
-		w = weapon("sword")
-		w.position = Vector3(0, 0, -0.14)
-		w.rotation = Vector3(-0.5, 0, -0.25)
-		w.scale = Vector3.ONE * 0.55
-		R.add_child(w)
-		var sh := cyl(0.2, 0.2, 0.04, mat(Color(0.29, 0.2, 0.09)), 14)
-		sh.rotation.x = PI / 2
-		sh.position = Vector3(-0.06, -0.02, -0.3)
-		var boss := sphere(0.045, mat(Color(0.47, 0.47, 0.47), 0.3, 0.9), 6)
-		boss.position = Vector3(-0.06, -0.02, -0.33)
-		L.add_child(sh)
-		L.add_child(boss)
-	elif cls == "ranger":
-		w = weapon("bow")
-		w.rotation = Vector3(0, PI / 2, 0.15)
-		w.position = Vector3(0, 0.02, -0.12)
-		w.scale = Vector3.ONE * 0.5
-		L.add_child(w)
-		var ar := arrow()
-		ar.position = Vector3(-0.04, -0.22, -0.7)
-		ar.scale = Vector3.ONE * 0.7
-		g.add_child(ar)
-		g.set_meta("arrow", ar)
+	var w := Node3D.new()
+	if panther:
+		# 발톱
+		for arm in [R, L]:
+			for i in 3:
+				var claw := box(Vector3(0.015, 0.015, 0.12), mat(Color(0.9, 0.88, 0.8), 0.3))
+				claw.position = Vector3((i - 1) * 0.025, 0.02, -0.22)
+				arm.add_child(claw)
 	else:
-		w = weapon("staff")
-		w.position = Vector3(0, -0.3, -0.12)
-		w.rotation = Vector3(-0.35, 0, -0.12)
-		w.scale = Vector3.ONE * 0.42
-		R.add_child(w)
+		match wmodel:
+			"sword":
+				w = weapon("sword")
+				w.position = Vector3(0, 0, -0.14)
+				w.rotation = Vector3(-0.5, 0, -0.25)
+				w.scale = Vector3.ONE * 0.55
+				R.add_child(w)
+			"longsword":
+				w = weapon("longsword")
+				w.position = Vector3(-0.08, 0.0, -0.14)
+				w.rotation = Vector3(-0.45, 0, 0.15)
+				w.scale = Vector3.ONE * 0.55
+				R.add_child(w)
+				L.position = Vector3(-0.08, -0.38, -0.55)
+			"greatsword":
+				w = weapon("greatsword")
+				w.position = Vector3(-0.08, 0.0, -0.12)
+				w.rotation = Vector3(-0.35, 0, 0.3)
+				w.scale = Vector3.ONE * 0.5
+				R.add_child(w)
+			"dagger":
+				w = weapon("dagger")
+				w.position = Vector3(0, 0, -0.14)
+				w.rotation = Vector3(-1.2, 0, 0)
+				w.scale = Vector3.ONE * 0.7
+				R.add_child(w)
+				var w2 := weapon("dagger")
+				w2.position = Vector3(0, 0, -0.14)
+				w2.rotation = Vector3(-1.2, 0, 0)
+				w2.scale = Vector3.ONE * 0.7
+				L.add_child(w2)
+			"mace":
+				w = weapon("mace")
+				w.position = Vector3(0, 0, -0.12)
+				w.rotation = Vector3(-0.6, 0, -0.2)
+				w.scale = Vector3.ONE * 0.6
+				R.add_child(w)
+				var book := box(Vector3(0.16, 0.2, 0.05), mat(Color(0.5, 0.35, 0.15)))
+				book.position = Vector3(0.05, 0.08, -0.2)
+				var trim := box(Vector3(0.17, 0.21, 0.02), glow_mat(Color(1.0, 0.85, 0.4), 1.5))
+				trim.position = Vector3(0.05, 0.08, -0.23)
+				L.add_child(book)
+				L.add_child(trim)
+			_:
+				w = weapon("staff", orb_color(cls))
+				w.position = Vector3(0, -0.3, -0.12)
+				w.rotation = Vector3(-0.35, 0, -0.12)
+				w.scale = Vector3.ONE * 0.42
+				R.add_child(w)
+		if cls == "fighter":
+			var sh := cyl(0.2, 0.2, 0.04, mat(Color(0.29, 0.2, 0.09)), 14)
+			sh.rotation.x = PI / 2
+			sh.position = Vector3(-0.06, -0.02, -0.3)
+			var boss := sphere(0.045, mat(Color(0.47, 0.47, 0.47), 0.3, 0.9), 6)
+			boss.position = Vector3(-0.06, -0.02, -0.33)
+			L.add_child(sh)
+			L.add_child(boss)
 	# 뷰모델은 그림자를 드리우지 않음
 	for n in g.find_children("*", "GeometryInstance3D", true, false):
 		(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	g.set_meta("R", R)
 	g.set_meta("L", L)
 	g.set_meta("weapon", w)
+	g.set_meta("L0", L.position)
 	return g

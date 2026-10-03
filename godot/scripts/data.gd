@@ -9,59 +9,131 @@ const RARITIES := [
 	{"name": "전설", "color": Color("#ff9b2f"), "mult": 1.8, "value": 16.0},
 ]
 
+# 던전본의 8개 직업. res: 직업 자원 (mana/soul/primal, ""면 없음)
+# skills: lmb/rmb/q/e (드루이드는 표범 형태용 lmb_p/rmb_p/e_p 추가)
 const CLASSES := {
 	"fighter": {
-		"id": "fighter", "name": "전사", "icon": "🛡",
-		"desc": "검과 방패로 전열을 지키는 근접 전투의 달인. 높은 체력과 방어(우클릭)로 버틴다.",
-		"hp": 140, "speed": 5.0, "mana": 0,
+		"id": "fighter", "name": "파이터", "icon": "🛡", "hp": 140, "speed": 5.0, "armor": 5,
+		"res": "", "res_max": 0,
+		"desc": "검과 방패로 전열을 지키는 근접 전투의 기본. 회전베기로 다수를 상대한다.",
 		"skills": {
 			"lmb": {"name": "베기", "desc": "전방 부채꼴 근접 공격 (연속 콤보)", "cd": 0.0},
-			"rmb": {"name": "방어", "desc": "누르고 있는 동안 정면 피해 75% 감소", "cd": 0.0},
-			"q": {"name": "돌진", "desc": "전방으로 돌진하며 적을 강타하고 기절", "cd": 8.0},
-			"e": {"name": "분노", "desc": "6초간 공격력 +35%, 이동속도 +10%", "cd": 22.0},
+			"rmb": {"name": "방패 방어", "desc": "누르는 동안 정면 피해 75% 감소 (스태미나 소모)", "cd": 0.0},
+			"q": {"name": "회오리 베기", "desc": "2초간 회전하며 주변 적을 연속으로 벤다 (스태미나 20)", "cd": 12.0},
+			"e": {"name": "돌진", "desc": "전방으로 돌진해 처음 부딪힌 적에게 피해와 기절", "cd": 9.0},
 		},
 	},
-	"ranger": {
-		"id": "ranger", "name": "레인저", "icon": "🏹",
-		"desc": "활을 다루는 원거리 사냥꾼. 당길수록 강해지는 화살과 빠른 기동력.",
-		"hp": 100, "speed": 5.5, "mana": 0,
+	"swordmaster": {
+		"id": "swordmaster", "name": "소드마스터", "icon": "⚔", "hp": 120, "speed": 5.4, "armor": 0,
+		"res": "", "res_max": 0,
+		"desc": "빠른 장검술과 염동 검을 다루는 검객. 패링으로 적의 공격을 받아친다.",
 		"skills": {
-			"lmb": {"name": "사격", "desc": "누르고 있다가 놓아 발사 (충전 시 강화, 헤드샷 1.5배)", "cd": 0.0},
-			"rmb": {"name": "조준", "desc": "시야 확대", "cd": 0.0},
-			"q": {"name": "연발 사격", "desc": "부채꼴로 화살 3발 발사", "cd": 7.0},
-			"e": {"name": "구르기", "desc": "이동 방향으로 빠르게 회피 (무적)", "cd": 5.0},
+			"lmb": {"name": "연속 베기", "desc": "빠르고 넓은 장검 베기", "cd": 0.0},
+			"rmb": {"name": "패링", "desc": "짧은 순간 모든 공격을 막고, 근접 공격자를 기절시킨다", "cd": 1.2},
+			"q": {"name": "사이오닉 블레이드", "desc": "적을 추적하는 염동 검 4자루를 날린다. 적중 시 체력 회복", "cd": 16.0},
+			"e": {"name": "회오리 검", "desc": "8초간 검 하나가 주위를 돌며 베고, 받는 피해 25% 감소", "cd": 18.0},
 		},
 	},
-	"mage": {
-		"id": "mage", "name": "마법사", "icon": "🔮",
-		"desc": "비전 마법과 화염을 다루는 술사. 마나를 소모해 강력한 주문을 쏟아낸다.",
-		"hp": 90, "speed": 5.0, "mana": 100,
+	"rogue": {
+		"id": "rogue", "name": "로그", "icon": "🗡", "hp": 95, "speed": 5.6, "armor": 0,
+		"res": "", "res_max": 0,
+		"desc": "단검과 독, 은신을 쓰는 암살자. 등 뒤와 은신 상태의 일격이 치명적이다.",
 		"skills": {
-			"lmb": {"name": "마력탄", "desc": "빠른 비전 투사체 (마나 10)", "cd": 0.0},
-			"rmb": {"name": "비전 보호막", "desc": "8초간 피해 50 흡수 (마나 30)", "cd": 15.0},
-			"q": {"name": "화염구", "desc": "폭발하는 화염구 (마나 30)", "cd": 6.0},
-			"e": {"name": "치유의 빛", "desc": "4초간 체력 50 회복 (마나 35)", "cd": 18.0},
+			"lmb": {"name": "찌르기", "desc": "빠른 단검 공격. 등 뒤에서 1.6배, 은신 중 첫 공격 2.5배", "cd": 0.0},
+			"rmb": {"name": "단검 투척", "desc": "단검을 던진다", "cd": 1.5},
+			"q": {"name": "석화 독", "desc": "독병을 던져 주변 적을 2초간 묶고 중독시킨다", "cd": 14.0},
+			"e": {"name": "은신", "desc": "1.5초 집중 후 15초간 은신. 가까이 오지 않으면 적이 감지하지 못한다", "cd": 20.0},
+		},
+	},
+	"deathknight": {
+		"id": "deathknight", "name": "데스나이트", "icon": "💀", "hp": 150, "speed": 4.7, "armor": 10,
+		"res": "soul", "res_max": 100,
+		"desc": "영혼 에너지를 다루는 중갑 기사. 적을 끌어당기고 생명력을 흡수한다.",
+		"skills": {
+			"lmb": {"name": "내려베기", "desc": "느리지만 강한 대검 공격. 피해의 10% 흡혈, 영혼 +8", "cd": 0.0},
+			"rmb": {"name": "방어", "desc": "누르는 동안 정면 피해 감소", "cd": 0.0},
+			"q": {"name": "영혼의 장막", "desc": "5초간 주변 적을 둔화시키고 암흑 피해 (영혼 40)", "cd": 12.0},
+			"e": {"name": "무덤의 손아귀", "desc": "적을 붙잡아 끌어당기고 기절. 적중 시 영혼 +20", "cd": 10.0},
+		},
+	},
+	"druid": {
+		"id": "druid", "name": "드루이드", "icon": "🌿", "hp": 110, "speed": 5.0, "armor": 0,
+		"res": "primal", "res_max": 100,
+		"desc": "자연의 힘을 다루는 술사. 표범으로 변신해 추격하거나 트렌트를 불러 싸운다.",
+		"skills": {
+			"lmb": {"name": "가시 덩굴", "desc": "가시를 날린다", "cd": 0.0},
+			"rmb": {"name": "지팡이 치기", "desc": "근접 공격으로 적을 밀어낸다", "cd": 0.8},
+			"q": {"name": "원시의 각성", "desc": "표범으로 변신 (이동속도 대폭 증가, 해로운 효과 제거). 원시 에너지 30 + 초당 4 소모. 다시 누르면 해제", "cd": 2.0},
+			"e": {"name": "자연의 힘", "desc": "30초간 싸우는 트렌트를 소환하고 보호막 30을 얻는다", "cd": 30.0},
+			"lmb_p": {"name": "할퀴기", "desc": "빠른 발톱 공격", "cd": 0.0},
+			"rmb_p": {"name": "포효", "desc": "주변 적을 밀어낸다", "cd": 6.0},
+			"e_p": {"name": "그림자 습격", "desc": "앞으로 도약해 처음 닿은 적에게 큰 피해 (원시 15)", "cd": 6.0},
+		},
+	},
+	"pyromancer": {
+		"id": "pyromancer", "name": "파이로맨서", "icon": "🔥", "hp": 90, "speed": 5.0, "armor": 0,
+		"res": "mana", "res_max": 100,
+		"desc": "적을 추적하는 화염탄과 폭발로 전장을 불태우는 화염 술사.",
+		"skills": {
+			"lmb": {"name": "화염탄", "desc": "적을 추적하는 빠른 화염탄 (마나 8)", "cd": 0.0},
+			"rmb": {"name": "지팡이 치기", "desc": "근접 공격으로 적을 밀어낸다", "cd": 0.8},
+			"q": {"name": "화염 폭발", "desc": "거대한 화염구. 넓은 범위에 큰 피해 (마나 35)", "cd": 8.0},
+			"e": {"name": "화염 파동", "desc": "전방 넓은 범위를 불태우고 강하게 밀쳐낸다 (마나 25)", "cd": 10.0},
+		},
+	},
+	"cryomancer": {
+		"id": "cryomancer", "name": "크라이오맨서", "icon": "❄", "hp": 90, "speed": 5.0, "armor": 0,
+		"res": "mana", "res_max": 100,
+		"desc": "냉기로 적을 둔화시키고 얼음 속에서 버티는 냉기 술사.",
+		"skills": {
+			"lmb": {"name": "얼음 화살", "desc": "적중 시 둔화 (마나 8)", "cd": 0.0},
+			"rmb": {"name": "지팡이 치기", "desc": "근접 공격으로 적을 밀어낸다", "cd": 0.8},
+			"q": {"name": "얼음 폭풍", "desc": "조준 지점에 4초간 얼음 폭풍. 범위 피해와 둔화 (마나 35)", "cd": 12.0},
+			"e": {"name": "서리 장벽", "desc": "3초간 얼음에 갇혀 무적이 되고 체력 40 회복 (마나 30)", "cd": 25.0},
+		},
+	},
+	"priest": {
+		"id": "priest", "name": "프리스트", "icon": "✨", "hp": 105, "speed": 5.0, "armor": 5,
+		"res": "mana", "res_max": 100,
+		"desc": "신성한 힘으로 치유하고 보호막을 거는 성직자. 철퇴로 직접 싸울 수도 있다.",
+		"skills": {
+			"lmb": {"name": "철퇴", "desc": "철퇴 근접 공격", "cd": 0.0},
+			"rmb": {"name": "정화", "desc": "누르고 있다가 놓으면 치유 (오래 모을수록 최대 3배) + 해로운 효과 제거 (마나 15)", "cd": 0.8},
+			"q": {"name": "신성한 인도", "desc": "주변 아군 치유·해로운 효과 제거, 주변 적에게 피해 (마나 35)", "cd": 14.0},
+			"e": {"name": "수호", "desc": "주변 아군에게 8초간 피해 50을 흡수하는 보호막 (마나 30)", "cd": 18.0},
 		},
 	},
 }
+
+const CLASS_ORDER := ["fighter", "swordmaster", "rogue", "deathknight", "druid", "pyromancer", "cryomancer", "priest"]
+const RES_NAMES := {"mana": "마나", "soul": "영혼", "primal": "원시 에너지"}
+const RES_COLORS := {"mana": Color(0.29, 0.48, 1.0), "soul": Color(0.6, 0.25, 0.85), "primal": Color(0.35, 0.8, 0.3)}
 
 const SLOT_NAMES := {"weapon": "무기", "head": "머리", "chest": "몸통", "trinket": "장신구"}
 const GEAR_SLOTS := ["weapon", "head", "chest", "trinket"]
 
 const ITEM_BASES := {
-	# 무기
-	"rusty_sword": {"name": "녹슨 장검", "slot": "weapon", "cls": "fighter", "dmg": 1.0, "value": 15, "icon": "🗡"},
-	"arming_sword": {"name": "기사의 장검", "slot": "weapon", "cls": "fighter", "dmg": 1.18, "value": 40, "icon": "🗡"},
-	"war_axe": {"name": "전투 도끼", "slot": "weapon", "cls": "fighter", "dmg": 1.3, "value": 60, "icon": "🪓"},
-	"zweihander": {"name": "츠바이핸더", "slot": "weapon", "cls": "fighter", "dmg": 1.45, "value": 95, "icon": "⚔"},
-	"short_bow": {"name": "단궁", "slot": "weapon", "cls": "ranger", "dmg": 1.0, "value": 15, "icon": "🏹"},
-	"hunting_bow": {"name": "사냥꾼의 활", "slot": "weapon", "cls": "ranger", "dmg": 1.18, "value": 40, "icon": "🏹"},
-	"long_bow": {"name": "장궁", "slot": "weapon", "cls": "ranger", "dmg": 1.32, "value": 65, "icon": "🏹"},
-	"elven_bow": {"name": "엘프의 활", "slot": "weapon", "cls": "ranger", "dmg": 1.45, "value": 95, "icon": "🏹"},
-	"oak_staff": {"name": "참나무 지팡이", "slot": "weapon", "cls": "mage", "dmg": 1.0, "value": 15, "icon": "🪄"},
-	"crystal_staff": {"name": "수정 지팡이", "slot": "weapon", "cls": "mage", "dmg": 1.18, "value": 40, "icon": "🪄"},
-	"spellbook": {"name": "마도서", "slot": "weapon", "cls": "mage", "dmg": 1.3, "value": 65, "icon": "📕"},
-	"archmage_staff": {"name": "대마법사의 지팡이", "slot": "weapon", "cls": "mage", "dmg": 1.45, "value": 95, "icon": "🔮"},
+	# 무기 (classes: 장착 가능한 직업)
+	"rusty_sword": {"name": "녹슨 장검", "slot": "weapon", "classes": ["fighter", "swordmaster"], "dmg": 1.0, "value": 15, "icon": "🗡", "model": "sword"},
+	"arming_sword": {"name": "기사의 장검", "slot": "weapon", "classes": ["fighter", "swordmaster"], "dmg": 1.18, "value": 40, "icon": "🗡", "model": "sword"},
+	"war_axe": {"name": "전투 도끼", "slot": "weapon", "classes": ["fighter"], "dmg": 1.3, "value": 60, "icon": "🪓", "model": "sword"},
+	"zweihander": {"name": "츠바이핸더", "slot": "weapon", "classes": ["swordmaster", "deathknight"], "dmg": 1.45, "value": 95, "icon": "⚔", "model": "greatsword"},
+	"training_longsword": {"name": "수련용 장검", "slot": "weapon", "classes": ["swordmaster"], "dmg": 1.0, "value": 15, "icon": "🗡", "model": "longsword"},
+	"katana": {"name": "카타나", "slot": "weapon", "classes": ["swordmaster"], "dmg": 1.32, "value": 70, "icon": "🗡", "model": "longsword"},
+	"rusty_dagger": {"name": "녹슨 단검", "slot": "weapon", "classes": ["rogue"], "dmg": 1.0, "value": 15, "icon": "🔪", "model": "dagger"},
+	"twin_daggers": {"name": "쌍단검", "slot": "weapon", "classes": ["rogue"], "dmg": 1.18, "value": 40, "icon": "🔪", "model": "dagger"},
+	"venom_dagger": {"name": "독날 단검", "slot": "weapon", "classes": ["rogue"], "dmg": 1.3, "value": 65, "icon": "🔪", "model": "dagger"},
+	"shadow_dagger": {"name": "그림자 단검", "slot": "weapon", "classes": ["rogue"], "dmg": 1.45, "value": 95, "icon": "🔪", "model": "dagger"},
+	"rusty_greatsword": {"name": "녹슨 대검", "slot": "weapon", "classes": ["deathknight"], "dmg": 1.0, "value": 15, "icon": "⚔", "model": "greatsword"},
+	"reaper_scythe": {"name": "사신의 낫", "slot": "weapon", "classes": ["deathknight"], "dmg": 1.3, "value": 70, "icon": "☠", "model": "greatsword"},
+	"oak_staff": {"name": "참나무 지팡이", "slot": "weapon", "classes": ["druid", "pyromancer", "cryomancer"], "dmg": 1.0, "value": 15, "icon": "🪄", "model": "staff"},
+	"crystal_staff": {"name": "수정 지팡이", "slot": "weapon", "classes": ["druid", "pyromancer", "cryomancer"], "dmg": 1.18, "value": 40, "icon": "🪄", "model": "staff"},
+	"living_staff": {"name": "생명의 지팡이", "slot": "weapon", "classes": ["druid"], "dmg": 1.32, "value": 70, "icon": "🌿", "model": "staff"},
+	"spellbook": {"name": "마도서", "slot": "weapon", "classes": ["pyromancer", "cryomancer", "priest"], "dmg": 1.3, "value": 65, "icon": "📕", "model": "staff"},
+	"archmage_staff": {"name": "대마법사의 지팡이", "slot": "weapon", "classes": ["pyromancer", "cryomancer"], "dmg": 1.45, "value": 95, "icon": "🔮", "model": "staff"},
+	"iron_mace": {"name": "철 철퇴", "slot": "weapon", "classes": ["priest"], "dmg": 1.0, "value": 15, "icon": "🔨", "model": "mace"},
+	"holy_mace": {"name": "성스러운 철퇴", "slot": "weapon", "classes": ["priest"], "dmg": 1.25, "value": 55, "icon": "🔨", "model": "mace"},
+	"sun_mace": {"name": "태양의 철퇴", "slot": "weapon", "classes": ["priest"], "dmg": 1.45, "value": 95, "icon": "🔨", "model": "mace"},
 	# 머리
 	"leather_cap": {"name": "가죽 모자", "slot": "head", "armor": 8, "value": 12, "icon": "🧢"},
 	"iron_helm": {"name": "철 투구", "slot": "head", "armor": 16, "value": 30, "icon": "⛑"},
@@ -71,7 +143,7 @@ const ITEM_BASES := {
 	"padded_tunic": {"name": "누빔 튜닉", "slot": "chest", "armor": 12, "value": 15, "icon": "👕"},
 	"chain_mail": {"name": "사슬 갑옷", "slot": "chest", "armor": 28, "speed": -0.04, "value": 45, "icon": "🥋"},
 	"plate_armor": {"name": "판금 갑옷", "slot": "chest", "armor": 45, "speed": -0.08, "value": 80, "icon": "🛡"},
-	"ranger_coat": {"name": "레인저 외투", "slot": "chest", "armor": 18, "speed": 0.04, "value": 50, "icon": "🧥"},
+	"ranger_coat": {"name": "사냥꾼 외투", "slot": "chest", "armor": 18, "speed": 0.04, "value": 50, "icon": "🧥"},
 	"arcane_robe": {"name": "비전 로브", "slot": "chest", "armor": 10, "mana": 40, "value": 55, "icon": "👘"},
 	# 장신구
 	"copper_ring": {"name": "구리 반지", "slot": "trinket", "hp": 10, "value": 20, "icon": "💍"},
@@ -91,7 +163,14 @@ const ITEM_BASES := {
 	"dragon_heart": {"name": "용의 심장석", "slot": "treasure", "value": 400, "icon": "💎"},
 }
 
-const STARTER_WEAPON := {"fighter": "rusty_sword", "ranger": "short_bow", "mage": "oak_staff"}
+const STARTER_WEAPON := {
+	"fighter": "rusty_sword", "swordmaster": "training_longsword", "rogue": "rusty_dagger", "deathknight": "rusty_greatsword",
+	"druid": "oak_staff", "pyromancer": "oak_staff", "cryomancer": "oak_staff", "priest": "iron_mace",
+}
+
+# 이전 버전(레인저/마법사) 세이브 변환용
+const LEGACY_CLASS := {"ranger": "rogue", "mage": "pyromancer"}
+const LEGACY_ITEM := {"short_bow": "rusty_dagger", "hunting_bow": "twin_daggers", "long_bow": "venom_dagger", "elven_bow": "shadow_dagger"}
 
 const MONSTERS := {
 	"skeleton": {"name": "스켈레톤 전사", "hp": 80, "dmg": 13, "speed": 3.6, "range": 2.3, "cd": 1.3, "sight": 16.0, "ranged": false, "scale": 1.0, "boss": false},
@@ -236,11 +315,18 @@ func roll_loot(count: int, luck: float = 0.0) -> Array:
 	return items
 
 
+func class_names(classes: Array) -> String:
+	var out := []
+	for c in classes:
+		out.append(CLASSES[c].name)
+	return ", ".join(out)
+
+
 func can_equip(item: Dictionary, cls: String) -> bool:
 	var b := base_of(item)
 	if not (b["slot"] in GEAR_SLOTS):
 		return false
-	if b["slot"] == "weapon" and b["cls"] != cls:
+	if b["slot"] == "weapon" and not (cls in b["classes"]):
 		return false
 	return true
 
@@ -248,10 +334,10 @@ func can_equip(item: Dictionary, cls: String) -> bool:
 func compute_stats(cls: String, equipment: Dictionary) -> Dictionary:
 	var c: Dictionary = CLASSES[cls]
 	var hp: float = c["hp"]
-	var armor := 0.0
+	var armor: float = c.get("armor", 0)
 	var speed := 0.0
 	var dmg_bonus := 0.0
-	var mana: float = c["mana"]
+	var res_max: float = c["res_max"]
 	var dmg := 0.85
 	for slot in GEAR_SLOTS:
 		var it = equipment.get(slot)
@@ -264,16 +350,25 @@ func compute_stats(cls: String, equipment: Dictionary) -> Dictionary:
 		armor += s.get("armor", 0)
 		speed += s.get("speed", 0.0)
 		dmg_bonus += s.get("dmgBonus", 0.0)
-		if c["mana"] > 0:
-			mana += s.get("mana", 0)
+		# 마나 옵션은 마나를 쓰는 직업에만 적용
+		if c["res"] == "mana":
+			res_max += s.get("mana", 0)
 	return {
 		"max_hp": hp,
 		"armor": armor,
 		"speed_mul": maxf(0.6, 1.0 + speed),
 		"dmg_mul": dmg * (1.0 + dmg_bonus),
-		"max_mana": mana,
+		"res": c["res"],
+		"res_max": res_max,
 		"base_speed": c["speed"],
 	}
+
+
+func weapon_model(cls: String, equipment: Dictionary) -> String:
+	var w = equipment.get("weapon")
+	if w != null:
+		return base_of(w).get("model", "sword")
+	return ITEM_BASES[STARTER_WEAPON[cls]]["model"]
 
 
 func items_value(items: Array) -> int:

@@ -18,7 +18,7 @@ func fresh() -> Dictionary:
 		"gold": 150,
 		"equipment": {"weapon": Data.make_item("rusty_sword"), "head": null, "chest": Data.make_item("padded_tunic"), "trinket": null},
 		"bag": [Data.make_item("health_potion"), Data.make_item("health_potion")],
-		"stash": [Data.make_item("short_bow"), Data.make_item("oak_staff"), Data.make_item("leather_cap"), Data.make_item("bandage"), Data.make_item("bandage")],
+		"stash": [Data.make_item("rusty_dagger"), Data.make_item("oak_staff"), Data.make_item("iron_mace"), Data.make_item("leather_cap"), Data.make_item("bandage"), Data.make_item("bandage")],
 		"stats": {"raids": 0, "extracts": 0, "deaths": 0, "kills": 0, "pvp_kills": 0, "best_haul": 0},
 		"settings": {"sensitivity": 1.0, "quality": "mid"},
 	}
@@ -40,6 +40,21 @@ func load_save() -> void:
 	for it in _all_items(f):
 		it["rarity"] = int(it["rarity"])
 		it["value"] = int(it["value"])
+		# 이전 버전 아이템(활 등)을 새 무기로 변환
+		if Data.LEGACY_ITEM.has(it["base"]):
+			it["base"] = Data.LEGACY_ITEM[it["base"]]
+	if Data.LEGACY_CLASS.has(f["cls"]):
+		f["cls"] = Data.LEGACY_CLASS[f["cls"]]
+	if not Data.CLASSES.has(f["cls"]):
+		f["cls"] = "fighter"
+	# 현재 직업이 쓸 수 없는 무기를 들고 있으면 보관함으로
+	var w = f["equipment"]["weapon"]
+	if w != null and not Data.can_equip(w, f["cls"]):
+		f["stash"].append(w)
+		f["equipment"]["weapon"] = null
+	# 알 수 없는 아이템 제거
+	f["stash"] = f["stash"].filter(func(it): return Data.ITEM_BASES.has(it["base"]))
+	f["bag"] = f["bag"].filter(func(it): return Data.ITEM_BASES.has(it["base"]))
 	data = f
 
 

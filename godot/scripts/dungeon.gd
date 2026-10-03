@@ -274,21 +274,28 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 				if adj:
 					walls.append(Transform3D(Basis(), Vector3((x + 0.5) * T, WALL_H / 2.0, (z + 0.5) * T)))
 
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(T, T)
-	plane.material = floor_mat
+	# 타일 메시: res://assets/dungeon/<floor|ceiling|wall|pillar|barrel>.glb 가 있으면 교체 (docs/ART_PIPELINE.md)
+	var plane: Mesh = AssetRegistry.mesh("dungeon", "floor")
+	if plane == null:
+		plane = PlaneMesh.new()
+		plane.size = Vector2(T, T)
+		plane.material = floor_mat
 	root.add_child(_multimesh(plane, floors))
-	var cplane := PlaneMesh.new()
-	cplane.size = Vector2(T, T)
-	cplane.material = ceil_mat
+	var cplane: Mesh = AssetRegistry.mesh("dungeon", "ceiling")
+	if cplane == null:
+		cplane = PlaneMesh.new()
+		cplane.size = Vector2(T, T)
+		cplane.material = ceil_mat
 	var ceil_mi := _multimesh(cplane, ceils)
 	ceil_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(ceil_mi)
-	var box := BoxMesh.new()
-	box.size = Vector3(T, WALL_H, T)
-	box.material = wall_mat
-	# 벽 텍스처가 세로로 늘어나지 않도록 UV 비율 조정
-	wall_mat.uv1_scale = Vector3(3.0, 2.0 * WALL_H / T, 1.0)
+	var box: Mesh = AssetRegistry.mesh("dungeon", "wall")
+	if box == null:
+		box = BoxMesh.new()
+		box.size = Vector3(T, WALL_H, T)
+		box.material = wall_mat
+		# 벽 텍스처가 세로로 늘어나지 않도록 UV 비율 조정
+		wall_mat.uv1_scale = Vector3(3.0, 2.0 * WALL_H / T, 1.0)
 	root.add_child(_multimesh(box, walls))
 
 	# 기둥
@@ -307,7 +314,9 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 					var bb := Basis(Vector3.UP, randf() * TAU) * Basis(Vector3.RIGHT, PI / 2)
 					bone_x.append(Transform3D(bb, p.pos + Vector3(randf_range(-0.5, 0.5), 0.05, randf_range(-0.5, 0.5))))
 				skull_x.append(Transform3D(Basis(Vector3.UP, randf() * TAU), p.pos + Vector3(0, 0.18, 0)))
-	if pillar_x.size():
+	if pillar_x.size() and AssetRegistry.mesh("dungeon", "pillar") != null:
+		root.add_child(_multimesh(AssetRegistry.mesh("dungeon", "pillar"), pillar_x))
+	elif pillar_x.size():
 		var cyl := CylinderMesh.new()
 		cyl.top_radius = 1.1
 		cyl.bottom_radius = 1.3
@@ -317,7 +326,9 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		pm.uv1_scale = Vector3(4, 2, 1)
 		cyl.material = pm
 		root.add_child(_multimesh(cyl, pillar_x))
-	if barrel_x.size():
+	if barrel_x.size() and AssetRegistry.mesh("dungeon", "barrel") != null:
+		root.add_child(_multimesh(AssetRegistry.mesh("dungeon", "barrel"), barrel_x))
+	elif barrel_x.size():
 		var bm := CylinderMesh.new()
 		bm.top_radius = 0.55
 		bm.bottom_radius = 0.5

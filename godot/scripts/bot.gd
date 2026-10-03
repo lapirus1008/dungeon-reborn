@@ -1,20 +1,11 @@
-# 경쟁 모험가 AI: 직업별 전투, 상자 약탈, 물약, 탈출 판단
+# 경쟁 모험가 AI: 던전본 8직업의 스킬을 상황에 맞게 사용, 상자 약탈, 물약, 탈출 판단
 class_name Bot
 extends AIActor
 
-const LOOK := {
-	"fighter": {"body": Color(0.48, 0.5, 0.53), "legs": Color(0.23, 0.23, 0.25), "helmet": Color(0.54, 0.56, 0.6), "weapon": "sword", "shield": true, "metal": 0.6},
-	"ranger": {"body": Color(0.2, 0.33, 0.18), "legs": Color(0.23, 0.18, 0.13), "helmet": Color(0.3, 0.25, 0.18), "weapon": "bow", "shield": false, "metal": 0.0},
-	"mage": {"body": Color(0.18, 0.2, 0.44), "legs": Color(0.14, 0.15, 0.31), "helmet": Color(0.16, 0.18, 0.4), "weapon": "staff", "shield": false, "metal": 0.0},
-}
-
 static var used_names := {}
 
-var cls := ""
 var equipment: Dictionary
-var stats: Dictionary
 var bag: Array = []
-var mana := 0.0
 var goal = null
 var goal_timer := 0.0
 var chest_t := 0.0
@@ -22,9 +13,10 @@ var extract_t := 0.0
 var react_t := 0.0
 var strafe_dir := 1.0
 var strafe_t := 0.0
-var fireball_cd := 4.0
+var skill_t := 0.0
 var aim_err := 0.05
 var courage := 0.5
+var pending_prof = null # 윈드업 중인 근접 공격
 
 
 static func _pick_name() -> String:
@@ -43,7 +35,7 @@ static func _random_gear(c: String, depth: int) -> Dictionary:
 	var luck := depth - 1 + randf()
 	var weapons := []
 	for k in Data.ITEM_BASES:
-		if Data.ITEM_BASES[k].slot == "weapon" and Data.ITEM_BASES[k].cls == c:
+		if Data.ITEM_BASES[k].slot == "weapon" and c in Data.ITEM_BASES[k].classes:
 			weapons.append(k)
 	var pick := func(slot: String) -> String:
 		var ks := []
@@ -59,8 +51,8 @@ static func _random_gear(c: String, depth: int) -> Dictionary:
 	}
 
 
-func _init(g, p: Vector3, depth: int) -> void:
-	var c: String = Data.CLASSES.keys().pick_random()
+func _init(g, p: Vector3, depth: int, force_cls := "") -> void:
+	var c: String = force_cls if force_cls != "" else Data.CLASS_ORDER.pick_random()
 	var eq := _random_gear(c, depth)
 	var st := Data.compute_stats(c, eq)
 	var nm := _pick_name()
@@ -68,20 +60,18 @@ func _init(g, p: Vector3, depth: int) -> void:
 	cls = c
 	equipment = eq
 	stats = st
+	res = st.res_max if st.res != "soul" else 30.0
+	block_mul = 0.25 if c == "fighter" else 0.4
 	for i in randi_range(0, 2):
 		bag.append(Data.make_item("health_potion"))
 	if randf() < 0.4:
 		bag.append_array(Data.roll_loot(1, depth - 1))
-	mana = st.max_mana
 	strafe_dir = 1.0 if randf() < 0.5 else -1.0
 	aim_err = randf_range(0.03, 0.08)
 	courage = randf()
-	var look: Dictionary = LOOK[c]
-	attach_model(Models.humanoid({
-		"body": look.body, "legs": look.legs,
-		"helmet": look.helmet if eq.head != null else null,
-		"weapon": look.weapon, "shield": look.shield, "metal": look.metal,
-	}))
+	attach_rig(Models.hero_rig(c, Data.weapon_model(c, eq), eq.head != null))
+	if c == "druid":
+		attach_alt_rig(Models.panther_rig())
 
 
 func display_name() -> String:
@@ -136,17 +126,41 @@ func target_dist() -> float:
 	return Vector2(target.pos.x - pos.x, target.pos.z - pos.z).length()
 
 
+# AI 조준: 대상의 이동을 약간 예측하고 오차를 섞는다
+func bot_aim() -> Dictionary:
+	var origin := Vector3(pos.x, pos.y + height * 0.75, pos.z) + Actor.fwd(yaw) * 0.6
+	if target == null:
+		return {"origin": origin, "dir": Actor.fwd(yaw), "target": null}
+	var to: Vector3 = target.center()
+	to += target.last_vel * (origin.distance_to(to) / 32.0) * 0.6
+	var dir := (to - origin).normalized()
+	dir.x += randf_range(-1, 1) * aim_err
+	dir.y += randf_range(-0.5, 0.5) * aim_err
+	dir.z += randf_range(-1, 1) * aim_err
+	return {"origin": origin, "dir": dir.normalized(), "target": target, "point": target.pos}
+
+
 func update(dt: float) -> void:
 	tick_common(dt)
 	if not alive or extracted:
 		return
+	for k in cd:
+		if cd[k] > 0.0:
+			cd[k] -= dt
 	if atk_cd > 0.0:
 		atk_cd -= dt
-	fireball_cd -= dt
-	if stats.max_mana > 0:
-		mana = minf(stats.max_mana, mana + dt * 7.0)
-	if stun > 0.0:
+	Skills.tick_resource(self, dt)
+	Skills.tick_channel(self, dt)
+	Skills.tick_spin(self, dt)
+	if incapacitated():
 		windup = 0.0
+		move_amt = 0.0
+		blocking = false
+		return
+	if Skills.tick_dash(self, dt):
+		move_amt = 1.0
+		return
+	if channel_t > 0.0:
 		move_amt = 0.0
 		return
 	if hp < max_hp * 0.45 and heal <= 0.0 and potion_count() > 0 and (target == null or target_dist() > 7.0):
@@ -166,7 +180,8 @@ func update(dt: float) -> void:
 				react_t = randf_range(0.35, 0.85)
 			target = seen
 		if target != null:
-			if target_dist() > 35.0 or (not game.dungeon.los(pos.x, pos.z, target.pos.x, target.pos.z) and randf() < 0.1):
+			var lost: bool = target.stealth > 0.0 and target_dist() > 3.0
+			if lost or target_dist() > 35.0 or (not game.dungeon.los(pos.x, pos.z, target.pos.x, target.pos.z) and randf() < 0.1):
 				target = null
 
 	if target != null:
@@ -174,6 +189,11 @@ func update(dt: float) -> void:
 		return
 	blocking = false
 	aim_anim = false
+	# 적이 없을 때: 로그는 가끔 은신, 드루이드는 표범 형태 해제
+	if cls == "rogue" and stealth <= 0.0 and cd.e <= 0.0 and randf() < dt * 0.05:
+		Skills.use_e(self, bot_aim())
+	if panther and res < 40.0:
+		Skills.set_panther(self, false)
 	explore(dt)
 
 
@@ -183,7 +203,7 @@ func combat(dt: float) -> void:
 	var dz: float = t.pos.z - pos.z
 	var d := maxf(0.001, sqrt(dx * dx + dz * dz))
 	var seen: bool = game.dungeon.los(pos.x, pos.z, t.pos.x, t.pos.z)
-	var speed: float = stats.base_speed * stats.speed_mul * 0.95
+	var speed: float = stats.base_speed * stats.speed_mul * 0.95 * speed_factor() * (1.7 if panther else 1.0) * (0.75 if spin_t > 0.0 else 1.0)
 	chest_t = 0.0
 	extract_t = 0.0
 	if react_t > 0.0:
@@ -191,83 +211,128 @@ func combat(dt: float) -> void:
 		turn_to(yaw_to(dx, dz), dt, 5.0)
 		move_amt = 0.0
 		return
+	# 근접 윈드업 진행
 	if windup > 0.0:
 		windup -= dt
-		turn_to(yaw_to(dx, dz), dt, 6.0)
-		if cls != "fighter":
-			move_amt = 0.0
-		else:
-			move(dx / d * speed * 0.4, dz / d * speed * 0.4, dt)
-		if windup <= 0.0:
-			release()
+		turn_to(yaw_to(dx, dz), dt, 7.0)
+		move(dx / d * speed * 0.4, dz / d * speed * 0.4, dt)
+		if windup <= 0.0 and pending_prof != null:
+			attack_anim = 0.25
+			Sfx.play("swing", game.dist_to_player(pos))
+			Skills.melee_strike(self, pending_prof)
+			atk_cd = pending_prof.cd + randf_range(0.35, 0.7)
+			pending_prof = null
 		return
 	strafe_t -= dt
 	if strafe_t <= 0.0:
 		strafe_t = randf_range(0.8, 2.3)
 		strafe_dir *= -1.0
-	if cls == "fighter":
-		var threat: bool = (t.windup > 0.0 or t.swinging) and d < 4.0
-		blocking = threat and randf() < 0.9 and atk_cd > 0.2
-		if d > 2.4 or not seen:
-			blocking = false
-			nav_to(t.pos, speed * (1.3 if d > 8.0 else 1.0), dt, 0.5)
-		else:
-			turn_to(yaw_to(dx, dz), dt, 9.0)
-			move(-dz / d * strafe_dir * speed * 0.35, dx / d * strafe_dir * speed * 0.35, dt)
-			move_amt = 0.5
-			if atk_cd <= 0.0 and not threat:
-				blocking = false
-				windup = 0.32
-				windup_max = 0.32
+	skill_t -= dt
+	if skill_t <= 0.0 and seen:
+		skill_t = randf_range(0.3, 0.6)
+		_use_skills(t, d)
+	if Skills.is_melee(self):
+		_melee_combat(dt, t, d, dx, dz, seen, speed)
 	else:
-		var want := 11.0 if cls == "ranger" else 12.0
-		if not seen or d > want + 8.0:
-			aim_anim = false
-			nav_to(t.pos, speed, dt, 1.0)
-			return
-		turn_to(yaw_to(dx, dz), dt, 8.0)
-		var mx := -dz / d * strafe_dir * 0.6
-		var mz := dx / d * strafe_dir * 0.6
-		if d < want - 4.0:
-			mx -= dx / d
-			mz -= dz / d
-		elif d > want + 3.0:
-			mx += dx / d
-			mz += dz / d
-		move(mx * speed * 0.7, mz * speed * 0.7, dt)
-		move_amt = 0.6
-		aim_anim = cls == "ranger"
-		if atk_cd <= 0.0:
-			if cls == "mage" and mana < 10.0:
-				return
-			windup = 0.55 if cls == "ranger" else 0.3
-			windup_max = windup
+		_ranged_combat(dt, t, d, dx, dz, seen, speed)
 
 
-func release() -> void:
-	var t = target
-	attack_anim = 0.25
-	if t == null:
+func _melee_combat(dt: float, t, d: float, dx: float, dz: float, seen: bool, speed: float) -> void:
+	var prof := Skills.melee_profile(self)
+	var threat: bool = (t.windup > 0.0 or t.swinging) and d < 4.0
+	blocking = Skills.uses_block(self) and threat and randf() < 0.9 and atk_cd > 0.2
+	if d > prof.range * 0.85 or not seen:
+		blocking = false
+		nav_to(t.pos, speed * (1.3 if d > 8.0 else 1.0), dt, 0.5)
 		return
-	var dm: float = stats.dmg_mul * (0.65 if t.kind == "monster" else 1.0)
+	turn_to(yaw_to(dx, dz), dt, 9.0)
+	move(-dz / d * strafe_dir * speed * 0.35, dx / d * strafe_dir * speed * 0.35, dt)
+	move_amt = 0.5
+	if atk_cd <= 0.0 and not threat and spin_t <= 0.0:
+		blocking = false
+		pending_prof = prof
+		windup = prof.hit_at + 0.15
+		windup_max = windup
+
+
+func _ranged_combat(dt: float, t, d: float, dx: float, dz: float, seen: bool, speed: float) -> void:
+	var want := 11.0
+	if not seen or d > want + 8.0:
+		aim_anim = false
+		nav_to(t.pos, speed, dt, 1.0)
+		return
+	turn_to(yaw_to(dx, dz), dt, 8.0)
+	var mx := -dz / d * strafe_dir * 0.6
+	var mz := dx / d * strafe_dir * 0.6
+	if d < want - 4.0:
+		mx -= dx / d
+		mz -= dz / d
+	elif d > want + 3.0:
+		mx += dx / d
+		mz += dz / d
+	move(mx * speed * 0.7, mz * speed * 0.7, dt)
+	move_amt = 0.6
+	aim_anim = true
+	if atk_cd <= 0.0 and Skills.fire_basic(self, bot_aim()):
+		attack_anim = 0.25
+		atk_cd = randf_range(0.5, 0.9)
+
+
+# 직업별 스킬 사용 판단
+func _use_skills(t, d: float) -> void:
+	var aim := bot_aim()
+	var near := 0
+	for a in game.actors:
+		if a.alive and a != self and hostile_to(a) and a.pos.distance_to(pos) < 3.5:
+			near += 1
 	match cls:
 		"fighter":
-			atk_cd = randf_range(1.0, 1.5)
-			Sfx.play("swing", game.dist_to_player(pos))
-			game.melee_hit(self, 22.0 * dm, 3.0, 1.4, {"knock": 4.0})
-		"ranger":
-			atk_cd = randf_range(1.3, 2.0)
-			game.shoot_at(self, t, "arrow", 26.0 * dm, 48.0, aim_err)
-		_:
-			if fireball_cd <= 0.0 and mana >= 30.0 and target_dist() > 5.0:
-				fireball_cd = 7.0
-				mana -= 30.0
-				atk_cd = 1.0
-				game.shoot_at(self, t, "fireball", 40.0 * dm, 24.0, aim_err)
-			else:
-				mana -= 10.0
-				atk_cd = randf_range(0.9, 1.4)
-				game.shoot_at(self, t, "bolt", 18.0 * dm, 42.0, aim_err)
+			if near >= 2 or (d < 3.0 and randf() < 0.3):
+				Skills.use_q(self, aim)
+			elif d > 5.0 and d < 10.0:
+				Skills.use_e(self, aim)
+		"swordmaster":
+			if (t.windup > 0.0 or t.swinging) and d < 4.0 and randf() < 0.6:
+				Skills.start_parry(self)
+			if d < 5.0:
+				Skills.use_e(self, aim)
+			elif d < 20.0:
+				Skills.use_q(self, aim)
+		"rogue":
+			if d > 4.0 and d < 12.0 and randf() < 0.5:
+				Skills.use_q(self, aim)
+			elif d > 5.0 and d < 14.0:
+				Skills.throw_knife(self, aim)
+		"deathknight":
+			if d > 5.0 and d < 16.0:
+				Skills.use_e(self, aim)
+			elif d < 5.0 and res >= 40.0:
+				Skills.use_q(self, aim)
+		"druid":
+			if not panther:
+				if cd.e <= 0.0:
+					Skills.use_e(self, aim)
+				elif d < 7.0 and res >= 50.0:
+					Skills.use_q(self, aim)
+			elif d > 4.0 and d < 9.0:
+				Skills.use_e(self, aim)
+		"pyromancer":
+			if d < 5.0:
+				Skills.use_e(self, aim)
+			elif d > 5.0 and res >= 45.0 and randf() < 0.5:
+				Skills.use_q(self, aim)
+		"cryomancer":
+			if hp < max_hp * 0.35:
+				Skills.use_e(self, aim)
+			elif d < 16.0 and res >= 45.0:
+				Skills.use_q(self, aim)
+		"priest":
+			if hp < max_hp * 0.7 and d < 8.0:
+				Skills.use_e(self, aim)
+			if hp < max_hp * 0.6 and d < 6.0:
+				Skills.use_q(self, aim)
+			elif hp < max_hp * 0.5:
+				Skills.cleanse_heal(self, 1.0)
 
 
 func choose_goal() -> Dictionary:

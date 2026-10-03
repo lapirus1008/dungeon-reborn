@@ -4,7 +4,7 @@ extends AIActor
 
 var type := ""
 var def: Dictionary
-var dmg_mul := 1.0
+var power_mul := 1.0
 var home: Dictionary
 var home_pos := Vector3.ZERO
 var wander_t := 0.0
@@ -23,7 +23,7 @@ func _init(g, t: String, p: Vector3, room: Dictionary, depth_mul := 1.0) -> void
 	})
 	type = t
 	def = d
-	dmg_mul = depth_mul
+	power_mul = depth_mul
 	home = room
 	home_pos = p
 	wander_t = randf() * 4.0
@@ -39,7 +39,7 @@ func _init(g, t: String, p: Vector3, room: Dictionary, depth_mul := 1.0) -> void
 			m = Models.humanoid({"skin": Color(0.48, 0.54, 0.42), "body": Color(0.29, 0.31, 0.25), "legs": Color(0.23, 0.25, 0.19), "weapon": "claws", "scale": 1.1, "eyes": Color(1, 0, 0), "hunch": 0.5})
 		_:
 			m = Models.humanoid({"skin": Color(0.13, 0.13, 0.2), "body": Color(0.11, 0.11, 0.15), "legs": Color(0.08, 0.08, 0.11), "helmet": Color(0.16, 0.16, 0.21), "weapon": "boss_sword", "scale": 1.55, "eyes": Color(1, 0.13, 0), "metal": 0.6})
-	attach_model(m)
+	attach_rig(CharacterRig.create(t, func(): return m))
 	if d.boss:
 		hp_bar.scale = Vector3(2, 2, 2)
 
@@ -73,7 +73,7 @@ func update(dt: float) -> void:
 			target = t
 			if randf() < 0.5:
 				Sfx.play("growl", game.dist_to_player(pos))
-		if target != null and (not target.alive or target.extracted):
+		if target != null and (not target.alive or target.extracted or (target.stealth > 0.0 and target.pos.distance_to(pos) > 3.0)):
 			target = null
 	if target != null:
 		var tg = target
@@ -142,7 +142,7 @@ func start_windup(time: float, k: String) -> void:
 
 
 func release_attack() -> void:
-	var dmg: float = def.dmg * dmg_mul
+	var dmg: float = def.dmg * power_mul
 	attack_anim = 0.25
 	match windup_kind:
 		"shoot":

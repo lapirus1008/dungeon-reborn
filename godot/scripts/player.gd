@@ -1,38 +1,35 @@
-# 플레이어: 1인칭 조작, 직업별 스킬, 뷰모델, 보호막 효과
+# 플레이어: 1인칭 조작, 직업별 스킬 입력, 스태미나, 뷰모델
 class_name Player
 extends Actor
 
 const EYE := 1.65
+# 스태미나: 10 미만이면 Shift를 눌러도 걷기, 바닥나면 30까지 회복해야 다시 달리기
+# (걷기/달리기가 짧게 반복되는 현상 방지)
+const SPRINT_MIN := 10.0
+const SPRINT_RESUME := 30.0
 
-var cls := ""
 var equipment: Dictionary
 var bag: Array
-var stats: Dictionary
 var pitch := 0.0
 var vy := 0.0
 var stamina := 100.0
 var stamina_delay := 0.0
-var mana := 0.0
-var cd := {"lmb": 0.0, "rmb": 0.0, "q": 0.0, "e": 0.0, "potion": 0.0}
-var swing = null # {t, dur, hit_at, done, side}
+var exhausted := false
+var swing = null # {t, prof, done, side, bash}
 var swing_side := 1.0
-var draw := -1.0
-var dash = null # {dir, speed, t, hit, hit_done}
-var rage := 0.0
+var charge_t := -1.0 # 프리스트 정화 충전
 var bob := 0.0
 var extract_t := 0.0
 var interact_t := 0.0
 var kills := 0
 var pvp_kills := 0
 var step_t := 0.0
-var shield_t := 0.0
-var shield_max := 50.0
 var shield_hit_fx := 0.0
 var cast := 0.0
-var zoom := false
 var sprinting := false
 var moving := false
 var shake := 0.0
+var zoom := false
 
 
 func _init(g, p: Vector3, c: String, eq: Dictionary, b: Array) -> void:
@@ -42,7 +39,8 @@ func _init(g, p: Vector3, c: String, eq: Dictionary, b: Array) -> void:
 	equipment = eq
 	bag = b
 	stats = st
-	mana = st.max_mana
+	res = st.res_max if st.res != "soul" else 30.0
+	block_mul = 0.25 if c == "fighter" else 0.4
 
 
 func display_name() -> String:
@@ -56,7 +54,8 @@ func recalc() -> void:
 	max_hp = st.max_hp
 	hp = clampf(ratio * max_hp, 1.0, max_hp)
 	armor = st.armor
-	mana = minf(mana, st.max_mana)
+	res = minf(res, st.res_max)
+	game.on_weapon_changed()
 
 
 func on_block(amount: float) -> void:
@@ -65,9 +64,15 @@ func on_block(amount: float) -> void:
 	Sfx.play("block")
 	if stamina <= 0.0:
 		stamina = 0.0
+		exhausted = true
 		blocking = false
-		stun = 0.6
+		add_stun(0.6)
 		game.hud.toast("방어가 무너졌다!")
+
+
+func on_parry(_src) -> void:
+	game.hud.toast("패링!")
+	shake = 0.15
 
 
 func on_shield_hit(amount: float) -> void:
@@ -78,15 +83,29 @@ func on_shield_hit(amount: float) -> void:
 	if shield <= 0.0:
 		shield_t = 0.0
 		Sfx.play("shield_break")
-		game.hud.toast("비전 보호막이 깨졌습니다")
+		game.hud.toast("보호막이 깨졌습니다")
 	else:
 		Sfx.play("shield_hit")
 
 
+func on_stealth_end() -> void:
+	game.hud.toast("은신이 풀렸습니다")
+
+
 func look(rel: Vector2, sens: float) -> void:
+	if frozen > 0.0:
+		return
 	var k := sens * (0.55 if zoom else 1.0)
 	yaw -= rel.x * k
 	pitch = clampf(pitch - rel.y * k, -1.5, 1.5)
+
+
+# 조준: 카메라 위치와 시선 방향
+func aim() -> Dictionary:
+	var cam: Camera3D = game.camera
+	var b := Basis.from_euler(Vector3(cam.rotation.x, cam.rotation.y, 0.0), EULER_ORDER_YXZ)
+	var dir := -b.z
+	return {"origin": cam.position + dir * 0.5 + Vector3(0, -0.12, 0), "dir": dir, "target": null}
 
 
 func update(dt: float) -> void:
@@ -94,25 +113,21 @@ func update(dt: float) -> void:
 	for k in cd:
 		if cd[k] > 0.0:
 			cd[k] -= dt
-	if rage > 0.0:
-		rage -= dt
-	if stats.max_mana > 0:
-		mana = minf(stats.max_mana, mana + dt * 7.0)
-	if shield_t > 0.0:
-		shield_t -= dt
-		if shield_t <= 0.0 and shield > 0.0:
-			shield = 0.0
-			game.hud.toast("비전 보호막이 사라졌습니다")
 	shield_hit_fx = maxf(0.0, shield_hit_fx - dt * 3.0)
 	if not alive:
 		return
+	Skills.tick_resource(self, dt)
+	Skills.tick_channel(self, dt)
+	Skills.tick_spin(self, dt)
+	if cast > 0.0:
+		cast -= dt
 
 	var can_act: bool = game.can_act()
-	var stunned := stun > 0.0
+	var locked := incapacitated()
 	# 이동 입력 (메뉴/인벤토리가 열려 있어도 이동 가능 - 던전본처럼 게임은 계속 진행)
 	var ix := 0.0
 	var iz := 0.0
-	if not stunned and not game.typing:
+	if not locked and not game.typing:
 		iz = Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
 		ix = Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
 	var f := fwd(yaw)
@@ -121,50 +136,49 @@ func update(dt: float) -> void:
 	var wl := wish.length()
 	if wl > 0.0:
 		wish /= wl
-	sprinting = Input.is_action_pressed("sprint") and iz > 0.0 and stamina > 1.0 and not blocking and draw < 0.0
+
+	# 달리기 판정 (히스테리시스)
+	if stamina <= 0.5:
+		exhausted = true
+	elif exhausted and stamina >= SPRINT_RESUME:
+		exhausted = false
+	var want_sprint := Input.is_action_pressed("sprint") and iz > 0.0 and not locked
+	var busy := blocking or spin_t > 0.0 or channel_t > 0.0 or charge_t >= 0.0
+	if not want_sprint or busy or exhausted:
+		sprinting = false
+	elif not sprinting:
+		sprinting = stamina >= SPRINT_MIN
 	var speed: float = stats.base_speed * stats.speed_mul
 	if sprinting:
 		speed *= 1.45
 	if blocking:
 		speed *= 0.55
-	if draw >= 0.0:
-		speed *= 0.6
-	if rage > 0.0:
+	if spin_t > 0.0:
+		speed *= 0.75
+	if channel_t > 0.0 or charge_t >= 0.0:
+		speed *= 0.45
+	if panther:
+		speed *= 1.7
+	if stealth > 0.0:
 		speed *= 1.1
-	if slow > 0.0:
-		speed *= 0.6
+	speed *= speed_factor()
 	if iz < 0.0:
 		speed *= 0.8
 
-	if dash != null:
-		dash.t -= dt
-		move(dash.dir.x * dash.speed, dash.dir.z * dash.speed, dt)
-		if dash.has("hit") and not dash.hit_done:
-			for a in game.actors:
-				if not a.alive or a == self or a.extracted:
-					continue
-				if Vector2(a.pos.x - pos.x, a.pos.z - pos.z).length() < a.radius + 1.2:
-					a.take_damage(dash.hit, self, {"knock": dash.dir * 12.0, "stun": 0.9, "from": pos})
-					Sfx.play("hit")
-					shake = 0.25
-					dash.hit_done = true
-					dash.t = 0.0
-					break
-		if dash.t <= 0.0:
-			dash = null
-	else:
+	if not Skills.tick_dash(self, dt):
 		move(wish.x * speed, wish.z * speed, dt)
 	last_vel = wish * speed
-	moving = wl > 0.0 and dash == null
+	moving = wl > 0.0 and dash == null and root <= 0.0 and not locked
 	if moving:
 		bob += dt * speed * 1.9
 		step_t -= dt * speed
 		if step_t <= 0.0:
 			step_t = 2.6
-			Sfx.play("step", -1.0, 0.15)
+			if stealth <= 0.0:
+				Sfx.play("step", -1.0, 0.15)
 
 	# 점프
-	if can_act and Input.is_action_just_pressed("jump") and pos.y <= 0.001 and stamina > 10.0 and not stunned:
+	if can_act and Input.is_action_just_pressed("jump") and pos.y <= 0.001 and stamina > SPRINT_MIN and not locked and root <= 0.0:
 		vy = 6.2
 		stamina -= 10.0
 		stamina_delay = 0.6
@@ -173,7 +187,7 @@ func update(dt: float) -> void:
 	if pos.y == 0.0:
 		vy = 0.0
 
-	# 스태미나
+	# 스태미나: 달리는 중에만 소모, 그 외에는 잠시 후 회복
 	if sprinting and moving:
 		stamina -= 18.0 * dt
 		stamina_delay = 0.7
@@ -183,19 +197,11 @@ func update(dt: float) -> void:
 		stamina = minf(100.0, stamina + (8.0 if blocking else 28.0) * dt)
 	stamina = maxf(0.0, stamina)
 
-	var act := can_act and not stunned
-	var dm: float = stats.dmg_mul * (1.35 if rage > 0.0 else 1.0)
-	zoom = false
-	match cls:
-		"fighter":
-			_fighter(dt, act, dm, f)
-		"ranger":
-			_ranger(dt, act, dm, f, wish, wl)
-		"mage":
-			_mage(dt, act, dm)
+	var act := can_act and not locked and channel_t <= 0.0
+	_combat(dt, act)
 
 	# 물약
-	if not stunned and can_act and cd.potion <= 0.0:
+	if not locked and can_act and cd.potion <= 0.0:
 		var want := ""
 		if Input.is_action_just_pressed("potion1"):
 			want = "health_potion"
@@ -215,104 +221,75 @@ func update(dt: float) -> void:
 				use_consumable(idx)
 
 
-func _fighter(dt: float, act: bool, dm: float, f: Vector3) -> void:
-	blocking = act and Input.is_action_pressed("secondary") and stamina > 0.0 and swing == null and dash == null
-	if act and Input.is_action_pressed("attack") and swing == null and not blocking and cd.lmb <= 0.0 and stamina >= 6.0:
-		swing_side = -swing_side
-		swing = {"t": 0.0, "dur": 0.42, "hit_at": 0.17, "done": false, "side": swing_side}
-		stamina -= 9.0
-		stamina_delay = 0.6
-		cd.lmb = 0.48
-		Sfx.play("swing")
-	if act and Input.is_action_just_pressed("skill_q") and cd.q <= 0.0 and stamina >= 15.0:
-		cd.q = Data.CLASSES.fighter.skills.q.cd
-		stamina -= 15.0
-		dash = {"dir": f, "speed": 22.0, "t": 0.32, "hit": 36.0 * dm, "hit_done": false}
-		Sfx.play("swing")
-	if act and Input.is_action_just_pressed("skill_e") and cd.e <= 0.0:
-		cd.e = Data.CLASSES.fighter.skills.e.cd
-		rage = 6.0
-		Sfx.play("growl")
-		game.hud.toast("분노!")
-	swinging = swing != null
+func _start_swing(prof: Dictionary, bash := false) -> void:
+	swing_side = -swing_side
+	swing = {"t": 0.0, "prof": prof, "done": false, "side": swing_side, "bash": bash}
+	stamina -= prof.stamina
+	stamina_delay = 0.6
+	cd.lmb = prof.cd
+	Sfx.play("swing")
+
+
+func _combat(dt: float, act: bool) -> void:
+	var melee := Skills.is_melee(self)
+	var rmb_pressed := act and Input.is_action_just_pressed("secondary")
+	var rmb_held := act and Input.is_action_pressed("secondary")
+	var lmb_held := act and Input.is_action_pressed("attack")
+	var free := swing == null and spin_t <= 0.0 and dash == null
+
+	# 우클릭
+	blocking = false
+	if Skills.uses_block(self):
+		blocking = rmb_held and stamina > 0.0 and free
+	elif rmb_pressed:
+		match cls:
+			"swordmaster":
+				Skills.start_parry(self)
+			"rogue":
+				Skills.throw_knife(self, aim())
+			"druid":
+				if panther:
+					Skills.roar(self)
+				elif free and cd.rmb <= 0.0:
+					cd.rmb = Skills.skill_def(self, "rmb").cd
+					_start_swing(Skills.melee_profile(self, true), true)
+			"pyromancer", "cryomancer":
+				if free and cd.rmb <= 0.0:
+					cd.rmb = Skills.skill_def(self, "rmb").cd
+					_start_swing(Skills.melee_profile(self, true), true)
+	# 프리스트 정화: 누르고 있다 놓으면 발동
+	if cls == "priest":
+		if rmb_held and cd.rmb <= 0.0:
+			charge_t = maxf(charge_t, 0.0) + dt
+		elif charge_t >= 0.0:
+			Skills.cleanse_heal(self, charge_t / 1.2)
+			charge_t = -1.0
+
+	# 좌클릭
+	if lmb_held and free and not blocking and cd.lmb <= 0.0:
+		if melee:
+			var prof := Skills.melee_profile(self)
+			if stamina >= prof.stamina:
+				_start_swing(prof)
+		elif Skills.fire_basic(self, aim()):
+			cast = 0.2
+
+	# Q / E
+	if act and Input.is_action_just_pressed("skill_q"):
+		if Skills.use_q(self, aim()):
+			cast = 0.3
+	if act and Input.is_action_just_pressed("skill_e"):
+		if Skills.use_e(self, aim()):
+			cast = 0.3
+
+	swinging = swing != null or spin_t > 0.0
 	if swing != null:
 		swing.t += dt
-		if not swing.done and swing.t >= swing.hit_at:
+		if not swing.done and swing.t >= swing.prof.hit_at:
 			swing.done = true
-			game.melee_hit(self, 26.0 * dm, 3.1, 1.5, {"knock": 5.0})
-		if swing.t >= swing.dur:
+			Skills.melee_strike(self, swing.prof)
+		if swing.t >= swing.prof.dur:
 			swing = null
-
-
-func _ranger(dt: float, act: bool, dm: float, f: Vector3, wish: Vector3, wl: float) -> void:
-	zoom = act and Input.is_action_pressed("secondary")
-	if act and Input.is_action_pressed("attack") and cd.lmb <= 0.0:
-		if draw < 0.0:
-			draw = 0.0
-		draw += dt
-	elif draw >= 0.0:
-		if draw > 0.15 and stun <= 0.0:
-			var charge := minf(1.0, draw / 0.9)
-			game.fire_player_projectile("arrow", 32.0 + 36.0 * charge, (14.0 + 30.0 * charge) * dm, 0.0)
-			cd.lmb = 0.25
-		draw = -1.0
-	if act and Input.is_action_just_pressed("skill_q") and cd.q <= 0.0:
-		cd.q = Data.CLASSES.ranger.skills.q.cd
-		for s in [-0.12, 0.0, 0.12]:
-			game.fire_player_projectile("arrow", 52.0, 24.0 * dm, s)
-	if act and Input.is_action_just_pressed("skill_e") and cd.e <= 0.0 and stamina >= 12.0:
-		cd.e = Data.CLASSES.ranger.skills.e.cd
-		stamina -= 12.0
-		var dir := wish if wl > 0.0 else -f
-		dash = {"dir": dir, "speed": 17.0, "t": 0.3}
-		invuln = 0.3
-
-
-func _mage(dt: float, act: bool, dm: float) -> void:
-	if act and Input.is_action_pressed("attack") and cd.lmb <= 0.0 and mana >= 10.0:
-		mana -= 10.0
-		cd.lmb = 0.42
-		game.fire_player_projectile("bolt", 44.0, 21.0 * dm, 0.0)
-		cast = 0.2
-	if act and Input.is_action_just_pressed("secondary"):
-		cast_shield()
-	if act and Input.is_action_just_pressed("skill_q") and cd.q <= 0.0:
-		if mana < 30.0:
-			game.hud.toast("마나가 부족합니다")
-		else:
-			mana -= 30.0
-			cd.q = Data.CLASSES.mage.skills.q.cd
-			game.fire_player_projectile("fireball", 26.0, 48.0 * dm, 0.0)
-			cast = 0.3
-	if act and Input.is_action_just_pressed("skill_e") and cd.e <= 0.0:
-		if mana < 35.0:
-			game.hud.toast("마나가 부족합니다")
-		else:
-			mana -= 35.0
-			cd.e = Data.CLASSES.mage.skills.e.cd
-			apply_heal(50.0, 4.0)
-			Sfx.play("heal")
-			game.spawn_ring_burst(pos + Vector3(0, 0.1, 0), Color(0.5, 1.0, 0.5), 2.0)
-	if cast > 0.0:
-		cast -= dt
-
-
-# 마법사 비전 보호막: 구체 + 화면 가장자리 푸른 일렁임 + HUD 보호막 바 + 효과음
-func cast_shield() -> bool:
-	if cd.rmb > 0.0:
-		return false
-	if mana < 30.0:
-		game.hud.toast("마나가 부족합니다")
-		return false
-	mana -= 30.0
-	cd.rmb = Data.CLASSES.mage.skills.rmb.cd
-	shield = shield_max
-	shield_t = 8.0
-	shield_hit_fx = 1.0
-	Sfx.play("shield")
-	game.hud.toast("비전 보호막 (50)")
-	game.spawn_ring_burst(pos + Vector3(0, 1.0, 0), Color(0.35, 0.65, 1.0), 2.5)
-	return true
 
 
 func use_consumable(i: int) -> void:
@@ -321,7 +298,7 @@ func use_consumable(i: int) -> void:
 	bag.remove_at(i)
 	apply_heal(b.heal, 3.0 if it.base == "health_potion" else 2.0)
 	cd.potion = 1.2
-	slow = 1.0
+	add_slow(1.0, 0.6)
 	Sfx.play("heal")
 	game.hud.toast("%s 사용" % b.name)
 	game.hud.refresh_panels()
@@ -338,52 +315,34 @@ func update_camera(cam: Camera3D, vm: Node3D, bubble: MeshInstance3D, dt: float)
 		cam.rotation.x = pitch
 		return
 	var b := sin(bob) * 0.05 if pos.y == 0.0 and moving else 0.0
-	cam.position = Vector3(pos.x, pos.y + EYE + b, pos.z)
+	var eye := EYE * (0.7 if panther else 1.0)
+	cam.position = Vector3(pos.x, pos.y + eye + b, pos.z)
 	var sx := 0.0
 	var sy := 0.0
 	if shake > 0.0:
 		shake -= dt
 		sx = randf_range(-0.5, 0.5) * shake * 0.15
 		sy = randf_range(-0.5, 0.5) * shake * 0.15
-	cam.rotation = Vector3(pitch + sx, yaw + sy, 0)
-	var target_fov := 45.0 if zoom else (82.0 if sprinting and moving else 75.0)
+	var spin_roll := sin(spin_t * 18.0) * 0.03 if spin_t > 0.0 else 0.0
+	cam.rotation = Vector3(pitch + sx, yaw + sy, spin_roll)
+	var target_fov := 82.0 if (sprinting and moving) or panther else 75.0
 	cam.fov = lerpf(cam.fov, target_fov, minf(1.0, dt * 10.0))
 
-	# 보호막 구체 (카메라를 감싸는 막 + 화면 가장자리 효과는 HUD에서)
+	# 보호막 구체
 	bubble.visible = shield > 0.0
 	if bubble.visible:
 		var sm: ShaderMaterial = bubble.material_override
 		var remain := clampf(shield / shield_max, 0.0, 1.0)
 		var fade := clampf(shield_t / 1.5, 0.0, 1.0)
+		sm.set_shader_parameter("tint", shield_color)
 		sm.set_shader_parameter("strength", (0.35 + remain * 0.65) * (0.5 + 0.5 * fade if shield_t < 1.5 else 1.0))
 		sm.set_shader_parameter("hit", shield_hit_fx)
 
-	# 뷰모델 애니메이션
-	var R: Node3D = vm.get_meta("R")
-	var L: Node3D = vm.get_meta("L")
-	var w: Node3D = vm.get_meta("weapon")
-	vm.position = Vector3(sin(bob * 0.5) * (0.015 if moving else 0.0), b * 0.4, 0)
-	match cls:
-		"fighter":
-			R.rotation = Vector3.ZERO
-			R.position = Vector3(0.3, -0.34, -0.6)
-			if swing != null:
-				var k: float = swing.t / swing.dur
-				var s: float = swing.side
-				var a := k / 0.35 if k < 0.35 else 1.0 - (k - 0.35) / 0.65
-				R.rotation = Vector3(-0.6 * a, s * (1.4 - k * 2.8) * a, s * 0.6 * a)
-				R.position.x = 0.3 - s * 0.1 * a
-			L.position = Vector3(-0.14, -0.2, -0.5) if blocking else Vector3(-0.3, -0.36, -0.6)
-			L.rotation.y = 0.5 if blocking else 0.0
-		"ranger":
-			var k := minf(1.0, draw / 0.9) if draw >= 0.0 else 0.0
-			L.position = Vector3(-0.2, -0.3, -0.66)
-			R.position = Vector3(0.18, -0.34, -0.56 + k * 0.12)
-			var ar: Node3D = vm.get_meta("arrow")
-			ar.visible = cd.lmb <= 0.05
-			ar.position = Vector3(-0.04, -0.22, -0.7 + k * 0.15)
-			w.rotation.z = 0.15 - k * 0.1
-		_:
-			var c := 1.0 if cast > 0.0 else 0.0
-			R.position = Vector3(0.3, -0.34 + c * 0.08, -0.6 - c * 0.1)
-			L.position = Vector3(-0.3, -0.36, -0.6)
+	# 뷰모델 (은신 중 반투명)
+	vm.visible = frozen <= 0.0
+	var tr := 0.65 if stealth > 0.0 or channel_t > 0.0 else 0.0
+	if vm.get_meta("transparency", -1.0) != tr:
+		vm.set_meta("transparency", tr)
+		for n in vm.find_children("*", "GeometryInstance3D", true, false):
+			(n as GeometryInstance3D).transparency = tr
+	ViewAnim.animate(self, vm, b, dt)

@@ -11,6 +11,8 @@ var target = null
 var sense_timer := 0.0
 var atk_cd := 0.0
 var node: Node3D
+var rig: CharacterRig
+var alt_rig: CharacterRig # 드루이드 표범 형태
 var meshes: Array = []
 var hp_bar: MeshInstance3D
 var aim_anim := false
@@ -25,11 +27,23 @@ func _init(g, o: Dictionary) -> void:
 	g.world.add_child(hp_bar)
 
 
-func attach_model(m: Node3D) -> void:
-	node = m
-	meshes = m.get_meta("meshes")
+func attach_rig(r: CharacterRig) -> void:
+	rig = r
+	node = r.node
+	meshes = r.meshes
 	game.world.add_child(node)
 	node.position = pos
+
+
+# 변신용 두 번째 모델 (같은 위치에 붙여 두고 보이기만 전환)
+func attach_alt_rig(r: CharacterRig) -> void:
+	alt_rig = r
+	game.world.add_child(r.node)
+	r.node.visible = false
+
+
+func active_rig() -> CharacterRig:
+	return alt_rig if panther and alt_rig != null else rig
 
 
 func turn_to(y: float, dt: float, rate := 8.0) -> void:
@@ -90,6 +104,8 @@ func sense(rng: float):
 		var d := Vector2(a.pos.x - pos.x, a.pos.z - pos.z).length()
 		if d >= bd:
 			continue
+		if a.stealth > 0.0 and d > 3.0:
+			continue
 		if not game.dungeon.los(pos.x, pos.z, a.pos.x, a.pos.z):
 			continue
 		var ang := absf(angle_difference(yaw, yaw_to(a.pos.x - pos.x, a.pos.z - pos.z)))
@@ -101,41 +117,49 @@ func sense(rng: float):
 
 
 func animate(dt: float) -> void:
-	var p: Dictionary = node.get_meta("parts")
-	node.position = pos
-	node.rotation.y = yaw
+	var r := active_rig()
+	var other: CharacterRig = rig if r == alt_rig else alt_rig
+	if other != null and other.node.visible:
+		other.node.visible = false
+	r.node.visible = visible and _stealth_visible()
+	r.node.position = pos
+	r.node.rotation.y = yaw
 	if not alive:
 		death_t += dt
-		p.rig.rotation.x = maxf(-PI / 2, -death_t * 5.0)
-		p.rig.position.y = minf(0.25, death_t)
-		return
-	walk_phase += dt * 9.0 * move_amt
-	var sw := sin(walk_phase) * 0.7 * move_amt
-	p.leg_l.rotation.x = sw
-	p.leg_r.rotation.x = -sw
-	p.arm_l.rotation.x = -sw * 0.6
-	p.arm_r.rotation.x = sw * 0.6
-	p.arm_r.rotation.z = 0.0
-	if windup > 0.0:
-		p.arm_r.rotation.x = 2.6 * minf(1.0, 1.0 - windup / windup_max + 0.3)
-		p.arm_r.rotation.z = 0.3
-	elif attack_anim > 0.0:
+	var st := {
+		"move": move_amt,
+		"windup": (1.0 - windup / windup_max) if windup > 0.0 else -1.0,
+		"attack": (1.0 - attack_anim / 0.25) if attack_anim > 0.0 else -1.0,
+		"aim": aim_anim,
+		"block": blocking,
+		"dead_t": death_t if not alive else -1.0,
+		"cast": cls in ["pyromancer", "cryomancer", "druid"] and not panther,
+	}
+	if attack_anim > 0.0:
 		attack_anim -= dt
-		p.arm_r.rotation.x = 2.6 - (1.0 - attack_anim / 0.25) * 3.2
-	if aim_anim:
-		p.arm_l.rotation.x = PI / 2
-		p.arm_r.rotation.x = PI / 2
-	if blocking:
-		p.arm_l.rotation.x = 1.3
+	r.animate(dt, st)
+	# 피격 시 붉게, 은신 중 반투명, 서리 장벽 중 푸르게
 	var flash := hit_flash > 0.0
 	if flash != _flashing:
 		_flashing = flash
-		for m in meshes:
+		for m in r.meshes:
 			(m as GeometryInstance3D).material_overlay = game.flash_mat if flash else null
+	var tr := 0.75 if stealth > 0.0 else 0.0
+	if r.node.get_meta("tr", -1.0) != tr:
+		r.node.set_meta("tr", tr)
+		for m in r.meshes:
+			(m as GeometryInstance3D).transparency = tr
+
+
+# 은신 중인 적은 플레이어와 가까울 때만 희미하게 보인다
+func _stealth_visible() -> bool:
+	if stealth <= 0.0:
+		return true
+	return game.player != null and game.player.pos.distance_to(pos) < 4.0
 
 
 func update_hp_bar(cam_pos: Vector3) -> void:
-	var show := alive and hp < max_hp and visible and cam_pos.distance_to(pos) < 25.0
+	var show := alive and hp < max_hp and visible and _stealth_visible() and cam_pos.distance_to(pos) < 25.0
 	hp_bar.visible = show
 	if not show:
 		return
@@ -146,7 +170,7 @@ func update_hp_bar(cam_pos: Vector3) -> void:
 func set_visible(v: bool) -> void:
 	visible = v
 	if node:
-		node.visible = v
+		active_rig().node.visible = v and _stealth_visible()
 	if not v:
 		hp_bar.visible = false
 
@@ -154,5 +178,7 @@ func set_visible(v: bool) -> void:
 func remove_from_world() -> void:
 	if node and is_instance_valid(node):
 		node.queue_free()
+	if alt_rig != null and is_instance_valid(alt_rig.node):
+		alt_rig.node.queue_free()
 	if hp_bar and is_instance_valid(hp_bar):
 		hp_bar.queue_free()

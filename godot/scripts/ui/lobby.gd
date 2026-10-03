@@ -172,39 +172,57 @@ func persist() -> void:
 func refresh() -> void:
 	var s := save()
 	gold_label.text = "💰 %d 골드" % s.gold
-	# 직업 카드
+	# 직업 카드: 2열 작은 카드 + 선택한 직업 상세 설명
 	UI.clear(class_box)
-	for c in Data.CLASSES.values():
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 6)
+	grid.add_theme_constant_override("v_separation", 6)
+	class_box.add_child(grid)
+	for cid in Data.CLASS_ORDER:
+		var c: Dictionary = Data.CLASSES[cid]
 		var card := PanelContainer.new()
 		var sb := StyleBoxFlat.new()
-		var sel: bool = s.cls == c.id
+		var sel: bool = s.cls == cid
 		sb.bg_color = Color("#2a2014") if sel else Color("#1a1510")
 		sb.border_color = UI.GOLD if sel else UI.LINE
 		sb.set_border_width_all(2 if sel else 1)
 		sb.set_corner_radius_all(5)
-		sb.set_content_margin_all(10)
+		sb.set_content_margin_all(8)
 		card.add_theme_stylebox_override("panel", sb)
+		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var hb := HBoxContainer.new()
-		hb.add_theme_constant_override("separation", 10)
-		hb.add_child(UI.label(c.icon, 30))
-		var info := RichTextLabel.new()
-		info.bbcode_enabled = true
-		info.fit_content = true
-		info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		info.custom_minimum_size = Vector2(300, 0)
-		info.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var sk := ""
-		for k in ["lmb", "rmb", "q", "e"]:
-			sk += "[bgcolor=#2a2218] [b]%s[/b] %s [/bgcolor] " % [k.to_upper(), c.skills[k].name]
-		info.text = "[color=#d9b45a][b]%s[/b][/color]\n[font_size=12][color=#9a8e7a]%s[/color][/font_size]\n[font_size=11]%s[/font_size]" % [c.name, c.desc, sk]
-		hb.add_child(info)
+		hb.add_theme_constant_override("separation", 8)
+		hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var ic := UI.label(c.icon, 22)
+		ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var nm := UI.label(c.name, 16, UI.GOLD if sel else UI.TEXT)
+		nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hb.add_child(ic)
+		hb.add_child(nm)
 		card.add_child(hb)
-		var cid: String = c.id
+		var id2: String = cid
 		card.gui_input.connect(func(ev):
 			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-				_select_class(cid))
+				_select_class(id2))
 		card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		class_box.add_child(card)
+		grid.add_child(card)
+	var cur: Dictionary = Data.CLASSES[s.cls]
+	var detail := RichTextLabel.new()
+	detail.bbcode_enabled = true
+	detail.fit_content = true
+	detail.custom_minimum_size = Vector2(300, 0)
+	var keys := {"lmb": "좌클릭", "rmb": "우클릭", "q": "Q", "e": "E", "lmb_p": "표범 좌클릭", "rmb_p": "표범 우클릭", "e_p": "표범 E"}
+	var t := "[font_size=18][color=#d9b45a][b]%s %s[/b][/color][/font_size]\n[font_size=13][color=#9a8e7a]%s[/color][/font_size]\n" % [cur.icon, cur.name, cur.desc]
+	if cur.res != "":
+		t += "[font_size=12][color=#8fd0ff]자원: %s[/color][/font_size]\n" % Data.RES_NAMES[cur.res]
+	for k in ["lmb", "rmb", "q", "e", "lmb_p", "rmb_p", "e_p"]:
+		if cur.skills.has(k):
+			var sk: Dictionary = cur.skills[k]
+			var cdt := (" · %d초" % sk.cd) if sk.cd >= 2.0 else ""
+			t += "[font_size=13][color=#d9b45a]%s[/color] [b]%s[/b]%s\n[color=#9a8e7a]   %s[/color][/font_size]\n" % [keys[k], sk.name, cdt, sk.desc]
+	detail.text = t
+	class_box.add_child(detail)
 
 	# 장비
 	UI.clear(equip_row)
@@ -219,8 +237,8 @@ func refresh() -> void:
 			risk.append(s.equipment[sl])
 	risk.append_array(s.bag)
 	var txt := "[font_size=14]❤ 체력 [b]%d[/b]\n🛡 방어도 [b]%d[/b] [color=#9a8e7a](피해 -%d%%)[/color]\n⚔ 공격력 [b]x%.2f[/b]\n👟 이동속도 [b]%d%%[/b]" % [st.max_hp, st.armor, roundi((1.0 - 100.0 / (100.0 + st.armor)) * 100.0), st.dmg_mul, roundi(st.speed_mul * 100.0)]
-	if st.max_mana > 0:
-		txt += "\n🔷 마나 [b]%d[/b]" % st.max_mana
+	if st.res != "":
+		txt += "\n🔷 %s [b]%d[/b]" % [Data.RES_NAMES[st.res], st.res_max]
 	if s.equipment.weapon == null:
 		txt += "\n[color=#e0a050]⚠ 무기 없음 - 기본 무기(공격력 x0.85)로 싸웁니다[/color]"
 	txt += "\n[color=#9a8e7a][font_size=12]위험 부담 장비 가치: 💰 %d[/font_size][/color][/font_size]" % Data.items_value(risk)
@@ -289,7 +307,7 @@ func _render_shop() -> void:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 10)
 		row.add_child(UI.slot(Data.make_item(base, 0)))
-		var kind: String = ("%s 무기" % Data.CLASSES[b.cls].name) if b.has("cls") else ("소모품" if b.slot == "consumable" else Data.SLOT_NAMES[b.slot])
+		var kind: String = ("%s 무기" % Data.class_names(b.classes)) if b.has("classes") else ("소모품" if b.slot == "consumable" else Data.SLOT_NAMES[b.slot])
 		var nm := RichTextLabel.new()
 		nm.bbcode_enabled = true
 		nm.fit_content = true
@@ -389,7 +407,7 @@ func _stash_click(i: int) -> void:
 		if prev != null:
 			s.stash.append(prev)
 	elif b.slot == "weapon":
-		UI.toast("%s 전용 무기입니다" % Data.CLASSES[b.cls].name)
+		UI.toast("%s 전용 무기입니다" % Data.class_names(b.classes))
 		return
 	else:
 		if s.bag.size() >= SaveData.BAG_SIZE:

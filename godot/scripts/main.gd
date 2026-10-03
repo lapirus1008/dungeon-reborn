@@ -320,7 +320,7 @@ func _screenshots(dir: String) -> void:
 	await get_tree().create_timer(0.5).timeout
 	await _shot(dir, "1_lobby")
 	var args := OS.get_cmdline_user_args()
-	var cls := "mage"
+	var cls := "priest"
 	if args.has("--cls"):
 		cls = args[args.find("--cls") + 1]
 	SaveData.data.cls = cls
@@ -354,8 +354,12 @@ func _screenshots(dir: String) -> void:
 		p.pitch = -0.05
 		await get_tree().create_timer(0.4).timeout
 		await _shot(dir, "3_monster")
-	# 보호막 사용
-	p.cast_shield()
+	if args.has("--skills"):
+		await _skill_shots(dir, g, p, m)
+		get_tree().quit()
+		return
+	# 보호막 사용 (프리스트 수호)
+	Skills.use_e(p, p.aim())
 	await get_tree().create_timer(0.3).timeout
 	p.invuln = 0.0
 	m = null
@@ -387,27 +391,59 @@ func _screenshots(dir: String) -> void:
 	get_tree().quit()
 
 
+# 직업 스킬 효과 스크린샷 + 8직업 AI 모델 나란히
+func _skill_shots(dir: String, g, p, m) -> void:
+	p.res = p.res_max()
+	if p.cls == "druid":
+		Skills.use_e(p, p.aim())
+		await get_tree().create_timer(0.5).timeout
+		await _shot(dir, "4_e")
+		p.res = p.res_max()
+		Skills.use_q(p, p.aim())
+		await get_tree().create_timer(0.4).timeout
+		await _shot(dir, "5_q")
+	else:
+		Skills.use_q(p, p.aim())
+		await get_tree().create_timer(0.35 if p.cls != "cryomancer" else 0.8).timeout
+		await _shot(dir, "4_q")
+		p.res = p.res_max()
+		p.spin_t = 0.0
+		Skills.use_e(p, p.aim())
+		await get_tree().create_timer(0.4 if p.cls != "rogue" else 1.8).timeout
+		await _shot(dir, "5_e")
+	# 8직업 AI 모험가 모델
+	for a in g.actors:
+		if a.kind == "bot":
+			a.set_visible(false)
+			a.alive = false
+	var f := Actor.fwd(p.yaw)
+	var r := Vector3(cos(p.yaw), 0, -sin(p.yaw))
+	var i := 0
+	for c in Data.CLASS_ORDER:
+		var b := Bot.new(g, p.pos + f * 5.0 + r * (i - 3.5) * 1.1, 1, c)
+		b.yaw = p.yaw + PI
+		b.stun = 999.0
+		g.actors.append(b)
+		i += 1
+	p.frozen = 0.0
+	p.stealth = 0.0
+	await get_tree().create_timer(0.5).timeout
+	await _shot(dir, "6_classes")
+
+
 # ------------------------------------------------------------------ 자동 테스트 (godot -- --autotest)
 func _autotest() -> void:
 	print("[autotest] 시작")
 	var out := []
-	for cls in ["fighter", "ranger", "mage"]:
+	for cls in Data.CLASS_ORDER:
 		SaveData.data.cls = cls
-		var w := ""
-		match cls:
-			"fighter":
-				w = "rusty_sword"
-			"ranger":
-				w = "short_bow"
-			_:
-				w = "oak_staff"
-		SaveData.data.equipment.weapon = Data.make_item(w)
+		SaveData.data.equipment.weapon = Data.make_item(Data.STARTER_WEAPON[cls])
 		start_raid()
 		game.force_act = true
 		await get_tree().process_frame
 		var g := game
 		var p := g.player
-		# 몬스터 옆으로 이동해 공격
+		# 몬스터 옆으로 이동해 기본 공격
 		var m = null
 		for a in g.actors:
 			if a.kind == "monster" and not a.def.boss:
@@ -415,30 +451,48 @@ func _autotest() -> void:
 				break
 		var hp0: float = m.hp
 		p.pos = g.dungeon.resolve_circle(m.pos + Vector3(2, 0, 0), p.radius)
-		for i in 120:
+		m.stun = 2.0
+		for i in 150:
 			var dx: float = m.pos.x - p.pos.x
 			var dz: float = m.pos.z - p.pos.z
 			p.yaw = Actor.yaw_to(dx, dz)
 			var c: Vector3 = m.center()
 			p.pitch = atan2(c.y - (p.pos.y + Player.EYE), sqrt(dx * dx + dz * dz))
-			if cls != "ranger" or i % 40 < 30:
-				Input.action_press("attack")
-			else:
-				Input.action_release("attack")
+			Input.action_press("attack")
 			await get_tree().process_frame
 		Input.action_release("attack")
-		out.append("%s: 몬스터 %s 체력 %.0f -> %.0f (생존 %s), 플레이어 체력 %.0f, FPS %d" % [cls, m.name, hp0, m.hp, m.alive, p.hp, Engine.get_frames_per_second()])
-		if cls == "mage":
-			Input.action_press("secondary")
+		var line := "%s: 기본 공격 %s 체력 %.0f -> %.0f" % [Data.CLASSES[cls].name, m.name, hp0, m.hp]
+		# Q, E 스킬 (자원 가득 채운 뒤)
+		p.res = p.res_max() if p.res_max() > 0.0 else 0.0
+		p.stamina = 100.0
+		# 드루이드는 인간 형태에서 E(트렌트)를 먼저 확인
+		var e_first: bool = cls == "druid"
+		var e_ok := false
+		if e_first:
+			e_ok = Skills.use_e(p, p.aim())
+		var q_ok := Skills.use_q(p, p.aim())
+		for i in 30:
 			await get_tree().process_frame
-			Input.action_release("secondary")
+		p.res = p.res_max() if p.res_max() > 0.0 else 0.0
+		p.frozen = 0.0
+		if not e_first:
+			e_ok = Skills.use_e(p, p.aim())
+		for i in 120:
 			await get_tree().process_frame
-			out.append("  보호막: %.0f, 남은시간 %.1f, 구체 표시 %s" % [p.shield, p.shield_t, g.shield_bubble.visible])
+		line += " | Q %s, E %s" % ["O" if q_ok else "X", "O" if e_ok else "X"]
+		if cls == "druid":
+			line += " | 표범 %s, 트렌트 %d" % [p.panther, g.actors.filter(func(a): return a.kind == "summon").size()]
+		if cls == "rogue":
+			line += " | 은신 %.1f초" % p.stealth
+		if cls == "priest":
+			line += " | 보호막 %.0f" % p.shield
+		out.append(line)
+		print("[autotest] ", line)
 		# 탈출
 		g.spawn_portal("exit")
 		var po = g.portals[g.portals.size() - 1]
 		p.invuln = 999.0
-		p.pos = po.pos
+		p.frozen = 0.0
 		for i in 260:
 			p.pos = po.pos
 			await get_tree().process_frame
@@ -449,22 +503,52 @@ func _autotest() -> void:
 			await get_tree().process_frame
 		_on_results_continue()
 		await get_tree().process_frame
-	# 긴 시뮬레이션: 봇/몬스터 상호작용
+	# 스태미나: 바닥난 뒤 Shift를 계속 눌러도 30까지 회복 후에만 달리기
+	SaveData.data.cls = "fighter"
+	start_raid()
+	game.force_act = true
+	await get_tree().process_frame
+	var pl := game.player
+	pl.invuln = 999.0
+	Input.action_press("sprint")
+	Input.action_press("move_forward")
+	var toggles := 0
+	var was := false
+	var min_st := 100.0
+	for i in 60 * 12:
+		await get_tree().process_frame
+		if pl.sprinting != was:
+			toggles += 1
+			was = pl.sprinting
+		min_st = minf(min_st, pl.stamina)
+	Input.action_release("sprint")
+	Input.action_release("move_forward")
+	out.append("스태미나 12초 연속 달리기: 달리기/걷기 전환 %d회 (짧은 반복이면 수십 회), 최저 %.0f" % [toggles, min_st])
+	game.abandon()
+	while results.visible == false:
+		await get_tree().process_frame
+	_on_results_continue()
+	await get_tree().process_frame
+	# 긴 시뮬레이션: 8직업 봇/몬스터 상호작용
 	start_raid()
 	await get_tree().process_frame
 	game.player.invuln = 1e9
 	var t0 := Time.get_ticks_msec()
-	for i in 60 * 120:
+	var classes := {}
+	for a in game.actors:
+		if a.kind == "bot":
+			classes[a.cls] = true
+	for i in 60 * 150:
 		game.player.invuln = 1e9
 		game._process(1.0 / 60.0)
 		if i % 600 == 0:
 			await get_tree().process_frame
-	var ms := float(Time.get_ticks_msec() - t0) / (60 * 120)
+	var ms := float(Time.get_ticks_msec() - t0) / (60 * 150)
 	var bots := 0
 	for a in game.actors:
 		if a.kind == "bot" and a.alive:
 			bots += 1
-	out.append("시뮬레이션 120초: 생존 봇 %d, 상자 열림 %d/%d, 액터 %d, 프레임당 로직 %.2fms" % [bots, game.chests.filter(func(c): return c.opened).size(), game.chests.size(), game.actors.size(), ms])
+	out.append("시뮬레이션 150초: 봇 직업 %s, 생존 봇 %d, 상자 열림 %d/%d, 프레임당 로직 %.2fms" % [classes.keys(), bots, game.chests.filter(func(c): return c.opened).size(), game.chests.size(), ms])
 	for line in out:
 		print("[autotest] ", line)
 	print("[autotest] 완료")
