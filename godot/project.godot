@@ -1,0 +1,38 @@
+; Engine configuration file.
+; Godot 4.5 프로젝트 - 에디터에서 열면 자동으로 임포트됩니다.
+
+config_version=5
+
+[application]
+
+config/name="Dungeon Reborn"
+config/description="Dungeonborne에서 영감을 받은 1인칭 익스트랙션 던전 크롤러"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.5", "Forward Plus")
+config/icon="res://icon.svg"
+
+[autoload]
+
+Data="*res://scripts/data.gd"
+SaveData="*res://scripts/save_data.gd"
+Sfx="*res://scripts/sfx.gd"
+
+[display]
+
+window/size/viewport_width=1600
+window/size/viewport_height=900
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/vsync/vsync_mode=1
+
+[gui]
+
+common/drop_mouse_on_gui_input_disabled=true
+
+[rendering]
+
+renderer/rendering_method="forward_plus"
+environment/defaults/default_clear_color=Color(0, 0, 0, 1)
+anti_aliasing/quality/msaa_3d=0
+lights_and_shadows/positional_shadow/atlas_size=2048
+textures/default_filters/anisotropic_filtering_level=2

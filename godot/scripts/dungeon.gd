@@ -1,0 +1,561 @@
+# 던전 절차적 생성, 메시 구성, 충돌/시야/경로 탐색
+class_name Dungeon
+extends RefCounted
+
+const T := 4.0 # 타일 크기 (미터)
+const WALL_H := 5.5
+
+const EMPTY := 0
+const ROOM := 1
+const CORR := 2
+const PILLAR := 3
+
+var depth := 1
+var W := 46
+var H := 46
+var grid := PackedByteArray()
+var room_id := PackedInt32Array()
+var rooms: Array = [] # Dictionary: id, x, z, w, h, cx, cz, boss
+var torches: Array = [] # Dictionary: tx, tz, pos(Vector3), n(Vector3), light
+var props: Array = []
+var root: Node3D
+var flame_mm: MultiMesh
+
+
+func _init(d: int = 1) -> void:
+	depth = d
+	W = 46 if d == 1 else 50
+	H = W
+	grid.resize(W * H)
+	grid.fill(EMPTY)
+	room_id.resize(W * H)
+	room_id.fill(-1)
+	generate()
+
+
+func idx(x: int, z: int) -> int:
+	return z * W + x
+
+
+func get_t(x: int, z: int) -> int:
+	if x < 0 or z < 0 or x >= W or z >= H:
+		return EMPTY
+	return grid[z * W + x]
+
+
+func tile_solid(x: int, z: int) -> bool:
+	var g := get_t(x, z)
+	return g == EMPTY or g == PILLAR
+
+
+func to_tile(v: float) -> int:
+	return int(floor(v / T))
+
+
+func is_solid(x: float, z: float) -> bool:
+	return tile_solid(to_tile(x), to_tile(z))
+
+
+func center(tx: int, tz: int) -> Vector3:
+	return Vector3((tx + 0.5) * T, 0.0, (tz + 0.5) * T)
+
+
+func room_at(x: float, z: float):
+	var tx := to_tile(x)
+	var tz := to_tile(z)
+	if tx < 0 or tz < 0 or tx >= W or tz >= H:
+		return null
+	var id := room_id[idx(tx, tz)]
+	return rooms[id] if id >= 0 else null
+
+
+func generate() -> void:
+	var target := 14 if depth == 1 else 16
+	var attempts := 0
+	while rooms.size() < target and attempts < 600:
+		attempts += 1
+		var big := rooms.is_empty()
+		var w := randi_range(8, 10) if big else randi_range(4, 8)
+		var h := randi_range(8, 10) if big else randi_range(4, 8)
+		var x := randi_range(2, W - w - 3)
+		var z := randi_range(2, H - h - 3)
+		var ok := true
+		for r in rooms:
+			if x < r.x + r.w + 2 and x + w + 2 > r.x and z < r.z + r.h + 2 and z + h + 2 > r.z:
+				ok = false
+				break
+		if not ok:
+			continue
+		var room := {"id": rooms.size(), "x": x, "z": z, "w": w, "h": h, "cx": x + w / 2.0, "cz": z + h / 2.0, "boss": big}
+		rooms.append(room)
+		for i in range(x, x + w):
+			for j in range(z, z + h):
+				grid[idx(i, j)] = ROOM
+				room_id[idx(i, j)] = room.id
+
+	# 프림 MST로 방 연결 + 추가 루프
+	var n := rooms.size()
+	var in_tree := {0: true}
+	var edges := []
+	while in_tree.size() < n:
+		var best := []
+		var bd := 1e9
+		for a in in_tree:
+			for b in n:
+				if in_tree.has(b):
+					continue
+				var d := Vector2(rooms[a].cx - rooms[b].cx, rooms[a].cz - rooms[b].cz).length()
+				if d < bd:
+					bd = d
+					best = [a, b]
+		in_tree[best[1]] = true
+		edges.append(best)
+	for k in n / 3:
+		var a := randi_range(0, n - 1)
+		var b := -1
+		var bd := 1e9
+		for j in n:
+			if j == a:
+				continue
+			var d := Vector2(rooms[a].cx - rooms[j].cx, rooms[a].cz - rooms[j].cz).length()
+			var exists := false
+			for e in edges:
+				if (e[0] == a and e[1] == j) or (e[0] == j and e[1] == a):
+					exists = true
+			if d < bd and not exists:
+				bd = d
+				b = j
+		if b >= 0:
+			edges.append([a, b])
+	for e in edges:
+		_carve(rooms[e[0]], rooms[e[1]])
+
+	# 큰 방 기둥
+	for r in rooms:
+		if r.w >= 7 and r.h >= 7:
+			for p in [[r.x + 2, r.z + 2], [r.x + r.w - 3, r.z + 2], [r.x + 2, r.z + r.h - 3], [r.x + r.w - 3, r.z + r.h - 3]]:
+				grid[idx(p[0], p[1])] = PILLAR
+				props.append({"type": "pillar", "pos": center(p[0], p[1])})
+
+	# 횃불: 방 둘레 벽면
+	for r in rooms:
+		var count := 6 if r.boss else randi_range(2, 3)
+		var placed := 0
+		var tries := 0
+		while placed < count and tries < 40:
+			tries += 1
+			var side := randi_range(0, 3)
+			var tx := 0
+			var tz := 0
+			var nrm := Vector3.ZERO
+			match side:
+				0:
+					tx = randi_range(r.x, r.x + r.w - 1)
+					tz = r.z
+					nrm = Vector3(0, 0, -1)
+				1:
+					tx = randi_range(r.x, r.x + r.w - 1)
+					tz = r.z + r.h - 1
+					nrm = Vector3(0, 0, 1)
+				2:
+					tx = r.x
+					tz = randi_range(r.z, r.z + r.h - 1)
+					nrm = Vector3(-1, 0, 0)
+				_:
+					tx = r.x + r.w - 1
+					tz = randi_range(r.z, r.z + r.h - 1)
+					nrm = Vector3(1, 0, 0)
+			if get_t(tx + int(nrm.x), tz + int(nrm.z)) != EMPTY:
+				continue
+			var dup := false
+			for t in torches:
+				if t.tx == tx and t.tz == tz:
+					dup = true
+			if dup:
+				continue
+			var c := center(tx, tz)
+			torches.append({"tx": tx, "tz": tz, "pos": Vector3(c.x + nrm.x * (T / 2.0 - 0.25), 3.2, c.z + nrm.z * (T / 2.0 - 0.25)), "n": nrm})
+			placed += 1
+
+	# 소품: 통, 뼈 더미
+	for r in rooms:
+		for i in randi_range(1, 3):
+			var tx := randi_range(r.x, r.x + r.w - 1)
+			var top := randf() < 0.5
+			var tz: int = r.z if top else r.z + r.h - 1
+			if get_t(tx, tz) != ROOM:
+				continue
+			var c := center(tx, tz)
+			c.x += randf_range(-1.0, 1.0)
+			c.z += -1.2 if top else 1.2
+			props.append({"type": "barrel" if randf() < 0.6 else "bones", "pos": c})
+
+
+func _carve(a: Dictionary, b: Dictionary) -> void:
+	var x := int(a.cx)
+	var z := int(a.cz)
+	var x2 := int(b.cx)
+	var z2 := int(b.cz)
+	var horiz_first := randf() < 0.5
+	if horiz_first:
+		while x != x2:
+			_carve_tile(x, z)
+			x += signi(x2 - x)
+		while z != z2:
+			_carve_tile(x, z)
+			z += signi(z2 - z)
+	else:
+		while z != z2:
+			_carve_tile(x, z)
+			z += signi(z2 - z)
+		while x != x2:
+			_carve_tile(x, z)
+			x += signi(x2 - x)
+	_carve_tile(x, z)
+
+
+func _carve_tile(x: int, z: int) -> void:
+	if get_t(x, z) == EMPTY:
+		grid[idx(x, z)] = CORR
+
+
+# ------------------------------------------------------------------ 메시
+func _mat(tex: Array, uv_scale := Vector3.ONE, tint := Color.WHITE) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = tex[0]
+	m.albedo_color = tint
+	m.normal_enabled = true
+	m.normal_texture = tex[1]
+	m.normal_scale = 1.0
+	m.roughness = 0.92
+	m.uv1_scale = uv_scale
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	return m
+
+
+func _multimesh(mesh: Mesh, xforms: Array) -> MultiMeshInstance3D:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = mesh
+	mm.instance_count = xforms.size()
+	for i in xforms.size():
+		mm.set_instance_transform(i, xforms[i])
+	var mi := MultiMeshInstance3D.new()
+	mi.multimesh = mm
+	return mi
+
+
+func build(parent: Node3D, light_shadows: bool) -> void:
+	root = Node3D.new()
+	root.name = "Dungeon"
+	parent.add_child(root)
+	var deep := depth > 1
+	var wall_tex := Textures.stone_wall(deep)
+	var floor_tex := Textures.floor_tiles(deep)
+	var wall_mat := _mat(wall_tex)
+	var floor_mat := _mat(floor_tex)
+	var ceil_mat := _mat(wall_tex, Vector3.ONE, Color(0.45, 0.42, 0.4))
+
+	var floors := []
+	var ceils := []
+	var walls := []
+	for z in H:
+		for x in W:
+			var g := get_t(x, z)
+			if g != EMPTY:
+				floors.append(Transform3D(Basis(), Vector3((x + 0.5) * T, 0, (z + 0.5) * T)))
+				ceils.append(Transform3D(Basis(Vector3.RIGHT, PI), Vector3((x + 0.5) * T, WALL_H, (z + 0.5) * T)))
+			else:
+				var adj := false
+				for dz in range(-1, 2):
+					for dx in range(-1, 2):
+						if get_t(x + dx, z + dz) != EMPTY:
+							adj = true
+				if adj:
+					walls.append(Transform3D(Basis(), Vector3((x + 0.5) * T, WALL_H / 2.0, (z + 0.5) * T)))
+
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(T, T)
+	plane.material = floor_mat
+	root.add_child(_multimesh(plane, floors))
+	var cplane := PlaneMesh.new()
+	cplane.size = Vector2(T, T)
+	cplane.material = ceil_mat
+	var ceil_mi := _multimesh(cplane, ceils)
+	ceil_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(ceil_mi)
+	var box := BoxMesh.new()
+	box.size = Vector3(T, WALL_H, T)
+	box.material = wall_mat
+	# 벽 텍스처가 세로로 늘어나지 않도록 UV 비율 조정
+	wall_mat.uv1_scale = Vector3(3.0, 2.0 * WALL_H / T, 1.0)
+	root.add_child(_multimesh(box, walls))
+
+	# 기둥
+	var pillar_x := []
+	var barrel_x := []
+	var bone_x := []
+	var skull_x := []
+	for p in props:
+		match p.type:
+			"pillar":
+				pillar_x.append(Transform3D(Basis(), p.pos + Vector3(0, WALL_H / 2.0, 0)))
+			"barrel":
+				barrel_x.append(Transform3D(Basis(Vector3.UP, randf() * TAU), p.pos + Vector3(0, 0.6, 0)))
+			"bones":
+				for k in 5:
+					var bb := Basis(Vector3.UP, randf() * TAU) * Basis(Vector3.RIGHT, PI / 2)
+					bone_x.append(Transform3D(bb, p.pos + Vector3(randf_range(-0.5, 0.5), 0.05, randf_range(-0.5, 0.5))))
+				skull_x.append(Transform3D(Basis(Vector3.UP, randf() * TAU), p.pos + Vector3(0, 0.18, 0)))
+	if pillar_x.size():
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = 1.1
+		cyl.bottom_radius = 1.3
+		cyl.height = WALL_H
+		cyl.radial_segments = 12
+		var pm := _mat(wall_tex)
+		pm.uv1_scale = Vector3(4, 2, 1)
+		cyl.material = pm
+		root.add_child(_multimesh(cyl, pillar_x))
+	if barrel_x.size():
+		var bm := CylinderMesh.new()
+		bm.top_radius = 0.55
+		bm.bottom_radius = 0.5
+		bm.height = 1.2
+		var bmat := StandardMaterial3D.new()
+		bmat.albedo_texture = Textures.wood()
+		bmat.roughness = 0.8
+		bm.material = bmat
+		root.add_child(_multimesh(bm, barrel_x))
+	if bone_x.size():
+		var bone_mat := StandardMaterial3D.new()
+		bone_mat.albedo_color = Color(0.81, 0.78, 0.68)
+		bone_mat.roughness = 0.7
+		var stick := CylinderMesh.new()
+		stick.top_radius = 0.05
+		stick.bottom_radius = 0.05
+		stick.height = 0.6
+		stick.radial_segments = 6
+		stick.material = bone_mat
+		root.add_child(_multimesh(stick, bone_x))
+		var skull := SphereMesh.new()
+		skull.radius = 0.2
+		skull.height = 0.36
+		skull.material = bone_mat
+		root.add_child(_multimesh(skull, skull_x))
+
+	# 횃불: 받침 + 불꽃(발광) + 실제 점광원
+	var sconce := BoxMesh.new()
+	sconce.size = Vector3(0.15, 0.7, 0.15)
+	var smat := StandardMaterial3D.new()
+	smat.albedo_color = Color(0.23, 0.16, 0.1)
+	sconce.material = smat
+	var flame := CylinderMesh.new()
+	flame.top_radius = 0.0
+	flame.bottom_radius = 0.16
+	flame.height = 0.45
+	flame.radial_segments = 6
+	var fmat := StandardMaterial3D.new()
+	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	var fcol := Color(1.0, 0.45, 0.2) if deep else Color(1.0, 0.7, 0.3)
+	fmat.albedo_color = fcol
+	fmat.emission_enabled = true
+	fmat.emission = fcol
+	fmat.emission_energy_multiplier = 4.0
+	flame.material = fmat
+	var sx := []
+	var fx := []
+	for t in torches:
+		var n: Vector3 = t.n
+		var b := Basis(Vector3.RIGHT, n.z * 0.4) * Basis(Vector3.BACK, -n.x * 0.4)
+		sx.append(Transform3D(b, t.pos + Vector3(0, -0.4, 0)))
+		fx.append(Transform3D(Basis(), t.pos + Vector3(-n.x * 0.12, 0.1, -n.z * 0.12)))
+		var l := OmniLight3D.new()
+		l.light_color = Color(1.0, 0.55, 0.28) if deep else Color(1.0, 0.68, 0.38)
+		l.omni_range = 12.0
+		l.omni_attenuation = 1.2
+		l.light_energy = 2.2
+		l.shadow_enabled = light_shadows
+		l.position = t.pos + Vector3(-n.x * 0.5, 0.2, -n.z * 0.5)
+		l.distance_fade_enabled = true
+		l.distance_fade_begin = 35.0
+		l.distance_fade_length = 10.0
+		root.add_child(l)
+		t["light"] = l
+	if torches.size():
+		root.add_child(_multimesh(sconce, sx))
+		var fmi := _multimesh(flame, fx)
+		fmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		flame_mm = fmi.multimesh
+		root.add_child(fmi)
+
+
+func animate_torches(time: float, cam_pos: Vector3) -> void:
+	for i in torches.size():
+		var t: Dictionary = torches[i]
+		var fl := sin(time * 11.0 + i * 3.7) * 0.5 + sin(time * 5.3 + i) * 0.4
+		var l: OmniLight3D = t.light
+		if absf(t.pos.x - cam_pos.x) + absf(t.pos.z - cam_pos.z) < 40.0:
+			l.light_energy = 2.2 + fl * 0.35
+			if flame_mm:
+				var n: Vector3 = t.n
+				var b := Basis().scaled(Vector3(1.0 + fl * 0.1, 1.0 + fl * 0.25, 1.0 + fl * 0.1))
+				flame_mm.set_instance_transform(i, Transform3D(b, t.pos + Vector3(-n.x * 0.12, 0.1, -n.z * 0.12)))
+
+
+func dispose() -> void:
+	if root and is_instance_valid(root):
+		root.queue_free()
+
+
+# ------------------------------------------------------------------ 충돌/시야/경로
+# 원형 충돌체를 벽 밖으로 밀어낸 위치를 반환 (Vector3는 값 타입이므로 반환값 사용)
+func resolve_circle(pos: Vector3, r: float) -> Vector3:
+	var tx := to_tile(pos.x)
+	var tz := to_tile(pos.z)
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			var x := tx + dx
+			var z := tz + dz
+			var g := get_t(x, z)
+			if g == PILLAR:
+				var cx := (x + 0.5) * T
+				var cz := (z + 0.5) * T
+				var ddx := pos.x - cx
+				var ddz := pos.z - cz
+				var d := sqrt(ddx * ddx + ddz * ddz)
+				var mn := 1.3 + r
+				if d < mn and d > 1e-4:
+					pos.x = cx + ddx / d * mn
+					pos.z = cz + ddz / d * mn
+				continue
+			if g != EMPTY:
+				continue
+			var min_x := x * T
+			var min_z := z * T
+			var px := clampf(pos.x, min_x, min_x + T)
+			var pz := clampf(pos.z, min_z, min_z + T)
+			var ddx := pos.x - px
+			var ddz := pos.z - pz
+			var d2 := ddx * ddx + ddz * ddz
+			if d2 < r * r:
+				var d := sqrt(d2)
+				if d > 1e-4:
+					pos.x = px + ddx / d * r
+					pos.z = pz + ddz / d * r
+				else:
+					var cx := min_x + T / 2.0
+					var cz := min_z + T / 2.0
+					if absf(pos.x - cx) > absf(pos.z - cz):
+						pos.x = min_x + T + r if pos.x > cx else min_x - r
+					else:
+						pos.z = min_z + T + r if pos.z > cz else min_z - r
+	return pos
+
+
+func los(ax: float, az: float, bx: float, bz: float) -> bool:
+	var dx := bx - ax
+	var dz := bz - az
+	var d := sqrt(dx * dx + dz * dz)
+	var steps := int(ceil(d / 0.5))
+	for i in range(1, steps):
+		var t := float(i) / steps
+		var x := ax + dx * t
+		var z := az + dz * t
+		var tx := to_tile(x)
+		var tz := to_tile(z)
+		var g := get_t(tx, tz)
+		if g == EMPTY:
+			return false
+		if g == PILLAR:
+			var cx := (tx + 0.5) * T
+			var cz := (tz + 0.5) * T
+			if Vector2(x - cx, z - cz).length() < 1.2:
+				return false
+	return true
+
+
+func wide_los(a: Vector3, b: Vector3) -> bool:
+	var dx := b.x - a.x
+	var dz := b.z - a.z
+	var d := maxf(0.001, sqrt(dx * dx + dz * dz))
+	var px := -dz / d * 0.7
+	var pz := dx / d * 0.7
+	return los(a.x + px, a.z + pz, b.x + px, b.z + pz) and los(a.x - px, a.z - pz, b.x - px, b.z - pz)
+
+
+# BFS 경로 탐색 -> 월드 좌표 웨이포인트 배열 (실패 시 빈 배열)
+func path(a: Vector3, b: Vector3) -> Array:
+	var sx := to_tile(a.x)
+	var sz := to_tile(a.z)
+	var ex := to_tile(b.x)
+	var ez := to_tile(b.z)
+	if tile_solid(ex, ez) or tile_solid(sx, sz):
+		return []
+	var prev := PackedInt32Array()
+	prev.resize(W * H)
+	prev.fill(-2)
+	var q := PackedInt32Array()
+	q.resize(W * H)
+	var qh := 0
+	var qt := 0
+	var s := idx(sx, sz)
+	var e := idx(ex, ez)
+	prev[s] = -1
+	q[qt] = s
+	qt += 1
+	var dirs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	while qh < qt:
+		var c := q[qh]
+		qh += 1
+		if c == e:
+			break
+		var cx := c % W
+		var cz := c / W
+		for dv in dirs:
+			var nx: int = cx + dv.x
+			var nz: int = cz + dv.y
+			if tile_solid(nx, nz):
+				continue
+			var ni := idx(nx, nz)
+			if prev[ni] != -2:
+				continue
+			prev[ni] = c
+			q[qt] = ni
+			qt += 1
+	if prev[e] == -2:
+		return []
+	var tiles := []
+	var c2 := e
+	while c2 != -1:
+		tiles.append(c2)
+		c2 = prev[c2]
+	tiles.reverse()
+	var pts := []
+	for t in tiles:
+		pts.append(center(t % W, t / W))
+	pts[pts.size() - 1] = Vector3(b.x, 0, b.z)
+	# 시야 기반 경로 단순화
+	var out := []
+	var anchor := Vector3(a.x, 0, a.z)
+	var i := 0
+	while i < pts.size():
+		var j := pts.size() - 1
+		while j > i and not wide_los(anchor, pts[j]):
+			j -= 1
+		out.append(pts[j])
+		anchor = pts[j]
+		i = j + 1
+	return out
+
+
+func random_point_in_room(room: Dictionary, margin: int = 1) -> Vector3:
+	for k in 30:
+		var tx := randi_range(room.x + margin, room.x + room.w - 1 - margin)
+		var tz := randi_range(room.z + margin, room.z + room.h - 1 - margin)
+		if get_t(tx, tz) == ROOM:
+			var c := center(tx, tz)
+			c.x += randf_range(-1.0, 1.0)
+			c.z += randf_range(-1.0, 1.0)
+			return c
+	return center(int(room.cx), int(room.cz))
