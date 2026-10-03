@@ -43,12 +43,14 @@ static func _random_gear(c: String, depth: int) -> Dictionary:
 			if Data.ITEM_BASES[k].slot == slot:
 				ks.append(k)
 		return ks.pick_random()
-	return {
-		"weapon": Data.make_item(Data.STARTER_WEAPON[c] if randf() < 0.35 else weapons.pick_random(), Data.roll_rarity(luck - 1)),
-		"head": Data.make_item(pick.call("head"), Data.roll_rarity(luck - 1)) if randf() < 0.6 else null,
-		"chest": Data.make_item(pick.call("chest"), Data.roll_rarity(luck - 1)) if randf() < 0.75 else null,
-		"trinket": Data.make_item(pick.call("trinket"), Data.roll_rarity(luck)) if randf() < 0.3 else null,
-	}
+	var eq := Account.empty_equipment()
+	eq.weapon = Data.make_item(Data.STARTER_WEAPON[c] if randf() < 0.35 else weapons.pick_random(), Data.roll_rarity(luck - 1))
+	# 부위별 착용 확률
+	for pair in [["head", 0.6], ["chest", 0.75], ["hands", 0.45], ["legs", 0.55], ["feet", 0.6], ["necklace", 0.2], ["ring1", 0.25]]:
+		if randf() < pair[1]:
+			var item_slot: String = "ring" if pair[0] == "ring1" else pair[0]
+			eq[pair[0]] = Data.make_item(pick.call(item_slot), Data.roll_rarity(luck - 1))
+	return eq
 
 
 func _init(g, p: Vector3, depth: int, force_cls := "") -> void:

@@ -75,7 +75,7 @@ func recalc() -> void:
 
 
 func on_block(amount: float) -> void:
-	stamina -= amount * 0.7
+	stamina -= amount * 0.7 * (1.0 - stats.get("flags", {}).get("block_eff", 0.0))
 	stamina_delay = 0.8
 	game.sfx("block", pos)
 	if stamina <= 0.0:
@@ -161,12 +161,12 @@ func update(dt: float) -> void:
 		elif inp.just_pressed("potion2"):
 			want = "bandage"
 		if want != "":
-			var idx := -1
-			for i in bag.size():
-				if bag[i].base == want:
-					idx = i
+			var idx := ""
+			for it in bag:
+				if it.base == want:
+					idx = it.id
 					break
-			if idx < 0:
+			if idx == "":
 				game.notify(self, "toast", ["%s이(가) 없습니다" % Data.ITEM_BASES[want].name])
 			elif hp >= max_hp:
 				game.notify(self, "toast", ["체력이 가득 찼습니다"])
@@ -287,7 +287,7 @@ func _start_swing(prof: Dictionary, bash := false) -> void:
 	swing = {"t": 0.0, "prof": prof, "done": false, "side": swing_side, "bash": bash}
 	stamina -= prof.stamina
 	stamina_delay = 0.6
-	cd.lmb = prof.cd
+	cd.lmb = prof.cd / stats.get("act_mul", 1.0)
 	game.sfx("swing", pos)
 	if inp.remote:
 		game.notify(self, "swing", [swing_side, bash, prof.dur])
@@ -355,7 +355,10 @@ func _combat(dt: float, act: bool) -> void:
 			swing = null
 
 
-func use_consumable(i: int) -> void:
+func use_consumable(id: String) -> void:
+	var i := Inv.index_of(bag, id)
+	if i < 0:
+		return
 	var it: Dictionary = bag[i]
 	var b: Dictionary = Data.ITEM_BASES[it.base]
 	bag.remove_at(i)

@@ -109,58 +109,190 @@ const CLASS_ORDER := ["fighter", "swordmaster", "rogue", "deathknight", "druid",
 const RES_NAMES := {"mana": "마나", "soul": "영혼", "primal": "원시 에너지"}
 const RES_COLORS := {"mana": Color(0.29, 0.48, 1.0), "soul": Color(0.6, 0.25, 0.85), "primal": Color(0.35, 0.8, 0.3)}
 
-const SLOT_NAMES := {"weapon": "무기", "head": "머리", "chest": "몸통", "trinket": "장신구"}
-const GEAR_SLOTS := ["weapon", "head", "chest", "trinket"]
+# ------------------------------------------------------------------ 능력치 (던전본 방식: 능력치가 파생 스탯과 패시브를 결정)
+const ATTRS := ["str", "agi", "int", "wil", "vit"]
+const ATTR_NAMES := {"str": "힘", "agi": "민첩", "int": "지능", "wil": "의지", "vit": "활력"}
+const ATTR_DESC := {
+	"str": "물리 직업 피해량",
+	"agi": "이동속도, 공격 속도 (로그 피해량)",
+	"int": "마법 직업 피해량, 최대 마나",
+	"wil": "스킬 재사용 대기시간 감소, 자원 회복 (프리스트 피해량)",
+	"vit": "최대 체력",
+}
+# 직업별 기본 능력치와 피해량을 결정하는 능력치
+const CLASS_ATTRS := {
+	"fighter": {"str": 18, "agi": 13, "int": 8, "wil": 12, "vit": 20},
+	"swordmaster": {"str": 17, "agi": 18, "int": 9, "wil": 14, "vit": 15},
+	"rogue": {"str": 12, "agi": 22, "int": 12, "wil": 12, "vit": 13},
+	"deathknight": {"str": 20, "agi": 11, "int": 10, "wil": 15, "vit": 19},
+	"druid": {"str": 12, "agi": 15, "int": 18, "wil": 17, "vit": 15},
+	"pyromancer": {"str": 8, "agi": 13, "int": 22, "wil": 17, "vit": 12},
+	"cryomancer": {"str": 9, "agi": 12, "int": 21, "wil": 18, "vit": 14},
+	"priest": {"str": 15, "agi": 11, "int": 14, "wil": 21, "vit": 16},
+}
+const POWER_ATTR := {
+	"fighter": "str", "swordmaster": "str", "rogue": "agi", "deathknight": "str",
+	"druid": "int", "pyromancer": "int", "cryomancer": "int", "priest": "wil",
+}
+const MAGIC_CLASSES := ["druid", "pyromancer", "cryomancer", "priest"]
 
+# 능력치 조건을 채우면 열리는 직업 패시브 (첫 번째는 기본 능력치로 열림)
+# fx: dmg(피해%), hp, armor, move(이속%), cdr(쿨감%), regen(자원회복%), act(공격속도%), heal(치유량%), 그 외 특수 플래그
+const PASSIVES := {
+	"fighter": [
+		{"name": "방패 숙련", "req": {"vit": 20}, "desc": "방어 중 스태미나 소모 30% 감소", "fx": {"block_eff": 0.3}},
+		{"name": "무기 숙련", "req": {"str": 24}, "desc": "피해량 +8%", "fx": {"dmg": 0.08}},
+		{"name": "불굴", "req": {"vit": 28}, "desc": "최대 체력 +20", "fx": {"hp": 20}},
+	],
+	"swordmaster": [
+		{"name": "검무", "req": {"agi": 18}, "desc": "공격 속도 +10%", "fx": {"act": 0.10}},
+		{"name": "명경지수", "req": {"wil": 20}, "desc": "스킬 재사용 대기시간 -10%", "fx": {"cdr": 0.10}},
+		{"name": "칼날 폭풍", "req": {"str": 25}, "desc": "피해량 +8%", "fx": {"dmg": 0.08}},
+	],
+	"rogue": [
+		{"name": "그림자 걸음", "req": {"agi": 22}, "desc": "이동속도 +5%", "fx": {"move": 0.05}},
+		{"name": "급소 노리기", "req": {"agi": 28}, "desc": "등 뒤 공격 1.6배 → 1.9배", "fx": {"backstab": 0.3}},
+		{"name": "독 연구", "req": {"int": 17}, "desc": "석화 독 지속 피해 +60%", "fx": {"poison": 0.6}},
+	],
+	"deathknight": [
+		{"name": "영혼 흡수", "req": {"wil": 15}, "desc": "근접 흡혈 10% → 15%", "fx": {"lifesteal": 0.05}},
+		{"name": "공포의 갑주", "req": {"vit": 24}, "desc": "방어도 +15", "fx": {"armor": 15}},
+		{"name": "학살자", "req": {"str": 26}, "desc": "피해량 +8%", "fx": {"dmg": 0.08}},
+	],
+	"druid": [
+		{"name": "자연의 가호", "req": {"wil": 17}, "desc": "마나/원시 에너지 회복 +25%", "fx": {"regen": 0.25}},
+		{"name": "야수의 힘", "req": {"agi": 21}, "desc": "표범 형태 피해 +15%", "fx": {"beast": 0.15}},
+		{"name": "숲의 수호", "req": {"vit": 22}, "desc": "최대 체력 +20", "fx": {"hp": 20}},
+	],
+	"pyromancer": [
+		{"name": "마력 순환", "req": {"wil": 17}, "desc": "마나 회복 +25%", "fx": {"regen": 0.25}},
+		{"name": "불꽃 친화", "req": {"int": 27}, "desc": "피해량 +10%", "fx": {"dmg": 0.10}},
+		{"name": "열기", "req": {"wil": 23}, "desc": "스킬 재사용 대기시간 -8%", "fx": {"cdr": 0.08}},
+	],
+	"cryomancer": [
+		{"name": "마력 순환", "req": {"wil": 18}, "desc": "마나 회복 +25%", "fx": {"regen": 0.25}},
+		{"name": "얼음 심장", "req": {"vit": 20}, "desc": "방어도 +12", "fx": {"armor": 12}},
+		{"name": "냉기 숙련", "req": {"int": 27}, "desc": "피해량 +10%", "fx": {"dmg": 0.10}},
+	],
+	"priest": [
+		{"name": "신앙", "req": {"wil": 21}, "desc": "치유량 +20%", "fx": {"heal": 0.2}},
+		{"name": "축복받은 무기", "req": {"str": 20}, "desc": "피해량 +8%", "fx": {"dmg": 0.08}},
+		{"name": "인내", "req": {"vit": 22}, "desc": "최대 체력 +20", "fx": {"hp": 20}},
+	],
+}
+
+# 무작위 옵션 (희귀도가 높을수록 개수와 수치가 커짐). r = 희귀도 0~4
+const AFFIXES := {
+	"str": {"name": "힘", "fmt": "+%d 힘", "w": 10},
+	"agi": {"name": "민첩", "fmt": "+%d 민첩", "w": 10},
+	"int": {"name": "지능", "fmt": "+%d 지능", "w": 10},
+	"wil": {"name": "의지", "fmt": "+%d 의지", "w": 10},
+	"vit": {"name": "활력", "fmt": "+%d 활력", "w": 10},
+	"all": {"name": "모든 능력치", "fmt": "+%d 모든 능력치", "w": 3},
+	"hp": {"name": "최대 체력", "fmt": "+%d 최대 체력", "w": 8},
+	"armor": {"name": "방어도", "fmt": "+%d 방어도", "w": 8},
+	"phys": {"name": "물리 피해", "fmt": "+%d%% 물리 피해", "w": 6},
+	"magic": {"name": "마법 피해", "fmt": "+%d%% 마법 피해", "w": 6},
+	"move": {"name": "이동속도", "fmt": "+%d%% 이동속도", "w": 5},
+	"cdr": {"name": "재사용 대기시간 감소", "fmt": "+%d%% 재사용 대기시간 감소", "w": 5},
+	"regen": {"name": "자원 회복", "fmt": "+%d%% 자원 회복", "w": 5},
+	"act": {"name": "공격 속도", "fmt": "+%d%% 공격 속도", "w": 5},
+}
+
+
+# 옵션 수치 범위 [최소, 최대]
+func affix_range(k: String, r: int) -> Vector2i:
+	match k:
+		"str", "agi", "int", "wil", "vit":
+			return Vector2i(1 + r / 2, 2 + r)
+		"all":
+			return Vector2i(1, 1 + r / 2)
+		"hp":
+			return Vector2i(4 + r * 2, 8 + r * 4)
+		"armor":
+			return Vector2i(3 + r * 2, 6 + r * 3)
+		"phys", "magic":
+			return Vector2i(2 + r, 3 + r * 2)
+		"move":
+			return Vector2i(1, 2 + r / 2)
+		"cdr", "act":
+			return Vector2i(2 + r / 2, 3 + r)
+		"regen":
+			return Vector2i(5 + r * 2, 8 + r * 4)
+	return Vector2i(1, 1)
+
+
+const SLOT_NAMES := {
+	"weapon": "무기", "head": "머리", "chest": "상의", "hands": "장갑", "legs": "하의", "feet": "신발",
+	"necklace": "목걸이", "ring1": "반지", "ring2": "반지", "ring": "반지",
+}
+const GEAR_SLOTS := ["weapon", "head", "chest", "hands", "legs", "feet", "necklace", "ring1", "ring2"]
+const ITEM_SLOT_TO_GEAR := {"ring": ["ring1", "ring2"]}
+
+# size: 인벤토리에서 차지하는 칸 [가로, 세로] (회전 가능)
 const ITEM_BASES := {
 	# 무기 (classes: 장착 가능한 직업)
-	"rusty_sword": {"name": "녹슨 장검", "slot": "weapon", "classes": ["fighter", "swordmaster"], "dmg": 1.0, "value": 15, "icon": "🗡", "model": "sword"},
-	"arming_sword": {"name": "기사의 장검", "slot": "weapon", "classes": ["fighter", "swordmaster"], "dmg": 1.18, "value": 40, "icon": "🗡", "model": "sword"},
-	"war_axe": {"name": "전투 도끼", "slot": "weapon", "classes": ["fighter"], "dmg": 1.3, "value": 60, "icon": "🪓", "model": "sword"},
-	"zweihander": {"name": "츠바이핸더", "slot": "weapon", "classes": ["swordmaster", "deathknight"], "dmg": 1.45, "value": 95, "icon": "⚔", "model": "greatsword"},
-	"training_longsword": {"name": "수련용 장검", "slot": "weapon", "classes": ["swordmaster"], "dmg": 1.0, "value": 15, "icon": "🗡", "model": "longsword"},
-	"katana": {"name": "카타나", "slot": "weapon", "classes": ["swordmaster"], "dmg": 1.32, "value": 70, "icon": "🗡", "model": "longsword"},
-	"rusty_dagger": {"name": "녹슨 단검", "slot": "weapon", "classes": ["rogue"], "dmg": 1.0, "value": 15, "icon": "🔪", "model": "dagger"},
-	"twin_daggers": {"name": "쌍단검", "slot": "weapon", "classes": ["rogue"], "dmg": 1.18, "value": 40, "icon": "🔪", "model": "dagger"},
-	"venom_dagger": {"name": "독날 단검", "slot": "weapon", "classes": ["rogue"], "dmg": 1.3, "value": 65, "icon": "🔪", "model": "dagger"},
-	"shadow_dagger": {"name": "그림자 단검", "slot": "weapon", "classes": ["rogue"], "dmg": 1.45, "value": 95, "icon": "🔪", "model": "dagger"},
-	"rusty_greatsword": {"name": "녹슨 대검", "slot": "weapon", "classes": ["deathknight"], "dmg": 1.0, "value": 15, "icon": "⚔", "model": "greatsword"},
-	"reaper_scythe": {"name": "사신의 낫", "slot": "weapon", "classes": ["deathknight"], "dmg": 1.3, "value": 70, "icon": "☠", "model": "greatsword"},
-	"oak_staff": {"name": "참나무 지팡이", "slot": "weapon", "classes": ["druid", "pyromancer", "cryomancer"], "dmg": 1.0, "value": 15, "icon": "🪄", "model": "staff"},
-	"crystal_staff": {"name": "수정 지팡이", "slot": "weapon", "classes": ["druid", "pyromancer", "cryomancer"], "dmg": 1.18, "value": 40, "icon": "🪄", "model": "staff"},
-	"living_staff": {"name": "생명의 지팡이", "slot": "weapon", "classes": ["druid"], "dmg": 1.32, "value": 70, "icon": "🌿", "model": "staff"},
-	"spellbook": {"name": "마도서", "slot": "weapon", "classes": ["pyromancer", "cryomancer", "priest"], "dmg": 1.3, "value": 65, "icon": "📕", "model": "staff"},
-	"archmage_staff": {"name": "대마법사의 지팡이", "slot": "weapon", "classes": ["pyromancer", "cryomancer"], "dmg": 1.45, "value": 95, "icon": "🔮", "model": "staff"},
-	"iron_mace": {"name": "철 철퇴", "slot": "weapon", "classes": ["priest"], "dmg": 1.0, "value": 15, "icon": "🔨", "model": "mace"},
-	"holy_mace": {"name": "성스러운 철퇴", "slot": "weapon", "classes": ["priest"], "dmg": 1.25, "value": 55, "icon": "🔨", "model": "mace"},
-	"sun_mace": {"name": "태양의 철퇴", "slot": "weapon", "classes": ["priest"], "dmg": 1.45, "value": 95, "icon": "🔨", "model": "mace"},
-	# 머리
-	"leather_cap": {"name": "가죽 모자", "slot": "head", "armor": 8, "value": 12, "icon": "🧢"},
-	"iron_helm": {"name": "철 투구", "slot": "head", "armor": 16, "value": 30, "icon": "⛑"},
-	"great_helm": {"name": "그레이트 헬름", "slot": "head", "armor": 24, "speed": -0.03, "value": 55, "icon": "🪖"},
-	"wizard_hat": {"name": "마법사 모자", "slot": "head", "armor": 6, "mana": 25, "value": 40, "icon": "🎩"},
-	# 몸통
-	"padded_tunic": {"name": "누빔 튜닉", "slot": "chest", "armor": 12, "value": 15, "icon": "👕"},
-	"chain_mail": {"name": "사슬 갑옷", "slot": "chest", "armor": 28, "speed": -0.04, "value": 45, "icon": "🥋"},
-	"plate_armor": {"name": "판금 갑옷", "slot": "chest", "armor": 45, "speed": -0.08, "value": 80, "icon": "🛡"},
-	"ranger_coat": {"name": "사냥꾼 외투", "slot": "chest", "armor": 18, "speed": 0.04, "value": 50, "icon": "🧥"},
-	"arcane_robe": {"name": "비전 로브", "slot": "chest", "armor": 10, "mana": 40, "value": 55, "icon": "👘"},
-	# 장신구
-	"copper_ring": {"name": "구리 반지", "slot": "trinket", "hp": 10, "value": 20, "icon": "💍"},
-	"ruby_ring": {"name": "루비 반지", "slot": "trinket", "hp": 25, "value": 50, "icon": "💍"},
-	"wolf_pendant": {"name": "늑대 목걸이", "slot": "trinket", "speed": 0.06, "value": 50, "icon": "📿"},
-	"skull_amulet": {"name": "해골 부적", "slot": "trinket", "dmgBonus": 0.08, "value": 70, "icon": "💀"},
+	"rusty_sword": {"name": "녹슨 장검", "slot": "weapon", "classes": ["fighter", "swordmaster"], "dmg": 1.0, "value": 15, "icon": "🗡", "model": "sword", "size": [1, 3]},
+	"arming_sword": {"name": "기사의 장검", "slot": "weapon", "classes": ["fighter", "swordmaster"], "dmg": 1.18, "value": 40, "icon": "🗡", "model": "sword", "size": [1, 3]},
+	"war_axe": {"name": "전투 도끼", "slot": "weapon", "classes": ["fighter"], "dmg": 1.3, "value": 60, "icon": "🪓", "model": "sword", "size": [2, 3]},
+	"zweihander": {"name": "츠바이핸더", "slot": "weapon", "classes": ["swordmaster", "deathknight"], "dmg": 1.45, "value": 95, "icon": "⚔", "model": "greatsword", "size": [2, 4]},
+	"training_longsword": {"name": "수련용 장검", "slot": "weapon", "classes": ["swordmaster"], "dmg": 1.0, "value": 15, "icon": "🗡", "model": "longsword", "size": [1, 4]},
+	"katana": {"name": "카타나", "slot": "weapon", "classes": ["swordmaster"], "dmg": 1.32, "value": 70, "icon": "🗡", "model": "longsword", "size": [1, 4]},
+	"rusty_dagger": {"name": "녹슨 단검", "slot": "weapon", "classes": ["rogue"], "dmg": 1.0, "value": 15, "icon": "🔪", "model": "dagger", "size": [1, 2]},
+	"twin_daggers": {"name": "쌍단검", "slot": "weapon", "classes": ["rogue"], "dmg": 1.18, "value": 40, "icon": "🔪", "model": "dagger", "size": [2, 2]},
+	"venom_dagger": {"name": "독날 단검", "slot": "weapon", "classes": ["rogue"], "dmg": 1.3, "value": 65, "icon": "🔪", "model": "dagger", "size": [1, 2]},
+	"shadow_dagger": {"name": "그림자 단검", "slot": "weapon", "classes": ["rogue"], "dmg": 1.45, "value": 95, "icon": "🔪", "model": "dagger", "size": [1, 2]},
+	"rusty_greatsword": {"name": "녹슨 대검", "slot": "weapon", "classes": ["deathknight"], "dmg": 1.0, "value": 15, "icon": "⚔", "model": "greatsword", "size": [2, 4]},
+	"reaper_scythe": {"name": "사신의 낫", "slot": "weapon", "classes": ["deathknight"], "dmg": 1.3, "value": 70, "icon": "☠", "model": "greatsword", "size": [2, 4]},
+	"oak_staff": {"name": "참나무 지팡이", "slot": "weapon", "classes": ["druid", "pyromancer", "cryomancer"], "dmg": 1.0, "value": 15, "icon": "🪄", "model": "staff", "size": [1, 4]},
+	"crystal_staff": {"name": "수정 지팡이", "slot": "weapon", "classes": ["druid", "pyromancer", "cryomancer"], "dmg": 1.18, "value": 40, "icon": "🪄", "model": "staff", "size": [1, 4]},
+	"living_staff": {"name": "생명의 지팡이", "slot": "weapon", "classes": ["druid"], "dmg": 1.32, "value": 70, "icon": "🌿", "model": "staff", "size": [1, 4]},
+	"spellbook": {"name": "마도서", "slot": "weapon", "classes": ["pyromancer", "cryomancer", "priest"], "dmg": 1.3, "value": 65, "icon": "📕", "model": "staff", "size": [2, 2]},
+	"archmage_staff": {"name": "대마법사의 지팡이", "slot": "weapon", "classes": ["pyromancer", "cryomancer"], "dmg": 1.45, "value": 95, "icon": "🔮", "model": "staff", "size": [1, 4]},
+	"iron_mace": {"name": "철 철퇴", "slot": "weapon", "classes": ["priest"], "dmg": 1.0, "value": 15, "icon": "🔨", "model": "mace", "size": [1, 3]},
+	"holy_mace": {"name": "성스러운 철퇴", "slot": "weapon", "classes": ["priest"], "dmg": 1.25, "value": 55, "icon": "🔨", "model": "mace", "size": [1, 3]},
+	"sun_mace": {"name": "태양의 철퇴", "slot": "weapon", "classes": ["priest"], "dmg": 1.45, "value": 95, "icon": "🔨", "model": "mace", "size": [2, 3]},
+	# 머리 (작은 장비 2x2)
+	"leather_cap": {"name": "가죽 모자", "slot": "head", "armor": 8, "value": 12, "icon": "🧢", "size": [2, 2]},
+	"iron_helm": {"name": "철 투구", "slot": "head", "armor": 16, "value": 30, "icon": "⛑", "size": [2, 2]},
+	"great_helm": {"name": "그레이트 헬름", "slot": "head", "armor": 24, "speed": -0.03, "value": 55, "icon": "🪖", "size": [2, 2]},
+	"wizard_hat": {"name": "마법사 모자", "slot": "head", "armor": 6, "mana": 25, "value": 40, "icon": "🎩", "size": [2, 2]},
+	# 상의 (큰 장비 2x3)
+	"padded_tunic": {"name": "누빔 튜닉", "slot": "chest", "armor": 12, "value": 15, "icon": "👕", "size": [2, 3]},
+	"chain_mail": {"name": "사슬 갑옷", "slot": "chest", "armor": 28, "speed": -0.04, "value": 45, "icon": "🥋", "size": [2, 3]},
+	"plate_armor": {"name": "판금 갑옷", "slot": "chest", "armor": 45, "speed": -0.08, "value": 80, "icon": "🛡", "size": [2, 3]},
+	"ranger_coat": {"name": "사냥꾼 외투", "slot": "chest", "armor": 18, "speed": 0.04, "value": 50, "icon": "🧥", "size": [2, 3]},
+	"arcane_robe": {"name": "비전 로브", "slot": "chest", "armor": 10, "mana": 40, "value": 55, "icon": "👘", "size": [2, 3]},
+	# 장갑 (2x2)
+	"leather_gloves": {"name": "가죽 장갑", "slot": "hands", "armor": 4, "value": 12, "icon": "🧤", "size": [2, 2]},
+	"chain_gauntlets": {"name": "사슬 건틀릿", "slot": "hands", "armor": 9, "value": 30, "icon": "🧤", "size": [2, 2]},
+	"plate_gauntlets": {"name": "판금 건틀릿", "slot": "hands", "armor": 14, "speed": -0.01, "value": 50, "icon": "🧤", "size": [2, 2]},
+	# 하의 (2x3)
+	"cloth_pants": {"name": "천 바지", "slot": "legs", "armor": 6, "value": 12, "icon": "👖", "size": [2, 3]},
+	"leather_leggings": {"name": "가죽 각반", "slot": "legs", "armor": 12, "value": 30, "icon": "👖", "size": [2, 3]},
+	"plate_greaves": {"name": "판금 다리갑옷", "slot": "legs", "armor": 22, "speed": -0.03, "value": 55, "icon": "👖", "size": [2, 3]},
+	# 신발 (2x2)
+	"leather_boots": {"name": "가죽 장화", "slot": "feet", "armor": 4, "speed": 0.02, "value": 15, "icon": "🥾", "size": [2, 2]},
+	"chain_boots": {"name": "사슬 장화", "slot": "feet", "armor": 9, "value": 30, "icon": "🥾", "size": [2, 2]},
+	"plate_sabatons": {"name": "판금 철각", "slot": "feet", "armor": 14, "speed": -0.02, "value": 50, "icon": "🥾", "size": [2, 2]},
+	# 목걸이/반지 (1x1)
+	"wolf_pendant": {"name": "늑대 목걸이", "slot": "necklace", "speed": 0.04, "value": 50, "icon": "📿", "size": [1, 1]},
+	"skull_amulet": {"name": "해골 부적", "slot": "necklace", "dmgBonus": 0.06, "value": 70, "icon": "💀", "size": [1, 1]},
+	"bone_necklace": {"name": "뼈 목걸이", "slot": "necklace", "hp": 12, "value": 35, "icon": "📿", "size": [1, 1]},
+	"copper_ring": {"name": "구리 반지", "slot": "ring", "hp": 8, "value": 20, "icon": "💍", "size": [1, 1]},
+	"ruby_ring": {"name": "루비 반지", "slot": "ring", "hp": 18, "value": 50, "icon": "💍", "size": [1, 1]},
+	"silver_ring": {"name": "은 반지", "slot": "ring", "mana": 15, "value": 40, "icon": "💍", "size": [1, 1]},
 	# 소모품
-	"health_potion": {"name": "체력 물약", "slot": "consumable", "heal": 45, "value": 15, "icon": "🧪"},
-	"bandage": {"name": "붕대", "slot": "consumable", "heal": 20, "value": 6, "icon": "🩹"},
+	"health_potion": {"name": "체력 물약", "slot": "consumable", "heal": 45, "value": 15, "icon": "🧪", "size": [1, 1]},
+	"bandage": {"name": "붕대", "slot": "consumable", "heal": 20, "value": 6, "icon": "🩹", "size": [1, 1]},
 	# 보물
-	"gold_coins": {"name": "금화 주머니", "slot": "treasure", "value": 25, "icon": "💰"},
-	"silver_goblet": {"name": "은 술잔", "slot": "treasure", "value": 35, "icon": "🏆"},
-	"ruby": {"name": "루비", "slot": "treasure", "value": 60, "icon": "🔴"},
-	"sapphire": {"name": "사파이어", "slot": "treasure", "value": 70, "icon": "🔵"},
-	"golden_crown": {"name": "황금 왕관", "slot": "treasure", "value": 160, "icon": "👑"},
-	"ancient_relic": {"name": "고대 유물", "slot": "treasure", "value": 220, "icon": "🗿"},
-	"dragon_heart": {"name": "용의 심장석", "slot": "treasure", "value": 400, "icon": "💎"},
+	"gold_coins": {"name": "금화 주머니", "slot": "treasure", "value": 25, "icon": "💰", "size": [1, 1]},
+	"silver_goblet": {"name": "은 술잔", "slot": "treasure", "value": 35, "icon": "🏆", "size": [1, 2]},
+	"ruby": {"name": "루비", "slot": "treasure", "value": 60, "icon": "🔴", "size": [1, 1]},
+	"sapphire": {"name": "사파이어", "slot": "treasure", "value": 70, "icon": "🔵", "size": [1, 1]},
+	"golden_crown": {"name": "황금 왕관", "slot": "treasure", "value": 160, "icon": "👑", "size": [2, 2]},
+	"ancient_relic": {"name": "고대 유물", "slot": "treasure", "value": 220, "icon": "🗿", "size": [2, 2]},
+	"dragon_heart": {"name": "용의 심장석", "slot": "treasure", "value": 400, "icon": "💎", "size": [2, 2]},
 }
 
 const STARTER_WEAPON := {
@@ -198,9 +330,43 @@ func base_of(item: Dictionary) -> Dictionary:
 
 
 func is_gear(item: Dictionary) -> bool:
-	return base_of(item)["slot"] in GEAR_SLOTS
+	return base_of(item)["slot"] in ["weapon", "head", "chest", "hands", "legs", "feet", "necklace", "ring"]
 
 
+# 아이템이 들어갈 수 있는 장비 칸 (반지는 두 칸)
+func gear_slots_for(item: Dictionary) -> Array:
+	var sl: String = base_of(item)["slot"]
+	if sl == "ring":
+		return ["ring1", "ring2"]
+	if sl in GEAR_SLOTS:
+		return [sl]
+	return []
+
+
+# 인벤토리 칸 크기 (회전하면 가로세로 교체)
+func item_size(item: Dictionary) -> Vector2i:
+	var sz: Array = base_of(item).get("size", [1, 1])
+	if item.get("r", false):
+		return Vector2i(sz[1], sz[0])
+	return Vector2i(sz[0], sz[1])
+
+
+func _roll_affix_key(used: Dictionary) -> String:
+	var total := 0
+	for k in AFFIXES:
+		if not used.has(k):
+			total += AFFIXES[k].w
+	var r := randi() % maxi(1, total)
+	for k in AFFIXES:
+		if used.has(k):
+			continue
+		r -= AFFIXES[k].w
+		if r < 0:
+			return k
+	return "vit"
+
+
+# 아이템 생성: 기본 수치(희귀도 배율 + 무작위 편차) + 희귀도만큼 무작위 옵션
 func make_item(base_id: String, rarity: int = 0) -> Dictionary:
 	var b: Dictionary = ITEM_BASES[base_id]
 	if b["slot"] == "consumable":
@@ -208,9 +374,9 @@ func make_item(base_id: String, rarity: int = 0) -> Dictionary:
 	var r: Dictionary = RARITIES[rarity]
 	var stats := {}
 	if b.has("dmg"):
-		stats["dmg"] = snappedf(b["dmg"] * (1.0 + (r["mult"] - 1.0) * 0.6), 0.01)
+		stats["dmg"] = snappedf(b["dmg"] * (1.0 + (r["mult"] - 1.0) * 0.6) * randf_range(0.95, 1.05), 0.01)
 	if b.has("armor"):
-		stats["armor"] = roundi(b["armor"] * r["mult"])
+		stats["armor"] = maxi(1, roundi(b["armor"] * r["mult"] * randf_range(0.85, 1.15)))
 	if b.has("hp"):
 		stats["hp"] = roundi(b["hp"] * r["mult"])
 	if b.has("mana"):
@@ -219,25 +385,22 @@ func make_item(base_id: String, rarity: int = 0) -> Dictionary:
 		stats["speed"] = snappedf(b["speed"] * r["mult"] if b["speed"] > 0 else b["speed"], 0.001)
 	if b.has("dmgBonus"):
 		stats["dmgBonus"] = snappedf(b["dmgBonus"] * r["mult"], 0.001)
-	# 희귀도 높은 장비는 추가 옵션
-	if rarity >= 2 and b["slot"] in GEAR_SLOTS:
-		for i in range(rarity - 1):
-			match randi() % 4:
-				0:
-					stats["hp"] = stats.get("hp", 0) + 5 + rarity * 4
-				1:
-					stats["dmgBonus"] = snappedf(stats.get("dmgBonus", 0.0) + 0.02 * rarity, 0.001)
-				2:
-					stats["speed"] = snappedf(stats.get("speed", 0.0) + 0.015 * rarity, 0.001)
-				3:
-					stats["armor"] = stats.get("armor", 0) + 3 * rarity
+	var affixes := []
+	if is_gear({"base": base_id}):
+		var used := {}
+		for i in rarity:
+			var k := _roll_affix_key(used)
+			used[k] = true
+			var rg := affix_range(k, rarity)
+			affixes.append({"k": k, "v": randi_range(rg.x, rg.y)})
 	var value_mult: float = (1.0 + rarity * 0.5) if b["slot"] == "treasure" else float(r["value"])
 	return {
 		"id": uid(),
 		"base": base_id,
 		"rarity": rarity,
 		"stats": stats,
-		"value": roundi(b["value"] * value_mult * randf_range(0.9, 1.1)),
+		"affixes": affixes,
+		"value": roundi(b["value"] * value_mult * randf_range(0.9, 1.1) * (1.0 + affixes.size() * 0.1)),
 	}
 
 
@@ -246,7 +409,7 @@ func stat_label(k: String, v) -> String:
 		"dmg":
 			return "무기 공격력 x%.2f" % v
 		"armor":
-			return "방어도 +%d" % v
+			return "방어도 %d" % v
 		"hp":
 			return "최대 체력 +%d" % v
 		"mana":
@@ -256,6 +419,10 @@ func stat_label(k: String, v) -> String:
 		"dmgBonus":
 			return "피해량 +%d%%" % roundi(v * 100)
 	return ""
+
+
+func affix_label(a: Dictionary) -> String:
+	return AFFIXES[a.k].fmt % a.v
 
 
 # luck 0 = 기본, 높을수록 좋은 아이템
@@ -281,7 +448,7 @@ const TREASURE_POOL := [
 func _gear_pool() -> Array:
 	var out := []
 	for k in ITEM_BASES:
-		if ITEM_BASES[k]["slot"] in GEAR_SLOTS:
+		if is_gear({"base": k}):
 			out.append(k)
 	return out
 
@@ -324,19 +491,26 @@ func class_names(classes: Array) -> String:
 
 func can_equip(item: Dictionary, cls: String) -> bool:
 	var b := base_of(item)
-	if not (b["slot"] in GEAR_SLOTS):
+	if not is_gear(item):
 		return false
 	if b["slot"] == "weapon" and not (cls in b["classes"]):
 		return false
 	return true
 
 
+# 장비의 능력치/옵션 합계 -> 능력치, 열린 패시브, 파생 스탯
 func compute_stats(cls: String, equipment: Dictionary) -> Dictionary:
 	var c: Dictionary = CLASSES[cls]
+	var attrs: Dictionary = CLASS_ATTRS[cls].duplicate()
 	var hp: float = c["hp"]
 	var armor: float = c.get("armor", 0)
 	var speed := 0.0
 	var dmg_bonus := 0.0
+	var phys := 0.0
+	var magic := 0.0
+	var cdr := 0.0
+	var regen := 0.0
+	var act := 0.0
 	var res_max: float = c["res_max"]
 	var dmg := 0.85
 	for slot in GEAR_SLOTS:
@@ -353,14 +527,86 @@ func compute_stats(cls: String, equipment: Dictionary) -> Dictionary:
 		# 마나 옵션은 마나를 쓰는 직업에만 적용
 		if c["res"] == "mana":
 			res_max += s.get("mana", 0)
+		for a in it.get("affixes", []):
+			var v: float = a["v"]
+			match a["k"]:
+				"str", "agi", "int", "wil", "vit":
+					attrs[a["k"]] += int(v)
+				"all":
+					for k in ATTRS:
+						attrs[k] += int(v)
+				"hp":
+					hp += v
+				"armor":
+					armor += v
+				"phys":
+					phys += v / 100.0
+				"magic":
+					magic += v / 100.0
+				"move":
+					speed += v / 100.0
+				"cdr":
+					cdr += v / 100.0
+				"regen":
+					regen += v / 100.0
+				"act":
+					act += v / 100.0
+	# 패시브: 능력치 조건을 채우면 열림
+	var unlocked := []
+	var flags := {}
+	for i in PASSIVES[cls].size():
+		var p: Dictionary = PASSIVES[cls][i]
+		var ok := true
+		for k in p.req:
+			if attrs[k] < p.req[k]:
+				ok = false
+		if not ok:
+			continue
+		unlocked.append(i)
+		for k in p.fx:
+			var v: float = p.fx[k]
+			match k:
+				"dmg":
+					dmg_bonus += v
+				"hp":
+					hp += v
+				"armor":
+					armor += v
+				"move":
+					speed += v
+				"cdr":
+					cdr += v
+				"regen":
+					regen += v
+				"act":
+					act += v
+				_:
+					flags[k] = flags.get(k, 0.0) + v
+	# 능력치 -> 파생 스탯 (15를 기준으로)
+	var pw: int = attrs[POWER_ATTR[cls]]
+	hp += (attrs.vit - 15) * 3.0
+	speed += (attrs.agi - 15) * 0.003
+	act += (attrs.agi - 15) * 0.005
+	cdr += maxf(0.0, attrs.wil - 15) * 0.004
+	regen += (attrs.wil - 15) * 0.02
+	if c["res"] == "mana":
+		res_max += (attrs.int - 15) * 1.5
+	var type_bonus := magic if cls in MAGIC_CLASSES else phys
 	return {
-		"max_hp": hp,
+		"max_hp": maxf(30.0, hp),
 		"armor": armor,
-		"speed_mul": maxf(0.6, 1.0 + speed),
-		"dmg_mul": dmg * (1.0 + dmg_bonus),
+		"speed_mul": clampf(1.0 + speed, 0.6, 1.5),
+		"dmg_mul": dmg * (1.0 + (pw - 15) * 0.012) * (1.0 + dmg_bonus + type_bonus),
 		"res": c["res"],
 		"res_max": res_max,
 		"base_speed": c["speed"],
+		"attrs": attrs,
+		"passives": unlocked,
+		"flags": flags,
+		"cd_mul": clampf(1.0 - cdr, 0.6, 1.0),
+		"regen_mul": maxf(0.3, 1.0 + regen),
+		"act_mul": clampf(1.0 + act, 0.7, 1.5),
+		"heal_mul": 1.0 + flags.get("heal", 0.0),
 	}
 
 

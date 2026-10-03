@@ -113,30 +113,89 @@ static func panel_box(min_size := Vector2.ZERO) -> PanelContainer:
 	return p
 
 
+static var tip_cls := "" # 툴팁에서 착용 가능 여부를 표시할 현재 직업
+
+
+static func _c(col: Color) -> String:
+	return col.to_html(false)
+
+
+# 아이템 세부 정보: 희귀도, 종류, 크기, 기본 수치(범위), 무작위 옵션(범위), 착용 직업, 가치
 static func item_tip(item: Dictionary, extra := "") -> String:
 	var b: Dictionary = Data.ITEM_BASES[item.base]
-	var r: Dictionary = Data.RARITIES[item.rarity]
-	var col: String = r.color.to_html(false)
-	var t := "[font_size=18][color=#%s]%s %s[/color][/font_size]\n" % [col, b.icon, b.name]
+	var rar := int(item.get("rarity", 0))
+	var r: Dictionary = Data.RARITIES[rar]
+	var t := "[font_size=18][color=#%s]%s %s[/color][/font_size]\n" % [_c(r.color), b.icon, b.name]
 	var kind := ""
 	match b.slot:
 		"weapon":
-			kind = "무기 · %s" % Data.class_names(b.classes)
+			kind = "무기"
 		"consumable":
 			kind = "소모품"
 		"treasure":
 			kind = "보물"
 		_:
 			kind = Data.SLOT_NAMES[b.slot]
-	t += "[color=#9a8e7a][font_size=13]%s %s[/font_size][/color]\n" % [r.name, kind]
-	for k in item.stats:
-		t += "[color=#8fd0ff]%s[/color]\n" % Data.stat_label(k, item.stats[k])
+	var sz: Array = b.get("size", [1, 1])
+	t += "[color=#9a8e7a][font_size=13]%s %s · %dx%d칸[/font_size][/color]\n" % [r.name, kind, sz[0], sz[1]]
+	var st: Dictionary = item.get("stats", {})
+	if st.size():
+		t += "[font_size=14]"
+		for k in st:
+			var line := Data.stat_label(k, st[k])
+			var rng := ""
+			if k == "armor" and b.has("armor"):
+				rng = " [color=#7a7062](%d~%d)[/color]" % [maxi(1, roundi(b.armor * r.mult * 0.85)), roundi(b.armor * r.mult * 1.15)]
+			elif k == "dmg" and b.has("dmg"):
+				var m: float = b.dmg * (1.0 + (r.mult - 1.0) * 0.6)
+				rng = " [color=#7a7062](%.2f~%.2f)[/color]" % [m * 0.95, m * 1.05]
+			t += "[color=#e6dccb]%s[/color]%s\n" % [line, rng]
+		t += "[/font_size]"
+	var affs: Array = item.get("affixes", [])
+	if affs.size():
+		t += "[font_size=14]"
+		for a in affs:
+			var rg := Data.affix_range(a.k, rar)
+			t += "[color=#8fd0ff]%s[/color] [color=#7a7062][%d~%d][/color]\n" % [Data.affix_label(a), rg.x, rg.y]
+		t += "[/font_size]"
 	if b.has("heal"):
 		t += "[color=#8fd0ff]체력 %d 회복[/color]\n" % b.heal
+	if b.slot == "weapon":
+		var ok: bool = tip_cls == "" or tip_cls in b.classes
+		t += "[font_size=12][color=#%s]착용: %s[/color][/font_size]\n" % ["9a8e7a" if ok else "e05a40", Data.class_names(b.classes)]
 	t += "[color=#d9b45a]💰 %d 골드[/color]" % item.value
 	if extra != "":
 		t += "\n[color=#9a8e7a][font_size=12]%s[/font_size][/color]" % extra
 	return t
+
+
+# 능력치 / 파생 스탯 / 패시브 (로비와 던전 인벤토리 공용)
+static func stats_text(cls: String, st: Dictionary) -> String:
+	var a: Dictionary = st.attrs
+	var base: Dictionary = Data.CLASS_ATTRS[cls]
+	var t := "[font_size=13]"
+	for k in Data.ATTRS:
+		var diff: int = a[k] - base[k]
+		var star := " ★" if Data.POWER_ATTR[cls] == k else ""
+		t += "[color=#d9b45a]%s[/color] [b]%d[/b]%s%s   " % [Data.ATTR_NAMES[k], a[k], (" [color=#8fd0ff](+%d)[/color]" % diff) if diff > 0 else "", star]
+	t += "\n[color=#9a8e7a]★ 피해량 능력치[/color]\n"
+	t += "❤ %d · 🛡 %d (-%d%%) · ⚔ x%.2f · 👟 %d%% · ⚡ 공속 %d%% · ⏳ 쿨감 %d%%" % [
+		st.max_hp, st.armor, roundi((1.0 - 100.0 / (100.0 + st.armor)) * 100.0), st.dmg_mul,
+		roundi(st.speed_mul * 100.0), roundi(st.act_mul * 100.0), roundi((1.0 - st.cd_mul) * 100.0)]
+	if st.res != "":
+		t += " · 🔷 %s %d (회복 %d%%)" % [Data.RES_NAMES[st.res], st.res_max, roundi(st.regen_mul * 100.0)]
+	t += "\n[color=#d9b45a]패시브[/color]\n"
+	var ps: Array = Data.PASSIVES[cls]
+	for i in ps.size():
+		var p: Dictionary = ps[i]
+		var req := []
+		for k in p.req:
+			req.append("%s %d" % [Data.ATTR_NAMES[k], p.req[k]])
+		if i in st.passives:
+			t += "[color=#9fe0a0]✔ %s[/color] [color=#9a8e7a]- %s[/color]\n" % [p.name, p.desc]
+		else:
+			t += "[color=#6a6258]🔒 %s - %s (필요: %s)[/color]\n" % [p.name, p.desc, ", ".join(req)]
+	return t + "[/font_size]"
 
 
 static func show_tip(text: String) -> void:

@@ -373,7 +373,8 @@ func spawn_chest(room: Dictionary, tier: int, luck: float) -> void:
 	world.add_child(node)
 	var count := 6 if tier == 2 else (randi_range(3, 4) if tier == 1 else randi_range(1, 3))
 	var nm := "황금 보물상자" if tier == 2 else ("장식된 상자" if tier == 1 else "나무 상자")
-	chests.append({"id": chests.size(), "pos": p, "rot": node.rotation.y, "node": node, "tier": tier, "room": room, "opened": false, "items": Data.roll_loot(count, luck + tier), "name": nm, "claimed_by": null, "kind": "chest"})
+	var pk := Inv.pack_container(Data.roll_loot(count, luck + tier))
+	chests.append({"id": chests.size(), "pos": p, "rot": node.rotation.y, "node": node, "tier": tier, "room": room, "opened": false, "items": pk.items, "gw": pk.gw, "gh": pk.gh, "name": nm, "claimed_by": null, "kind": "chest"})
 
 
 # ------------------------------------------------------------------ 관계/검색
@@ -1056,7 +1057,10 @@ func drop_bag(p: Vector3, items: Array, nm: String, color := Color(0.42, 0.31, 0
 	var pp := Vector3(p.x, 0, p.z)
 	bag_seq += 1
 	var b := _add_bag_node(bag_seq, pp, color, nm)
-	b["items"] = items
+	var pk := Inv.pack_container(items)
+	b["items"] = pk.items
+	b["gw"] = pk.gw
+	b["gh"] = pk.gh
 	_bc("bag_add", [bag_seq, pp, color, nm, items.size()])
 
 
@@ -1108,7 +1112,7 @@ func bot_extract(bot) -> void:
 
 # ------------------------------------------------------------------ 상자/전리품 창 (서버 측, 플레이어별)
 func cont_view(o: Dictionary) -> Dictionary:
-	return {"cid": ("c%d" if o.kind == "chest" else "b%d") % o.id, "id": o.id, "name": o.name, "items": o.items, "pos": o.pos, "kind": o.kind}
+	return {"cid": ("c%d" if o.kind == "chest" else "b%d") % o.id, "id": o.id, "name": o.name, "items": o.items, "pos": o.pos, "kind": o.kind, "gw": o.get("gw", Inv.CONT_W), "gh": o.get("gh", 8)}
 
 
 func open_container_for(p, o: Dictionary) -> void:
@@ -1160,99 +1164,99 @@ func request_inv(op: String, args: Array = []) -> void:
 		Net.send_inv(op, args)
 
 
+# 레이드 중 인벤토리 조작 (서버 권한). 저장소: bag(가방), equip(장비), cont(열린 상자/전리품)
+func _ctx_of(p) -> Dictionary:
+	var stores := {"bag": {"list": p.bag, "grid": Inv.bag_size(p.cls)}}
+	if p.container != null:
+		stores["cont"] = {"list": p.container.items, "grid": Vector2i(p.container.get("gw", Inv.CONT_W), p.container.get("gh", 8))}
+	return {"cls": p.cls, "equipment": p.equipment, "stores": stores}
+
+
 func inv_op(p, op: String, args: Array) -> void:
 	if p.done and op != "close":
 		return
+	var res := {}
 	match op:
 		"close":
 			close_container_for(p)
+			return
 		"abandon":
 			if not p.done:
 				p.hp = 0.0
 				p.alive = false
 				finish_player(p, false, "포기")
-		"unequip":
-			var slot: String = args[0]
-			if not p.equipment.has(slot) or p.equipment[slot] == null:
+			return
+		"move":
+			# [src, id, dst, x, y, r, slot]
+			if args.size() < 6:
 				return
-			if p.bag.size() >= SaveData.BAG_SIZE:
-				notify(p, "toast", ["가방이 가득 찼습니다"])
+			res = Inv.move(_ctx_of(p), str(args[0]), str(args[1]), str(args[2]), int(args[3]), int(args[4]), bool(args[5]), str(args[6]) if args.size() > 6 else "")
+		"quick":
+			if args.size() < 2:
 				return
-			p.bag.append(p.equipment[slot])
-			p.equipment[slot] = null
-			p.recalc()
-			inv_changed(p)
+			var src := str(args[0])
+			var it = Inv._peek(_ctx_of(p), src, str(args[1]))
+			if it == null:
+				return
+			# 가방의 소모품은 오른쪽 클릭으로 사용
+			if src == "bag" and Data.base_of(it).slot == "consumable":
+				_use_item(p, it)
+				return
+			var order := ["bag"] if src != "bag" else ["cont"]
+			res = Inv.quick(_ctx_of(p), src, it.id, order)
+		"transfer":
+			if args.size() < 2:
+				return
+			var src := str(args[0])
+			res = Inv.transfer(_ctx_of(p), src, str(args[1]), ["cont", "bag"] if src == "equip" else (["bag"] if src == "cont" else ["cont"]))
 		"use":
-			var i: int = args[0]
-			if i < 0 or i >= p.bag.size():
-				return
-			var it: Dictionary = p.bag[i]
-			var b := Data.base_of(it)
-			if b.slot == "consumable":
-				if p.hp >= p.max_hp:
-					notify(p, "toast", ["체력이 가득 찼습니다"])
-				elif p.alive:
-					p.use_consumable(i)
-				return
-			if Data.can_equip(it, p.cls):
-				var prev = p.equipment[b.slot]
-				p.equipment[b.slot] = it
-				p.bag.remove_at(i)
-				if prev != null:
-					p.bag.append(prev)
-				p.recalc()
-				inv_changed(p)
-			elif b.slot == "weapon":
-				notify(p, "toast", ["%s 전용 무기입니다" % Data.class_names(b.classes)])
+			var i := Inv.index_of(p.bag, str(args[0]) if args.size() else "")
+			if i >= 0:
+				_use_item(p, p.bag[i])
+			return
 		"drop":
-			var i: int = args[0]
-			if i < 0 or i >= p.bag.size():
+			# 바닥에 버리기 [src, id]
+			if args.size() < 2:
 				return
-			var it = p.bag[i]
-			p.bag.remove_at(i)
-			if p.container != null:
-				p.container.items.append(it)
-				container_changed(p.container)
-			else:
-				drop_bag(p.pos + Actor.fwd(p.yaw) * 1.2, [it], "버려진 물건")
-			inv_changed(p)
-		"take":
-			var c = p.container
-			var i: int = args[0]
-			if c == null or i < 0 or i >= c.items.size():
+			var ctx := _ctx_of(p)
+			var it = Inv._peek(ctx, str(args[0]), str(args[1]))
+			if it == null or str(args[0]) == "cont":
 				return
-			_take_item(p, c, i)
-			container_changed(c)
-			inv_changed(p)
+			Inv._take(ctx, str(args[0]), it.id)
+			drop_bag(p.pos + Actor.fwd(p.yaw) * 1.2, [it], "버려진 물건")
+			res = {"ok": true}
 		"take_all":
 			var c = p.container
 			if c == null:
 				return
-			var order := range(c.items.size())
-			order.sort_custom(func(a, b): return c.items[a].value > c.items[b].value)
-			var taken := []
-			for i in order:
-				if p.bag.size() >= SaveData.BAG_SIZE:
-					notify(p, "toast", ["가방이 가득 찼습니다"])
-					break
-				taken.append(c.items[i])
-				p.bag.append(c.items[i])
-			for it in taken:
-				c.items.erase(it)
-			if taken.size():
+			var items: Array = c.items.duplicate()
+			items.sort_custom(func(a, b): return a.value > b.value)
+			var n := 0
+			for it in items:
+				var r := Inv.move(_ctx_of(p), "cont", it.id, "bag", -1, 0, false)
+				if r.ok:
+					n += 1
+			if n < items.size():
+				notify(p, "toast", ["가방에 자리가 없습니다"])
+			if n > 0:
 				notify(p, "sfx", ["coin"])
-			container_changed(c)
-			inv_changed(p)
+			res = {"ok": n > 0}
+	if res.get("msg", "") != "":
+		notify(p, "toast", [res.msg])
+	if res.get("ok", false):
+		if op in ["move", "quick", "transfer"]:
+			notify(p, "sfx", ["pickup"])
+		p.recalc()
+		if p.container != null:
+			container_changed(p.container)
+	inv_changed(p)
 
 
-func _take_item(p, c: Dictionary, i: int) -> void:
-	if p.bag.size() >= SaveData.BAG_SIZE:
-		notify(p, "toast", ["가방이 가득 찼습니다"])
-		return
-	var it: Dictionary = c.items[i]
-	c.items.remove_at(i)
-	p.bag.append(it)
-	notify(p, "sfx", ["coin" if Data.base_of(it).slot == "treasure" else "pickup"])
+func _use_item(p, it: Dictionary) -> void:
+	if p.hp >= p.max_hp:
+		notify(p, "toast", ["체력이 가득 찼습니다"])
+	elif p.alive and p.cd.potion <= 0.0:
+		p.use_consumable(it.id)
 
 
 # ------------------------------------------------------------------ 포탈

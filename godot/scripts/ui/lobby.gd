@@ -8,9 +8,9 @@ const SHOP := Account.SHOP
 
 var tab := "stash"
 var class_box: VBoxContainer
-var equip_row: HBoxContainer
+var equip_view: EquipView
 var stats_label: RichTextLabel
-var bag_grid: GridContainer
+var bag_view: GridView
 var right_box: VBoxContainer
 var gold_label: Label
 var relief_btn: Button
@@ -106,25 +106,28 @@ func _ready() -> void:
 	var cv := VBoxContainer.new()
 	cv.add_theme_constant_override("separation", 10)
 	center.add_child(cv)
-	cv.add_child(UI.title("장비"))
-	equip_row = HBoxContainer.new()
-	equip_row.add_theme_constant_override("separation", 12)
-	var eq_margin := MarginContainer.new()
-	eq_margin.add_theme_constant_override("margin_top", 16)
-	eq_margin.add_child(equip_row)
-	cv.add_child(eq_margin)
+	cv.add_child(UI.title("장비 · 능력치"))
+	var eq_row := HBoxContainer.new()
+	eq_row.add_theme_constant_override("separation", 12)
+	equip_view = EquipView.new(34.0)
+	equip_view.on_op = _inv_op
+	eq_row.add_child(equip_view)
 	stats_label = RichTextLabel.new()
 	stats_label.bbcode_enabled = true
 	stats_label.fit_content = true
-	cv.add_child(stats_label)
+	stats_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stats_label.custom_minimum_size = Vector2(260, 0)
+	eq_row.add_child(stats_label)
+	cv.add_child(eq_row)
 	var bag_title := UI.title("가방")
-	bag_title.text = "가방 (던전에 가져갈 물건)"
+	bag_title.text = "가방 (던전에 가져갈 물건 · 직업마다 크기가 다름)"
 	cv.add_child(bag_title)
-	bag_grid = GridContainer.new()
-	bag_grid.columns = 8
-	bag_grid.add_theme_constant_override("h_separation", 5)
-	bag_grid.add_theme_constant_override("v_separation", 5)
-	cv.add_child(bag_grid)
+	bag_view = GridView.new("bag", 36.0)
+	bag_view.on_op = _inv_op
+	bag_view.allow_sell = true
+	bag_view.hint = "드래그: 이동 (R 회전) · 우클릭: 장착 · Shift+클릭: 보관함으로 · Ctrl+클릭: 판매"
+	cv.add_child(bag_view)
+	cv.add_child(UI.label("드래그로 옮기기 · 드래그 중 R 회전 · 우클릭 장착/해제 · Shift+클릭 빠른 이동 · Ctrl+클릭 판매", 12, UI.MUTED))
 	relief_btn = UI.button("🎁 구호 물자 받기 (기본 무기 + 물약)", _on_relief)
 	cv.add_child(relief_btn)
 	var sp2 := Control.new()
@@ -237,32 +240,21 @@ func refresh() -> void:
 	detail.text = t
 	class_box.add_child(detail)
 
-	# 장비
-	UI.clear(equip_row)
-	for slot in Data.GEAR_SLOTS:
-		var it = s.equipment[slot]
-		var sl: String = slot
-		equip_row.add_child(UI.slot(it, func(): _unequip(sl), Callable(), {"label": Data.SLOT_NAMES[slot], "size": 64.0, "tip": "클릭: 장착 해제"}))
+	# 장비 / 능력치 / 가방
+	UI.tip_cls = s.cls
+	equip_view.set_equipment(s.equipment, s.cls)
 	var st := Data.compute_stats(s.cls, s.equipment)
 	var risk := []
 	for sl in Data.GEAR_SLOTS:
 		if s.equipment[sl] != null:
 			risk.append(s.equipment[sl])
 	risk.append_array(s.bag)
-	var txt := "[font_size=14]❤ 체력 [b]%d[/b]\n🛡 방어도 [b]%d[/b] [color=#9a8e7a](피해 -%d%%)[/color]\n⚔ 공격력 [b]x%.2f[/b]\n👟 이동속도 [b]%d%%[/b]" % [st.max_hp, st.armor, roundi((1.0 - 100.0 / (100.0 + st.armor)) * 100.0), st.dmg_mul, roundi(st.speed_mul * 100.0)]
-	if st.res != "":
-		txt += "\n🔷 %s [b]%d[/b]" % [Data.RES_NAMES[st.res], st.res_max]
+	var txt := UI.stats_text(s.cls, st)
 	if s.equipment.weapon == null:
-		txt += "\n[color=#e0a050]⚠ 무기 없음 - 기본 무기(공격력 x0.85)로 싸웁니다[/color]"
-	txt += "\n[color=#9a8e7a][font_size=12]위험 부담 장비 가치: 💰 %d[/font_size][/color][/font_size]" % Data.items_value(risk)
+		txt += "[color=#e0a050][font_size=13]⚠ 무기 없음 - 기본 무기(공격력 x0.85)로 싸웁니다[/font_size][/color]\n"
+	txt += "[color=#9a8e7a][font_size=12]위험 부담 장비 가치: 💰 %d[/font_size][/color]" % Data.items_value(risk)
 	stats_label.text = txt
-
-	# 가방
-	UI.clear(bag_grid)
-	for i in SaveData.BAG_SIZE:
-		var it = s.bag[i] if i < s.bag.size() else null
-		var idx := i
-		bag_grid.add_child(UI.slot(it, func(): _bag_to_stash(idx), Callable(), {"tip": "클릭: 보관함으로"}))
+	bag_view.set_items(s.bag, Inv.bag_size(s.cls))
 
 	for k in tab_btns:
 		tab_btns[k].button_pressed = k == tab
@@ -403,31 +395,23 @@ func _mp_join() -> void:
 
 func _render_stash() -> void:
 	var s := save()
-	var grid := GridContainer.new()
-	grid.columns = 8
-	grid.add_theme_constant_override("h_separation", 5)
-	grid.add_theme_constant_override("v_separation", 5)
-	for i in SaveData.STASH_SIZE:
-		var it = s.stash[i] if i < s.stash.size() else null
-		var hint := ""
-		var dim := false
-		if it != null:
-			var b := Data.base_of(it)
-			if Data.can_equip(it, s.cls):
-				hint = "클릭: 장착 · 우클릭: 판매"
-			elif b.slot == "weapon":
-				hint = "다른 직업 무기 · 우클릭: 판매"
-				dim = true
-			else:
-				hint = "클릭: 가방에 넣기 · 우클릭: 판매"
-		var idx := i
-		grid.add_child(UI.slot(it, func(): _stash_click(idx), func(): _sell(idx), {"tip": hint, "dim": dim}))
-	right_box.add_child(grid)
+	var gv := GridView.new("stash", 34.0)
+	gv.on_op = _inv_op
+	gv.allow_sell = true
+	gv.hint = "드래그: 이동 (R 회전) · 우클릭: 장착 · Shift+클릭: 가방으로 · Ctrl+클릭: 판매"
+	right_box.add_child(gv)
+	gv.set_items(s.stash, Inv.STASH)
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_END
 	row.add_child(UI.button("정렬", _sort_stash, 13))
 	row.add_child(UI.button("보물 모두 판매", _sell_treasure, 13))
 	right_box.add_child(row)
+
+
+# 인벤토리 조작 (드래그/우클릭/Shift/Ctrl) -> 계정 규칙
+func _inv_op(op: String, args: Array) -> void:
+	UI.hide_tip()
+	SaveData.op(op, args)
 
 
 func _render_shop() -> void:
@@ -453,7 +437,16 @@ func _render_shop() -> void:
 		bb.disabled = s.gold < price
 		row.add_child(bb)
 		right_box.add_child(row)
-	right_box.add_child(UI.label("보관함의 아이템은 우클릭으로 판매할 수 있습니다.", 12, UI.MUTED))
+	# 판매대: 가방/보관함에서 끌어다 놓으면 판매
+	var zone := DropZone.new()
+	zone.on_op = _inv_op
+	zone.custom_minimum_size = Vector2(0, 70)
+	var zl := UI.label("💰 판매대 — 가방이나 보관함의 물건을 여기로 끌어다 놓으면 판매", 14, UI.GOLD)
+	zl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	zl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	zone.add_child(zl)
+	right_box.add_child(zone)
+	right_box.add_child(UI.label("보관함은 '보관함' 탭에서 볼 수 있습니다. Ctrl+클릭으로도 판매할 수 있습니다.", 12, UI.MUTED))
 
 
 func _render_records() -> void:
@@ -483,22 +476,6 @@ func _select_class(cid: String) -> void:
 		return
 	SaveData.op("select_class", [cid])
 	Net.update_class(cid)
-
-
-func _unequip(slot: String) -> void:
-	SaveData.op("unequip", [slot])
-
-
-func _bag_to_stash(i: int) -> void:
-	SaveData.op("bag_to_stash", [i])
-
-
-func _stash_click(i: int) -> void:
-	SaveData.op("stash_click", [i])
-
-
-func _sell(i: int) -> void:
-	SaveData.op("sell", [i])
 
 
 func _sell_treasure() -> void:

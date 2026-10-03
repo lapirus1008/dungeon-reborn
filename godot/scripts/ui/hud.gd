@@ -47,13 +47,13 @@ var minimap: MiniMap
 var bigmap: MiniMap
 var bigmap_wrap: Control
 var inv_panel: PanelContainer
-var inv_equip: HBoxContainer
-var inv_bag: GridContainer
+var inv_equip: EquipView
+var inv_bag: GridView
 var inv_title: Label
-var inv_stats: Label
+var inv_stats: RichTextLabel
 var cont_panel: PanelContainer
 var cont_title: Label
-var cont_grid: GridContainer
+var cont_grid: GridView
 var menu: Control
 var fps_label: Label
 var hurt_v := 0.0
@@ -249,46 +249,54 @@ func _bar(color: Color, sz: Vector2, transparent_bg := false) -> ProgressBar:
 
 
 func _build_inventory() -> void:
-	inv_panel = UI.panel_box(Vector2(480, 0))
+	inv_panel = UI.panel_box(Vector2(560, 0))
 	inv_panel.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
-	inv_panel.position = Vector2(-720, -230)
+	inv_panel.position = Vector2(-600, -330)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 8)
 	inv_panel.add_child(v)
 	inv_title = UI.title("소지품")
 	v.add_child(inv_title)
-	inv_equip = HBoxContainer.new()
-	inv_equip.add_theme_constant_override("separation", 10)
-	var m := MarginContainer.new()
-	m.add_theme_constant_override("margin_top", 16)
-	m.add_child(inv_equip)
-	v.add_child(m)
-	inv_stats = UI.label("", 13, UI.MUTED)
-	v.add_child(inv_stats)
-	inv_bag = GridContainer.new()
-	inv_bag.columns = 8
-	inv_bag.add_theme_constant_override("h_separation", 5)
-	inv_bag.add_theme_constant_override("v_separation", 5)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	inv_equip = EquipView.new(32.0)
+	inv_equip.on_op = _inv_op
+	inv_equip.drop_outside = true
+	row.add_child(inv_equip)
+	inv_stats = RichTextLabel.new()
+	inv_stats.bbcode_enabled = true
+	inv_stats.fit_content = true
+	inv_stats.custom_minimum_size = Vector2(320, 0)
+	inv_stats.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(inv_stats)
+	v.add_child(row)
+	inv_bag = GridView.new("bag", 36.0)
+	inv_bag.on_op = _inv_op
+	inv_bag.drop_outside = true
 	v.add_child(inv_bag)
+	v.add_child(UI.label("드래그 이동 (R 회전) · 우클릭: 장착/해제/물약 사용 · Shift+클릭: 상자↔가방 · 패널 밖에 놓기: 버리기", 12, UI.MUTED))
 	v.add_child(UI.label("Tab / Esc 닫기 · 게임은 계속 진행 중입니다", 12, UI.MUTED))
 	inv_panel.visible = false
 	root.add_child(inv_panel)
 
 
 func _build_container() -> void:
-	cont_panel = UI.panel_box(Vector2(330, 0))
+	cont_panel = UI.panel_box(Vector2(260, 0))
 	cont_panel.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	cont_panel.position = Vector2(40, -200)
+	cont_panel.position = Vector2(40, -260)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 8)
 	cont_panel.add_child(v)
 	cont_title = UI.title("")
 	v.add_child(cont_title)
-	cont_grid = GridContainer.new()
-	cont_grid.columns = 5
-	cont_grid.add_theme_constant_override("h_separation", 5)
-	cont_grid.add_theme_constant_override("v_separation", 5)
-	v.add_child(cont_grid)
+	var sc := ScrollContainer.new()
+	sc.custom_minimum_size = Vector2(Inv.CONT_W * 36 + 14, 360)
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	cont_grid = GridView.new("cont", 36.0)
+	cont_grid.on_op = _inv_op
+	cont_grid.hint = "드래그: 가방이나 장비칸으로 · 우클릭: 가져오기/장착 · Shift+클릭: 가방으로"
+	sc.add_child(cont_grid)
+	v.add_child(sc)
 	v.add_child(UI.button("모두 가져가기", _take_all))
 	v.add_child(UI.label("F / Tab 닫기", 12, UI.MUTED))
 	cont_panel.visible = false
@@ -475,60 +483,29 @@ func refresh_panels() -> void:
 
 func render_inventory() -> void:
 	var p = game.player
-	UI.clear(inv_equip)
-	for slot in Data.GEAR_SLOTS:
-		var it = p.equipment[slot]
-		var sl: String = slot
-		inv_equip.add_child(UI.slot(it, func(): _unequip(sl), Callable(), {"label": Data.SLOT_NAMES[slot], "size": 60.0, "tip": "클릭: 해제"}))
-	UI.clear(inv_bag)
-	for i in SaveData.BAG_SIZE:
-		var it = p.bag[i] if i < p.bag.size() else null
-		var idx := i
-		var hint := "클릭: 사용/장착 · 우클릭: 상자에 넣기" if container != null else "클릭: 사용/장착 · 우클릭: 버리기"
-		inv_bag.add_child(UI.slot(it, func(): _bag_click(idx), func(): _bag_drop(idx), {"tip": hint}))
+	UI.tip_cls = p.cls
+	inv_equip.set_equipment(p.equipment, p.cls)
+	inv_bag.hint = ("우클릭: 장착/사용 · Shift+클릭: 상자에 넣기" if container != null else "우클릭: 장착/사용 · 패널 밖에 놓기: 버리기") + " · R: 회전"
+	inv_bag.set_items(p.bag, Inv.bag_size(p.cls))
 	var items := []
 	for s in Data.GEAR_SLOTS:
 		if p.equipment[s] != null:
 			items.append(p.equipment[s])
 	items.append_array(p.bag)
 	inv_title.text = "소지품  (가치 💰 %d)" % Data.items_value(items)
-	var st: Dictionary = p.stats
-	inv_stats.text = "❤ %d · 🛡 %d · ⚔ x%.2f · 👟 %d%%" % [p.max_hp, st.armor, st.dmg_mul, roundi(st.speed_mul * 100.0)]
+	inv_stats.text = UI.stats_text(p.cls, p.stats)
 
 
 # 인벤토리 조작은 서버(오프라인/호스트는 로컬 Game)가 처리
-func _unequip(slot: String) -> void:
-	if game.player.equipment[slot] != null:
-		game.request_inv("unequip", [slot])
-
-
-func _bag_click(i: int) -> void:
-	if i < game.player.bag.size():
-		game.request_inv("use", [i])
-
-
-func _bag_drop(i: int) -> void:
-	if i < game.player.bag.size():
-		game.request_inv("drop", [i])
+func _inv_op(op: String, args: Array) -> void:
+	UI.hide_tip()
+	game.request_inv(op, args)
 
 
 func render_container() -> void:
 	var c: Dictionary = container
 	cont_title.text = c.name
-	UI.clear(cont_grid)
-	for i in maxi(10, c.items.size()):
-		var it = c.items[i] if i < c.items.size() else null
-		var idx := i
-		cont_grid.add_child(UI.slot(it, func(): _take(idx), Callable(), {"tip": "클릭: 가져가기"}))
-
-
-func _take(i: int) -> void:
-	if container == null or i >= container.items.size():
-		return
-	if game.player.bag.size() >= SaveData.BAG_SIZE:
-		toast("가방이 가득 찼습니다")
-		return
-	game.request_inv("take", [i])
+	cont_grid.set_items(c.items, Vector2i(int(c.get("gw", Inv.CONT_W)), int(c.get("gh", 8))))
 
 
 func _take_all() -> void:

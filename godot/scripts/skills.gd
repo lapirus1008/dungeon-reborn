@@ -76,7 +76,7 @@ static func gain(c, amount: float) -> void:
 static func tick_resource(c, dt: float) -> void:
 	match c.res_type():
 		"mana":
-			c.res = minf(c.res_max(), c.res + dt * 7.0)
+			c.res = minf(c.res_max(), c.res + dt * 7.0 * c.stats.get("regen_mul", 1.0))
 		"primal":
 			if c.panther:
 				c.res -= dt * 4.0
@@ -84,7 +84,7 @@ static func tick_resource(c, dt: float) -> void:
 					c.res = 0.0
 					set_panther(c, false)
 			else:
-				c.res = minf(c.res_max(), c.res + dt * 5.0)
+				c.res = minf(c.res_max(), c.res + dt * 5.0 * c.stats.get("regen_mul", 1.0))
 
 
 # ------------------------------------------------------------------ 근접
@@ -111,7 +111,9 @@ static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 		if c.cls == "rogue":
 			var facing_away := absf(angle_difference(a.yaw, Actor.yaw_to(-dx, -dz))) > 2.0
 			if facing_away:
-				dmg *= 1.6
+				dmg *= 1.6 + c.stats.get("flags", {}).get("backstab", 0.0)
+		if c.panther:
+			dmg *= 1.0 + c.stats.get("flags", {}).get("beast", 0.0)
 		var nd := maxf(d, 0.001)
 		var k: float = prof.knock
 		total += a.take_damage(dmg, c, {"knock": Vector3(dx / nd * k, 0, dz / nd * k), "from": c.pos, "crit": stealth_bonus > 1.0})
@@ -119,7 +121,7 @@ static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 	if hits:
 		g.sfx("hit", c.pos)
 		if c.cls == "deathknight":
-			c.heal_now(total * 0.1)
+			c.heal_now(total * (0.1 + c.stats.get("flags", {}).get("lifesteal", 0.0)))
 			gain(c, 8.0 * hits)
 		if c.cls == "rogue" and c.stealth > 0.0:
 			c.break_stealth()
@@ -133,7 +135,7 @@ static func fire_basic(c, aim: Dictionary) -> bool:
 		return false
 	if not pay(c, prof.cost):
 		return false
-	c.cd.lmb = prof.cd
+	c.cd.lmb = prof.cd / c.stats.get("act_mul", 1.0)
 	var extra := {}
 	if prof.has("homing"):
 		extra["homing"] = prof.homing
@@ -146,7 +148,7 @@ static func fire_basic(c, aim: Dictionary) -> bool:
 static func throw_knife(c, aim: Dictionary) -> bool:
 	if c.cd.rmb > 0.0:
 		return false
-	c.cd.rmb = skill_def(c, "rmb").cd
+	c.cd.rmb = skill_def(c, "rmb").cd * c.stats.get("cd_mul", 1.0)
 	c.game.spawn_projectile(c, "knife", aim.origin, aim.dir, 45.0, 14.0 * c.dmg_mul(), {})
 	return true
 
@@ -154,7 +156,7 @@ static func throw_knife(c, aim: Dictionary) -> bool:
 static func start_parry(c) -> bool:
 	if c.cd.rmb > 0.0:
 		return false
-	c.cd.rmb = skill_def(c, "rmb").cd
+	c.cd.rmb = skill_def(c, "rmb").cd * c.stats.get("cd_mul", 1.0)
 	c.parry = 0.35
 	return true
 
@@ -162,7 +164,7 @@ static func start_parry(c) -> bool:
 static func roar(c) -> bool:
 	if c.cd.rmb > 0.0:
 		return false
-	c.cd.rmb = skill_def(c, "rmb").cd
+	c.cd.rmb = skill_def(c, "rmb").cd * c.stats.get("cd_mul", 1.0)
 	var g = c.game
 	for a in g.actors:
 		if a.alive and g.hostile(c, a) and a.pos.distance_to(c.pos) < 4.5:
@@ -179,9 +181,9 @@ static func cleanse_heal(c, charge: float) -> bool:
 		return false
 	if not pay(c, 15.0):
 		return false
-	c.cd.rmb = skill_def(c, "rmb").cd
+	c.cd.rmb = skill_def(c, "rmb").cd * c.stats.get("cd_mul", 1.0)
 	c.cleanse()
-	c.apply_heal(lerpf(10.0, 30.0, clampf(charge, 0.0, 1.0)), 0.6)
+	c.apply_heal(lerpf(10.0, 30.0, clampf(charge, 0.0, 1.0)) * c.stats.get("heal_mul", 1.0), 0.6)
 	c.game.sfx("heal", c.pos)
 	c.game.spawn_ring_burst(c.pos + Vector3(0, 0.2, 0), GOLD, 1.6)
 	return true
@@ -210,7 +212,7 @@ static func use_q(c, aim: Dictionary) -> bool:
 		"priest":
 			ok = _divine_guidance(c)
 	if ok:
-		c.cd.q = skill_def(c, "q").cd
+		c.cd.q = skill_def(c, "q").cd * c.stats.get("cd_mul", 1.0)
 	return ok
 
 
@@ -236,7 +238,7 @@ static func use_e(c, aim: Dictionary) -> bool:
 		"priest":
 			ok = _guard(c)
 	if ok:
-		c.cd.e = skill_def(c, "e").cd
+		c.cd.e = skill_def(c, "e").cd * c.stats.get("cd_mul", 1.0)
 	return ok
 
 
@@ -303,7 +305,7 @@ static func _whirling_blade(c) -> bool:
 static func _poison(c, aim: Dictionary) -> bool:
 	var dir: Vector3 = aim.dir
 	dir.y += 0.12
-	c.game.spawn_projectile(c, "poison", aim.origin, dir.normalized(), 24.0, 8.0 * c.dmg_mul(), {"gravity": 9.0, "aoe": 2.8, "root": 2.0, "dot": 5.0})
+	c.game.spawn_projectile(c, "poison", aim.origin, dir.normalized(), 24.0, 8.0 * c.dmg_mul(), {"gravity": 9.0, "aoe": 2.8, "root": 2.0, "dot": 5.0 * (1.0 + c.stats.get("flags", {}).get("poison", 0.0))})
 	return true
 
 
@@ -443,7 +445,7 @@ static func _divine_guidance(c) -> bool:
 		if a == c or a.faction == c.faction:
 			a.cleanse()
 			a.immune = 2.0
-			a.apply_heal(25.0, 0.8)
+			a.apply_heal(25.0 * c.stats.get("heal_mul", 1.0), 0.8)
 		elif g.hostile(c, a) and g.dungeon.los(c.pos.x, c.pos.z, a.pos.x, a.pos.z):
 			a.take_damage(20.0 * c.dmg_mul(), c, {"from": c.pos})
 	g.spawn_ring_burst(c.pos + Vector3(0, 0.2, 0), GOLD, 6.0)

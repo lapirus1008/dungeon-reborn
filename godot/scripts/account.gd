@@ -14,35 +14,73 @@ const SHOP := [
 ]
 
 
+static func empty_equipment() -> Dictionary:
+	var e := {}
+	for k in Data.GEAR_SLOTS:
+		e[k] = null
+	return e
+
+
 static func fresh() -> Dictionary:
-	return {
+	var eq := empty_equipment()
+	eq.weapon = Data.make_item("rusty_sword")
+	eq.chest = Data.make_item("padded_tunic")
+	eq.feet = Data.make_item("leather_boots")
+	var d := {
 		"cls": "fighter",
 		"gold": 150,
-		"equipment": {"weapon": Data.make_item("rusty_sword"), "head": null, "chest": Data.make_item("padded_tunic"), "trinket": null},
-		"bag": [Data.make_item("health_potion"), Data.make_item("health_potion")],
-		"stash": [Data.make_item("rusty_dagger"), Data.make_item("oak_staff"), Data.make_item("iron_mace"), Data.make_item("leather_cap"), Data.make_item("bandage"), Data.make_item("bandage")],
+		"equipment": eq,
+		"bag": [],
+		"stash": [],
 		"stats": {"raids": 0, "extracts": 0, "deaths": 0, "kills": 0, "pvp_kills": 0, "best_haul": 0},
 		"settings": {"sensitivity": 1.0, "quality": "mid"},
 	}
+	for b in ["health_potion", "health_potion"]:
+		Inv.add_auto(d.bag, Inv.bag_size(d.cls), Data.make_item(b))
+	for b in ["rusty_dagger", "oak_staff", "iron_mace", "leather_cap", "leather_gloves", "cloth_pants", "bandage", "bandage"]:
+		Inv.add_auto(d.stash, Inv.STASH, Data.make_item(b))
+	return d
 
 
-# 저장 파일/DB에서 읽은 데이터를 현재 버전 형식으로 정리 (빠진 키 채우기, 옛 아이템 변환)
+# 예전 아이템 정리: 장신구(trinket) 칸 -> 반지/목걸이, 옵션 배열
+const LEGACY_SLOT_ITEM := {"copper_ring": "ring1", "ruby_ring": "ring1", "wolf_pendant": "necklace", "skull_amulet": "necklace"}
+
+
+# 저장 파일/DB에서 읽은 데이터를 현재 버전 형식으로 정리 (빠진 키 채우기, 옛 아이템 변환, 격자 위치)
 static func normalize(parsed) -> Dictionary:
 	var f := fresh()
 	if parsed is Dictionary:
 		for k in f:
 			if parsed.has(k):
-				if f[k] is Dictionary and parsed[k] is Dictionary:
+				if k == "equipment" and parsed[k] is Dictionary:
+					f[k] = empty_equipment()
+					for sl in parsed[k]:
+						var it = parsed[k][sl]
+						if it == null:
+							continue
+						if sl == "trinket":
+							sl = LEGACY_SLOT_ITEM.get(it.get("base", ""), "ring1")
+						if f[k].has(sl):
+							f[k][sl] = it
+				elif f[k] is Dictionary and parsed[k] is Dictionary:
 					f[k].merge(parsed[k], true)
 				else:
 					f[k] = parsed[k]
 	f["gold"] = int(f["gold"])
 	for k in f["stats"]:
 		f["stats"][k] = int(f["stats"][k])
-	# JSON은 정수를 float로 읽으므로 희귀도를 정수로 정리
+	# JSON은 정수를 float로 읽으므로 정리
 	for it in all_items(f):
-		it["rarity"] = int(it["rarity"])
-		it["value"] = int(it["value"])
+		it["rarity"] = int(it.get("rarity", 0))
+		it["value"] = int(it.get("value", 1))
+		if not it.has("affixes"):
+			it["affixes"] = []
+		for a in it.affixes:
+			a["v"] = int(a["v"])
+		if it.has("x"):
+			it["x"] = int(it["x"])
+			it["y"] = int(it["y"])
+			it["r"] = bool(it.get("r", false))
 		# 이전 버전 아이템(활 등)을 새 무기로 변환
 		if Data.LEGACY_ITEM.has(it["base"]):
 			it["base"] = Data.LEGACY_ITEM[it["base"]]
@@ -53,8 +91,10 @@ static func normalize(parsed) -> Dictionary:
 	# 알 수 없는 아이템 제거
 	for s in f["equipment"]:
 		var e = f["equipment"][s]
-		if e != null and not Data.ITEM_BASES.has(e["base"]):
+		if e != null and (not Data.ITEM_BASES.has(e["base"]) or not (s in Data.gear_slots_for(e))):
 			f["equipment"][s] = null
+			if Data.ITEM_BASES.has(e["base"]):
+				f["stash"].append(e)
 	f["stash"] = f["stash"].filter(func(it): return Data.ITEM_BASES.has(it["base"]))
 	f["bag"] = f["bag"].filter(func(it): return Data.ITEM_BASES.has(it["base"]))
 	# 현재 직업이 쓸 수 없는 무기를 들고 있으면 보관함으로
@@ -62,7 +102,43 @@ static func normalize(parsed) -> Dictionary:
 	if w != null and not Data.can_equip(w, f["cls"]):
 		f["stash"].append(w)
 		f["equipment"]["weapon"] = null
+	_fix_grid(f)
 	return f
+
+
+# 위치가 없거나 겹치는 아이템을 다시 배치 (가방 -> 보관함 -> 판매)
+static func _fix_grid(f: Dictionary) -> void:
+	var sold := 0
+	var over := _fix_store(f.bag, Inv.bag_size(f.cls))
+	for it in over:
+		f.stash.append(it)
+	for it in _fix_store(f.stash, Inv.STASH):
+		f.gold += int(it.value)
+		sold += 1
+
+
+static func _fix_store(list: Array, grid: Vector2i) -> Array:
+	var ok := []
+	var loose := []
+	for it in list:
+		if it.has("x") and Inv.fits(ok, grid, it, int(it.x), int(it.y), bool(it.get("r", false))):
+			ok.append(it)
+		else:
+			loose.append(it)
+	list.clear()
+	list.append_array(ok)
+	var over := []
+	for it in loose:
+		if not Inv.add_auto(list, grid, it):
+			over.append(it)
+	return over
+
+
+static func ctx_of(s: Dictionary) -> Dictionary:
+	return {"cls": s.cls, "equipment": s.equipment, "stores": {
+		"bag": {"list": s.bag, "grid": Inv.bag_size(s.cls)},
+		"stash": {"list": s.stash, "grid": Inv.STASH},
+	}}
 
 
 static func all_items(d: Dictionary) -> Array:
@@ -88,7 +164,7 @@ static func _r(ok: bool, msg := "", sfx := "") -> Dictionary:
 	return {"ok": ok, "msg": msg, "sfx": sfx}
 
 
-# 로비 조작. 결과 {ok, msg(토스트), sfx}. 인덱스 등은 서버에서 그대로 검증되도록 모두 범위 확인
+# 로비 조작. 결과 {ok, msg(토스트), sfx}. 인덱스/아이디는 서버에서 그대로 검증되도록 모두 확인
 static func apply(s: Dictionary, op: String, args: Array) -> Dictionary:
 	match op:
 		"select_class":
@@ -99,8 +175,9 @@ static func apply(s: Dictionary, op: String, args: Array) -> Dictionary:
 			var msg := ""
 			var w = s.equipment.weapon
 			if w != null and not Data.can_equip(w, cid):
-				s.stash.append(w)
 				s.equipment.weapon = null
+				if not Inv.add_auto(s.stash, Inv.STASH, w):
+					s.gold += int(w.value)
 				msg = "무기가 보관함으로 이동했습니다"
 			# 보관함에 맞는 무기가 있고 무기 칸이 비었으면 자동 장착
 			if s.equipment.weapon == null:
@@ -109,51 +186,43 @@ static func apply(s: Dictionary, op: String, args: Array) -> Dictionary:
 						s.equipment.weapon = s.stash[i]
 						s.stash.remove_at(i)
 						break
+			# 직업마다 가방 크기가 달라서 다시 배치 (넘치면 보관함)
+			for it in Inv.repack(s.bag, Inv.bag_size(cid)):
+				if Inv.add_auto(s.stash, Inv.STASH, it):
+					msg = "가방에 안 들어가는 물건은 보관함으로 옮겼습니다"
+				else:
+					s.gold += int(it.value)
 			return _r(true, msg, "ui")
-		"unequip":
-			var slot := str(args[0]) if args.size() else ""
-			if not s.equipment.has(slot) or s.equipment[slot] == null:
+		"move":
+			# [src, id, dst, x, y, r, slot]
+			if args.size() < 6:
 				return _r(false)
-			if s.stash.size() >= STASH_SIZE:
-				return _r(false, "보관함이 가득 찼습니다")
-			s.stash.append(s.equipment[slot])
-			s.equipment[slot] = null
-			return _r(true)
-		"bag_to_stash":
-			var i := _idx(args)
-			if i < 0 or i >= s.bag.size():
+			var r := Inv.move(ctx_of(s), str(args[0]), str(args[1]), str(args[2]), int(args[3]), int(args[4]), bool(args[5]), str(args[6]) if args.size() > 6 else "")
+			return _r(r.ok, r.get("msg", ""), "ui" if r.ok else "")
+		"quick":
+			if args.size() < 2:
 				return _r(false)
-			if s.stash.size() >= STASH_SIZE:
-				return _r(false, "보관함이 가득 찼습니다")
-			s.stash.append(s.bag[i])
-			s.bag.remove_at(i)
-			return _r(true)
-		"stash_click":
-			var i := _idx(args)
-			if i < 0 or i >= s.stash.size():
+			var src := str(args[0])
+			var r := Inv.quick(ctx_of(s), src, str(args[1]), ["bag", "stash"] if src != "bag" else ["stash"])
+			return _r(r.ok, r.get("msg", ""), "ui" if r.ok else "")
+		"transfer":
+			if args.size() < 2:
 				return _r(false)
-			var it: Dictionary = s.stash[i]
-			var b := Data.base_of(it)
-			if Data.can_equip(it, s.cls):
-				var prev = s.equipment[b.slot]
-				s.equipment[b.slot] = it
-				s.stash.remove_at(i)
-				if prev != null:
-					s.stash.append(prev)
-				return _r(true)
-			if b.slot == "weapon":
-				return _r(false, "%s 전용 무기입니다" % Data.class_names(b.classes))
-			if s.bag.size() >= BAG_SIZE:
-				return _r(false, "가방이 가득 찼습니다")
-			s.stash.remove_at(i)
-			s.bag.append(it)
-			return _r(true)
+			var src := str(args[0])
+			var r := Inv.transfer(ctx_of(s), src, str(args[1]), ["stash", "bag"] if src != "stash" else ["bag"])
+			return _r(r.ok, r.get("msg", ""), "ui" if r.ok else "")
 		"sell":
-			var i := _idx(args)
-			if i < 0 or i >= s.stash.size():
+			if args.size() < 2:
 				return _r(false)
-			var it: Dictionary = s.stash[i]
-			s.stash.remove_at(i)
+			var src := str(args[0])
+			if src != "stash" and src != "bag":
+				return _r(false)
+			var list: Array = s[src]
+			var i := Inv.index_of(list, str(args[1]))
+			if i < 0:
+				return _r(false)
+			var it: Dictionary = list[i]
+			list.remove_at(i)
 			s.gold += int(it.value)
 			return _r(true, "%s 판매: +%dg" % [Data.base_of(it).name, it.value], "coin")
 		"sell_treasure":
@@ -170,34 +239,27 @@ static func apply(s: Dictionary, op: String, args: Array) -> Dictionary:
 			s.gold += sum
 			return _r(true, "보물 판매: +%dg" % sum, "coin")
 		"sort_stash":
-			var order := {"weapon": 0, "head": 1, "chest": 2, "trinket": 3, "consumable": 4, "treasure": 5}
-			s.stash.sort_custom(func(a, b):
-				var oa: int = order[Data.base_of(a).slot]
-				var ob: int = order[Data.base_of(b).slot]
-				if oa != ob:
-					return oa < ob
-				if a.rarity != b.rarity:
-					return a.rarity > b.rarity
-				return a.value > b.value)
+			for it in Inv.repack(s.stash, Inv.STASH):
+				s.gold += int(it.value)
 			return _r(true)
 		"buy":
 			var base := str(args[0]) if args.size() else ""
 			var price := shop_price(base)
 			if price < 0 or not Data.ITEM_BASES.has(base) or s.gold < price:
 				return _r(false)
-			if s.stash.size() >= STASH_SIZE:
+			var it := Data.make_item(base, 0)
+			if not Inv.add_auto(s.stash, Inv.STASH, it):
 				return _r(false, "보관함이 가득 찼습니다")
 			s.gold -= price
-			s.stash.append(Data.make_item(base, 0))
 			return _r(true, "%s 구매" % Data.ITEM_BASES[base].name, "coin")
 		"relief":
 			if not needs_relief(s):
 				return _r(false)
-			s.stash.append(Data.make_item(Data.STARTER_WEAPON[s.cls]))
-			s.stash.append(Data.make_item("health_potion"))
+			Inv.add_auto(s.stash, Inv.STASH, Data.make_item(Data.STARTER_WEAPON[s.cls]))
+			Inv.add_auto(s.stash, Inv.STASH, Data.make_item("health_potion"))
 			return _r(true, "구호 물자를 받았습니다")
 		"reset":
-			var keep_settings: Dictionary = s.settings
+			var keep_settings = s.get("settings", {})
 			var f := fresh()
 			s.clear()
 			s.merge(f)
@@ -225,7 +287,7 @@ static func needs_relief(s: Dictionary) -> bool:
 # 입장 시 소지품은 위험에 노출됨 (탈출해야 돌아옴)
 static func take_loadout(s: Dictionary) -> Dictionary:
 	var lo := {"cls": s.cls, "equipment": s.equipment.duplicate(), "bag": s.bag.duplicate()}
-	s.equipment = {"weapon": null, "head": null, "chest": null, "trinket": null}
+	s.equipment = empty_equipment()
 	s.bag = []
 	s.stats.raids += 1
 	return lo
@@ -235,11 +297,13 @@ static func take_loadout(s: Dictionary) -> Dictionary:
 static func restore_loadout(s: Dictionary, lo: Dictionary) -> void:
 	for k in lo.equipment:
 		if lo.equipment[k] != null:
-			if s.equipment[k] == null:
+			if s.equipment.get(k) == null:
 				s.equipment[k] = lo.equipment[k]
-			else:
-				s.stash.append(lo.equipment[k])
-	s.bag.append_array(lo.bag)
+			elif not Inv.add_auto(s.stash, Inv.STASH, lo.equipment[k]):
+				s.gold += int(lo.equipment[k].value)
+	for it in lo.bag:
+		if not Inv.add_auto(s.bag, Inv.bag_size(s.cls), it) and not Inv.add_auto(s.stash, Inv.STASH, it):
+			s.gold += int(it.value)
 	s.stats.raids = maxi(0, s.stats.raids - 1)
 
 
@@ -252,12 +316,18 @@ static func apply_result(s: Dictionary, r: Dictionary) -> String:
 		return ""
 	s.stats.extracts += 1
 	s.stats.best_haul = maxi(int(s.stats.best_haul), int(r.value))
-	s.equipment = r.equipment.duplicate()
+	s.equipment = empty_equipment()
+	for k in r.equipment:
+		if s.equipment.has(k):
+			s.equipment[k] = r.equipment[k]
+	# 가방은 들고 나온 배치 그대로, 들어가지 않으면 보관함, 그래도 안 되면 판매
 	var sold := 0
+	s.bag = []
 	for it in r.bag:
-		if s.stash.size() < STASH_SIZE:
-			s.stash.append(it)
-		else:
+		var ok = it.has("x") and Inv.fits(s.bag, Inv.bag_size(s.cls), it, int(it.x), int(it.y), bool(it.get("r", false)))
+		if ok:
+			s.bag.append(it)
+		elif not Inv.add_auto(s.stash, Inv.STASH, it):
 			s.gold += int(it.value)
 			sold += int(it.value)
 	if sold > 0:

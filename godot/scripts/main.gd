@@ -48,6 +48,11 @@ func _ready() -> void:
 	UI.tooltip.add_child(UI.tooltip_label)
 	UI.tooltip.visible = false
 	overlay.add_child(UI.tooltip)
+	# 인벤토리 드래그 (툴팁 아래, 모든 화면 위)
+	var drag := InvDrag.new()
+	drag.theme = UI.theme
+	overlay.add_child(drag)
+	overlay.move_child(drag, overlay.get_child_count() - 2)
 	Net.prepare_received.connect(_on_net_prepare)
 	Net.begin_received.connect(_on_net_begin)
 	Net.server_begin.connect(_on_server_begin)
@@ -61,6 +66,12 @@ func _ready() -> void:
 	open_lobby()
 	if args.has("--mptest"):
 		_mptest.call_deferred(args[args.find("--mptest") + 1])
+	elif args.has("--invshots"):
+		_invshots.call_deferred(args[args.find("--invshots") + 1])
+	elif args.has("--invtest"):
+		for l in _inv_checks():
+			print("[invtest] ", l)
+		get_tree().quit()
 	elif args.has("--autotest"):
 		_autotest.call_deferred()
 	elif args.has("--screenshots"):
@@ -566,6 +577,7 @@ func _autotest() -> void:
 		if not Data.ITEM_BASES.has(Data.STARTER_WEAPON[c]):
 			missing.append(Data.STARTER_WEAPON[c])
 	out.append("데이터 검사: 없는 아이템 %s" % (str(missing) if missing.size() else "없음"))
+	out.append_array(_inv_checks())
 	for cls in Data.CLASS_ORDER:
 		SaveData.data.cls = cls
 		SaveData.data.equipment.weapon = Data.make_item(Data.STARTER_WEAPON[cls])
@@ -703,7 +715,8 @@ func _mptest(role: String) -> void:
 	print("[mptest] 역할: ", role)
 	SaveData.data.cls = "fighter" if role == "host" else "pyromancer"
 	SaveData.data.equipment.weapon = Data.make_item(Data.STARTER_WEAPON[SaveData.data.cls])
-	SaveData.data.bag = [Data.make_item("health_potion")]
+	SaveData.data.bag = []
+	Inv.add_auto(SaveData.data.bag, Inv.bag_size(SaveData.data.cls), Data.make_item("health_potion"))
 	if role == "host":
 		await _mptest_host(port)
 	elif role == "account":
@@ -937,3 +950,117 @@ func _mptest_account(port: int) -> void:
 	print("[mptest] 재로그인 %s: 사망 %d, 입장 %d, 무기 %s, 골드 %d" % [ok, SaveData.data.stats.deaths, SaveData.data.stats.raids, SaveData.data.equipment.weapon, SaveData.data.gold])
 	Net.leave()
 	await _wait(0.5)
+
+
+# 격자 인벤토리 규칙 검사
+func _inv_checks() -> Array:
+	var out := []
+	var d := Account.fresh()
+	d.bag.clear()
+	var ok := func(name: String, cond: bool) -> void:
+		out.append("인벤토리 %s: %s" % [name, "O" if cond else "X 실패"])
+	# 상의(2x3) 놓기 / 겹침 거부 / 회전
+	var chest := Data.make_item("chain_mail", 2)
+	Inv.add_auto(d.stash, Inv.STASH, chest)
+	var helm := Data.make_item("iron_helm", 1)
+	Inv.add_auto(d.stash, Inv.STASH, helm)
+	var r1 := Account.apply(d, "move", ["stash", chest.id, "bag", 0, 0, false])
+	var r2 := Account.apply(d, "move", ["stash", helm.id, "bag", 1, 1, false])
+	ok.call("6칸 상의 가방 배치 / 겹치면 거부", r1.ok and not r2.ok)
+	var r3 := Account.apply(d, "move", ["stash", helm.id, "bag", 2, 0, false])
+	var spear := Data.make_item("training_longsword")
+	Inv.add_auto(d.stash, Inv.STASH, spear)
+	var r4 := Account.apply(d, "move", ["stash", spear.id, "bag", 4, 0, true]) # 1x4 를 눕혀서 4x1
+	ok.call("4칸 투구 배치 + 회전(1x4→4x1)", r3.ok and r4.ok and Data.item_size(spear) == Vector2i(4, 1))
+	# 우클릭 장착: 기존 상의(누빔 튜닉)는 가방으로
+	var r5 := Account.apply(d, "quick", ["bag", chest.id])
+	var tunic_in_bag = d.bag.any(func(it): return it.base == "padded_tunic")
+	ok.call("우클릭 장착/교체", r5.ok and d.equipment.chest.id == chest.id and tunic_in_bag)
+	# 반지 두 칸
+	var ring_a := Data.make_item("copper_ring", 1)
+	var ring_b := Data.make_item("ruby_ring", 1)
+	Inv.add_auto(d.bag, Inv.bag_size(d.cls), ring_a)
+	Inv.add_auto(d.bag, Inv.bag_size(d.cls), ring_b)
+	Account.apply(d, "quick", ["bag", ring_a.id])
+	Account.apply(d, "quick", ["bag", ring_b.id])
+	ok.call("반지 2칸", d.equipment.ring1 != null and d.equipment.ring2 != null)
+	# 다른 직업 무기 장착 거부
+	var staff := Data.make_item("oak_staff")
+	Inv.add_auto(d.bag, Inv.bag_size(d.cls), staff)
+	var r6 := Account.apply(d, "move", ["bag", staff.id, "equip", -1, -1, false, "weapon"])
+	ok.call("직업 무기 제한", not r6.ok)
+	# 판매
+	var g0: int = d.gold
+	var r7 := Account.apply(d, "sell", ["bag", staff.id])
+	ok.call("판매", r7.ok and d.gold > g0 and Inv.index_of(d.bag, staff.id) < 0)
+	# 능력치/패시브: 옵션으로 능력치가 오르면 패시브가 열림
+	var st0 := Data.compute_stats("fighter", d.equipment)
+	var amulet := Data.make_item("bone_necklace", 4)
+	amulet.affixes = [{"k": "str", "v": 6}]
+	d.equipment.necklace = amulet
+	var st1 := Data.compute_stats("fighter", d.equipment)
+	ok.call("능력치 옵션 → 패시브 해금 (%s → %s)" % [st0.passives, st1.passives], st1.attrs.str == st0.attrs.str + 6 and st1.passives.size() > st0.passives.size())
+	# 직업 변경: 가방 크기가 달라지면 재배치
+	Account.apply(d, "select_class", ["pyromancer"])
+	var fits_all := true
+	for it in d.bag:
+		if not Inv.fits(d.bag, Inv.bag_size("pyromancer"), it, it.x, it.y, it.r):
+			fits_all = false
+	ok.call("직업 변경 후 가방(8x5) 재배치", fits_all)
+	# 예전 세이브 변환 (장신구 칸, 위치 없는 아이템)
+	var old := {"cls": "fighter", "gold": 10, "equipment": {"weapon": Data.make_item("rusty_sword"), "head": null, "chest": null, "trinket": Data.make_item("wolf_pendant")},
+		"bag": [Data.make_item("health_potion"), Data.make_item("health_potion")], "stash": [Data.make_item("plate_armor"), Data.make_item("golden_crown")]}
+	for it in old.bag + old.stash:
+		it.erase("affixes")
+	var n := Account.normalize(old)
+	ok.call("예전 세이브 변환", n.equipment.necklace != null and n.bag.size() == 2 and n.bag.all(func(it): return it.has("x")) and n.stash.size() == 2)
+	# 상자 격자
+	var pk := Inv.pack_container(Data.roll_loot(8, 3.0))
+	ok.call("상자 자동 배치 (%dx%d)" % [pk.gw, pk.gh], pk.items.size() == 8)
+	return out
+
+
+# 인벤토리 화면 스크린샷 (godot -- --invshots <폴더>)
+func _invshots(dir: String) -> void:
+	await _wait(0.5)
+	var d: Dictionary = SaveData.data
+	# 보여 주기용 아이템
+	for b in [["plate_armor", 3], ["katana", 4], ["iron_helm", 2], ["ruby_ring", 4], ["golden_crown", 1], ["chain_gauntlets", 1], ["plate_greaves", 2]]:
+		Inv.add_auto(d.stash, Inv.STASH, Data.make_item(b[0], b[1]))
+	lobby.tab = "stash"
+	lobby.refresh()
+	await _wait(0.3)
+	await _shot(dir, "inv_1_lobby")
+	# 전설 무기 툴팁
+	var leg = null
+	for it in d.stash:
+		if it.base == "katana":
+			leg = it
+	UI.show_tip(UI.item_tip(leg, "드래그: 이동 (R 회전) · 우클릭: 장착"))
+	UI.tooltip.position = Vector2(820, 160)
+	await _wait(0.2)
+	await _shot(dir, "inv_2_tooltip")
+	UI.hide_tip()
+	# 드래그 중 (가방 위에서 미리 보기)
+	var plate = null
+	for it in d.stash:
+		if it.base == "plate_armor":
+			plate = it
+	InvDrag.begin(plate, "stash", null, Vector2(0.5, 0.5), 34.0)
+	Input.warp_mouse(lobby.bag_view.global_position + Vector2(150, 40))
+	await _wait(0.3)
+	await _shot(dir, "inv_3_drag")
+	InvDrag.inst.cancel()
+	# 던전: 인벤토리 + 상자
+	start_raid()
+	game.force_act = true
+	await _wait(1.0)
+	var c = game.chests[0]
+	game.player.invuln = 999.0
+	game.player.pos = game.dungeon.resolve_circle(c.pos + Vector3(1.2, 0, 0), game.player.radius)
+	game.player.yaw = Actor.yaw_to(c.pos.x - game.player.pos.x, c.pos.z - game.player.pos.z)
+	game.open_chest(c, game.player)
+	game.open_container_for(game.player, c)
+	await _wait(0.4)
+	await _shot(dir, "inv_4_raid")
+	get_tree().quit()
