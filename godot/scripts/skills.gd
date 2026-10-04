@@ -797,11 +797,24 @@ static func _blades(c, aim: Dictionary) -> bool:
 
 
 static func _stealth(c, prep: float, kind: String) -> bool:
+	if c.channel_t > 0.0 or c.channel_ready:
+		return false
 	c.channel_t = prep
+	c.channel_max = prep
 	c.channel_kind = kind
+	c.channel_ready = false
+	c.channel_slot = "q" if skill_id(c, "q") in ["rogue_stealth", "rogue_shadow_veil"] else "e"
 	c.break_stealth()
-	c.game.notify(c, "toast", ["은신 준비 중... (피격 시 취소)" if kind == "stealth" else "어둠의 장막 준비 중..."])
+	# 재사용 대기는 실제로 은신했을 때 (우클릭 취소 = 미사용)
+	c.set_meta("custom_cd", 0.0)
 	return true
+
+
+# 은신 집중 취소 (우클릭): 재사용 대기 없이 원래 상태로
+static func cancel_channel(c) -> void:
+	c.channel_t = 0.0
+	c.channel_ready = false
+	c.game.notify(c, "toast", ["은신 취소"])
 
 
 static func _quick_conceal(c) -> bool:
@@ -816,23 +829,46 @@ static func enter_stealth(c, t: float) -> void:
 	c.game.sfx("magic", c.pos, 0.0)
 
 
-# 은신 준비 진행 (매 프레임)
+# 은신 집중 진행 (매 프레임): 3초 동안 느리게 집중 → 준비 완료 상태 유지 → 좌클릭으로 은신
 static func tick_channel(c, dt: float) -> void:
+	if c.channel_ready:
+		if c.incapacitated():
+			cancel_channel(c)
+			return
+		if c is Player: c.game.channel_for(c, ("은신" if c.channel_kind == "stealth" else "어둠의 장막") + " 준비 완료 — 좌클릭: 사용 · 우클릭: 취소", 1.0)
+		return
 	if c.channel_t <= 0.0:
 		return
+	if c.incapacitated():
+		cancel_channel(c)
+		return
 	c.channel_t -= dt
+	if c is Player: c.game.channel_for(c, ("은신" if c.channel_kind == "stealth" else "어둠의 장막") + " 집중 중... (우클릭: 취소)", 1.0 - c.channel_t / maxf(0.01, c.channel_max))
 	if c.channel_t <= 0.0:
-		if c.channel_kind == "veil":
-			for a in c.game.actors:
-				if a.alive and (a == c or (a.faction == c.faction and a.kind in ["player", "bot"])) and a.pos.distance_to(c.pos) < 8.0:
-					if a == c:
-						enter_stealth(c, 15.0)
-					else:
-						a.stealth = maxf(a.stealth, 15.0)
-			c.game.notify(c, "toast", ["어둠의 장막: 주변 아군 은신"])
+		c.channel_t = 0.0
+		if c is Player:
+			c.channel_ready = true
+			c.game.sfx("magic", c.pos, 0.1)
 		else:
-			enter_stealth(c, 30.0)
-			c.game.notify(c, "toast", ["은신! (치명타 피해 증가)"])
+			activate_channel(c)
+
+
+static func activate_channel(c) -> void:
+	c.channel_t = 0.0
+	c.channel_ready = false
+	if c.channel_slot != "":
+		c.cd[c.channel_slot] = cd_of(c, skill_id(c, c.channel_slot))
+	if c.channel_kind == "veil":
+		for a in c.game.actors:
+			if a.alive and (a == c or (a.faction == c.faction and a.kind in ["player", "bot"])) and a.pos.distance_to(c.pos) < 8.0:
+				if a == c:
+					enter_stealth(c, 15.0)
+				else:
+					a.stealth = maxf(a.stealth, 15.0)
+		c.game.notify(c, "toast", ["어둠의 장막: 주변 아군 은신"])
+	else:
+		enter_stealth(c, 30.0)
+		c.game.notify(c, "toast", ["은신! (치명타 피해 증가)"])
 
 
 # ---- 데스나이트

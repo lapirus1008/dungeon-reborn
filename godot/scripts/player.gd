@@ -273,7 +273,7 @@ func update(dt: float) -> void:
 	var locked := incapacitated()
 	_movement(dt, locked, can_act)
 
-	var act := can_act and not locked and channel_t <= 0.0
+	var act := can_act and not locked
 	_combat(dt, act)
 
 	# 1/2: 무기 세트 선택 · 3/4/5: 소모품 꺼내기(같은 키 = 내려놓기), 좌클릭으로 사용 · G: 횃불
@@ -351,7 +351,7 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 		speed *= 0.55
 	if spin_t > 0.0:
 		speed *= 0.75
-	if channel_t > 0.0 or charge_t >= 0.0:
+	if channel_t > 0.0 or channel_ready or charge_t >= 0.0:
 		speed *= 0.45
 	if panther:
 		speed *= 1.7
@@ -458,6 +458,13 @@ func _combat(dt: float, act: bool) -> void:
 			Skills.tick_beam(self, dt, lmb_held and draw_t <= 0.0, aim())
 		elif lmb_edge and draw_t <= 0.0:
 			Skills.lightning_strike(self, aim())
+	# 은신 집중 중: 우클릭 = 취소, 준비 완료 후 좌클릭 = 은신 (좌클릭 안 하면 준비 상태 유지)
+	elif channel_t > 0.0 or channel_ready:
+		blocking = false
+		if rmb_edge:
+			Skills.cancel_channel(self)
+		elif channel_ready and lmb_edge:
+			Skills.activate_channel(self)
 	# 좌클릭
 	elif psi_on:
 		# 심령의 검 소환 중: 좌클릭 = 소환된 만큼 발사, 우클릭 = 취소 (재사용 대기 없음)
@@ -681,7 +688,7 @@ func update_camera(cam: Camera3D, vm: Node3D, bubble: MeshInstance3D, dt: float)
 
 	# 뷰모델 (은신 중 반투명)
 	vm.visible = frozen <= 0.0
-	var tr := 0.65 if stealth > 0.0 or channel_t > 0.0 else 0.0
+	var tr := 0.65 if stealth > 0.0 else 0.0
 	if vm.get_meta("transparency", -1.0) != tr:
 		vm.set_meta("transparency", tr)
 		for n in vm.find_children("*", "GeometryInstance3D", true, false):
@@ -704,7 +711,7 @@ func net_state() -> Dictionary:
 		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion, cd.util],
 		"chg": charges, "hold": [hold_q, hold_e],
 		"s": [stun, slow, root, stealth, frozen, parry, immune, dr, spin_t, channel_t, charge_t, cast],
-		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "dw": draw_t, "ld": active_crossbow() != null and active_crossbow().get("loaded", false), "rl": reload_t,
+		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "chr": channel_ready, "dw": draw_t, "ld": active_crossbow() != null and active_crossbow().get("loaded", false), "rl": reload_t,
 		"k": [kills, pvp_kills], "ch": ch,
 	}
 
@@ -762,6 +769,7 @@ func apply_net_state(d: Dictionary) -> void:
 		cbw["loaded"] = d.get("ld", false)
 	var psi: int = int(d.get("psi", -1))
 	psi_on = psi >= 0
+	channel_ready = d.get("chr", false)
 	psi_n = maxi(0, psi)
 	draw_t = maxf(draw_t, float(d.get("dw", 0.0)) - 0.05)
 	if held != d.get("hd", ""):

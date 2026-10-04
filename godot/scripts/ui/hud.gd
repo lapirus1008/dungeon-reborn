@@ -715,6 +715,8 @@ func update_hud(dt: float) -> void:
 		sts.append("중독")
 	if p.channel_t > 0.0:
 		sts.append("은신 집중 %.1f" % p.channel_t)
+	elif p.channel_ready:
+		sts.append("은신 준비 완료")
 	if p.stealth > 0.0:
 		sts.append("👁 은신 %.0f초" % p.stealth)
 	if p.frozen > 0.0:
@@ -755,7 +757,7 @@ func update_hud(dt: float) -> void:
 			"q":
 				active = p.panther or p.spin_t > 0.0 or p.hold_q >= 0.0
 			"e":
-				active = p.stealth > 0.0 or p.channel_t > 0.0 or p.dr > 0.0 or p.frozen > 0.0 or p.dash != null or p.hold_e >= 0.0
+				active = p.stealth > 0.0 or p.channel_t > 0.0 or p.channel_ready or p.dr > 0.0 or p.frozen > 0.0 or p.dash != null or p.hold_e >= 0.0
 		if k != "rmb":
 			var sid := Skills.skill_id(p, k)
 			if sid in ["druid_nature", "priest_protection"] and p.charges > 0:
@@ -823,6 +825,6 @@ func update_hud(dt: float) -> void:
 	vig_mat.set_shader_parameter("shield_hit", p.shield_hit_fx)
 	vig_mat.set_shader_parameter("tint", p.shield_color)
 	vig_mat.set_shader_parameter("frost", 1.0 if p.frozen > 0.0 else 0.0)
-	vig_mat.set_shader_parameter("stealth", 1.0 if p.stealth > 0.0 or p.channel_t > 0.0 else 0.0)
+	vig_mat.set_shader_parameter("stealth", 1.0 if p.stealth > 0.0 or p.channel_t > 0.0 or p.channel_ready else 0.0)
 
 	fps_label.text = "%d FPS" % Engine.get_frames_per_second()

@@ -813,6 +813,33 @@ func _autotest() -> void:
 					sides.append(int(q.swing.side))
 			Input.action_release("attack")
 			out.append("로그: 뒤잡기 양손 내려찍기 %s, 콤보 순서 %s" % ["O" if back_ok else "X", sides])
+			# 은신: 3초 집중(느려짐, 피격 무관) → 준비 완료 유지 → 좌클릭 = 은신 / 우클릭 = 취소(재사용 대기 없음) → 은신 중 피격 = 해제
+			await _wait(0.6)
+			q.swing = null
+			q.skills.e = "rogue_stealth"
+			q.cd.e = 0.0
+			q.invuln = 0.0
+			var s_ok: bool = Skills._use(q, "e", q.aim(), 0.0) and q.channel_t > 0.0 and q.cd.e <= 0.0
+			q.take_damage(1.0, mon, {"from": mon.pos})
+			var hit_keep: bool = q.channel_t > 0.0
+			Input.action_press("secondary")
+			await get_tree().process_frame
+			await get_tree().process_frame
+			Input.action_release("secondary")
+			await get_tree().process_frame
+			var cancel_ok: bool = q.channel_t <= 0.0 and not q.channel_ready and q.cd.e <= 0.0
+			Skills._use(q, "e", q.aim(), 0.0)
+			await _wait(4.2)
+			var ready_ok: bool = q.channel_ready and q.stealth <= 0.0
+			Input.action_press("attack")
+			await get_tree().process_frame
+			await get_tree().process_frame
+			Input.action_release("attack")
+			var st_ok: bool = q.stealth > 0.0 and not q.channel_ready and q.cd.e > 0.0
+			q.take_damage(1.0, mon, {"from": mon.pos})
+			var brk_ok: bool = q.stealth <= 0.0
+			q.invuln = 999.0
+			out.append("로그 은신: 집중 시작 %s, 집중 중 피격 무관 %s, 우클릭 취소(대기 없음) %s, 3초 후 준비 유지 %s, 좌클릭 은신 %s, 은신 중 피격 해제 %s" % ["O" if s_ok else "X", "O" if hit_keep else "X", "O" if cancel_ok else "X", "O" if ready_ok else "X", "O" if st_ok else "X", "O" if brk_ok else "X"])
 		elif cls2 == "fighter" and mon != null:
 			# 장검 패링: 방어 자세를 잡자마자 맞으면 패링 → 다시 우클릭 = 반격
 			q.equipment.w1 = Data.make_item("old_longsword")

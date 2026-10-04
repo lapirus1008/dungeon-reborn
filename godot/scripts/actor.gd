@@ -39,6 +39,9 @@ var cd := {"lmb": 0.0, "rmb": 0.0, "q": 0.0, "e": 0.0, "potion": 0.0, "util": 0.
 var skills: Dictionary = {} # {"q": 스킬 id, "e": 스킬 id}
 var wset := 1 # 사용 중인 무기 세트
 var channel_kind := "" # 은신 준비 종류 (stealth/veil)
+var channel_ready := false # 3초 집중이 끝나 좌클릭으로 은신 가능한 상태 (우클릭 = 취소)
+var channel_max := 0.0
+var channel_slot := ""
 var soul_storm := false
 var storm_tick := 0.0
 var barrier := false # 얼음 베리어
@@ -161,7 +164,7 @@ func incapacitated() -> bool:
 
 
 func can_move() -> bool:
-	return not incapacitated() and root <= 0.0 and channel_t <= 0.0
+	return not incapacitated() and root <= 0.0
 
 
 func speed_factor() -> float:
@@ -338,8 +341,7 @@ func take_damage(amount: float, src, info: Dictionary = {}) -> float:
 	hp -= dmg
 	hit_flash = 0.15
 	if dmg > 0.0:
-		break_stealth()
-		channel_t = 0.0
+		break_stealth() # 은신 집중 중 피격은 무관, 은신한 뒤 피격되면 풀림
 	if src != null and src != self:
 		last_attacker = src
 	if info.has("knock") and not blocked:
