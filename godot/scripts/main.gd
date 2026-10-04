@@ -69,6 +69,8 @@ func _ready() -> void:
 	open_lobby()
 	if args.has("--mptest"):
 		_mptest.call_deferred(args[args.find("--mptest") + 1])
+	elif args.has("--lobbyshots"):
+		_lobbyshots.call_deferred(args[args.find("--lobbyshots") + 1])
 	elif args.has("--invshots"):
 		_invshots.call_deferred(args[args.find("--invshots") + 1])
 	elif args.has("--invtest"):
@@ -1077,6 +1079,23 @@ func _inv_checks() -> Array:
 	var pk := Inv.pack_container(Data.roll_loot(8, 3.0))
 	ok.call("상자 자동 배치 (%dx%d)" % [pk.gw, pk.gh], pk.items.size() == 8)
 	return out
+
+
+# 로비 화면 스크린샷: 일반 / 새 캐릭터 만들기 (godot -- --lobbyshots <폴더>)
+func _lobbyshots(dir: String) -> void:
+	await _wait(0.5)
+	lobby.refresh()
+	await _wait(0.3)
+	await _shot(dir, "lobby_normal")
+	lobby.creating = true
+	lobby.create_cls = "druid"
+	lobby.refresh()
+	await _wait(0.3)
+	await _shot(dir, "lobby_create")
+	# 화면 오른쪽 끝 버튼이 화면 안에 있는지
+	var vp := get_viewport().get_visible_rect().size
+	print("[lobbyshots] 화면 %s, 입장 버튼 %s, 탭 오른쪽 끝 %.0f" % [vp, lobby.start_btn.get_global_rect(), lobby.tab_btns["records"].get_global_rect().end.x])
+	get_tree().quit()
 
 
 # 인벤토리 화면 스크린샷 (godot -- --invshots <폴더>)

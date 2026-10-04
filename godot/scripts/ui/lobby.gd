@@ -11,6 +11,8 @@ var class_box: VBoxContainer
 var skill_box: VBoxContainer
 var create_cls := "fighter"
 var create_name := ""
+var create_skills := {} # 새 캐릭터 미리보기에서 고른 Q/E
+var center_title: Label
 var creating := false
 var equip_view: EquipView
 var stats_label: RichTextLabel
@@ -75,13 +77,26 @@ func _ready() -> void:
 	t1.fit_content = true
 	t1.autowrap_mode = TextServer.AUTOWRAP_OFF
 	t1.text = "[font_size=38][color=#c9c0b0]DUNGEON [/color][color=#e2702a]REBORN[/color][/font_size]"
-	t1.custom_minimum_size = Vector2(520, 0)
+	t1.custom_minimum_size = Vector2(420, 0)
 	logo.add_child(t1)
 	logo.add_child(UI.label("던전 리본 · 익스트랙션 던전 크롤러", 13, UI.MUTED))
 	top.add_child(logo)
 	var sp := Control.new()
 	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top.add_child(sp)
+	# 던전 입장 버튼은 항상 보이도록 위쪽에
+	var sv := VBoxContainer.new()
+	sv.custom_minimum_size = Vector2(420, 0)
+	start_btn = UI.big_button("⚔ 던전 입장", _open_maps)
+	start_btn.tooltip_text = "탈출하지 못하면 장착한 장비와 가방 속 물건을 모두 잃습니다."
+	sv.add_child(start_btn)
+	start_hint = UI.label("", 12, Color("#8fd0ff"))
+	start_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sv.add_child(start_hint)
+	top.add_child(sv)
+	var sp3 := Control.new()
+	sp3.custom_minimum_size = Vector2(16, 0)
+	top.add_child(sp3)
 	var gold_panel := UI.panel_box()
 	gold_label = UI.label("", 22, UI.GOLD)
 	gold_panel.add_child(gold_label)
@@ -97,10 +112,10 @@ func _ready() -> void:
 	var left := UI.panel_box()
 	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	left.size_flags_stretch_ratio = 1.0
-	left.custom_minimum_size = Vector2(400, 0)
+	left.custom_minimum_size = Vector2(320, 0)
 	var lv := VBoxContainer.new()
 	lv.add_theme_constant_override("separation", 8)
-	left.add_child(lv)
+	left.add_child(_scroll(lv))
 	lv.add_child(UI.title("캐릭터"))
 	class_box = VBoxContainer.new()
 	class_box.add_theme_constant_override("separation", 8)
@@ -115,14 +130,15 @@ func _ready() -> void:
 	# 가운데: 장비/가방
 	var center := UI.panel_box()
 	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	center.custom_minimum_size = Vector2(500, 0)
+	center.custom_minimum_size = Vector2(540, 0)
 	var cv := VBoxContainer.new()
 	cv.add_theme_constant_override("separation", 10)
-	center.add_child(cv)
-	cv.add_child(UI.title("장비 · 능력치"))
+	center.add_child(_scroll(cv))
+	center_title = UI.title("장비 · 능력치")
+	cv.add_child(center_title)
 	var eq_row := HBoxContainer.new()
 	eq_row.add_theme_constant_override("separation", 12)
-	equip_view = EquipView.new(34.0)
+	equip_view = EquipView.new(32.0)
 	equip_view.on_op = _inv_op
 	eq_row.add_child(equip_view)
 	stats_label = RichTextLabel.new()
@@ -138,7 +154,7 @@ func _ready() -> void:
 	var bag_title := UI.title("가방")
 	bag_title.text = "가방 (던전에 가져갈 물건 · 직업마다 크기가 다름)"
 	cv.add_child(bag_title)
-	bag_view = GridView.new("bag", 36.0)
+	bag_view = GridView.new("bag", 34.0)
 	bag_view.on_op = _inv_op
 	bag_view.allow_sell = true
 	bag_view.hint = "드래그: 이동 (R 회전) · 우클릭: 장착 · Shift+클릭: 보관함으로 · Ctrl+클릭: 판매"
@@ -146,24 +162,13 @@ func _ready() -> void:
 	cv.add_child(UI.label("드래그로 옮기기 · 드래그 중 R 회전 · 우클릭 장착/해제 · Shift+클릭 빠른 이동 · Ctrl+클릭 판매 · 판금/가죽/천 방어구는 모든 직업 착용 가능", 12, UI.MUTED))
 	relief_btn = UI.button("🎁 구호 물자 받기 (기본 무기 + 물약)", _on_relief)
 	cv.add_child(relief_btn)
-	var sp2 := Control.new()
-	sp2.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	cv.add_child(sp2)
-	start_btn = UI.big_button("⚔ 던전 입장", _open_maps)
-	cv.add_child(start_btn)
-	start_hint = UI.label("", 13, Color("#8fd0ff"))
-	start_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	cv.add_child(start_hint)
-	var warn := UI.label("탈출하지 못하면 장착한 장비와 가방 속 물건을 모두 잃습니다.", 13, Color("#c98a6a"))
-	warn.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	cv.add_child(warn)
 	body.add_child(center)
 
 	# 오른쪽: 탭
 	var right := UI.panel_box()
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right.size_flags_stretch_ratio = 1.1
-	right.custom_minimum_size = Vector2(500, 0)
+	right.custom_minimum_size = Vector2(430, 0)
 	var rv := VBoxContainer.new()
 	rv.add_theme_constant_override("separation", 10)
 	right.add_child(rv)
@@ -195,6 +200,16 @@ func _ready() -> void:
 	refresh()
 
 
+# 패널 내용이 화면보다 길면 패널 안에서 스크롤 (창 밖으로 밀려나지 않도록)
+func _scroll(content: Control) -> ScrollContainer:
+	var sc := ScrollContainer.new()
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	sc.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sc.add_child(content)
+	return sc
+
+
 func save() -> Dictionary:
 	return SaveData.data
 
@@ -212,23 +227,27 @@ func refresh() -> void:
 	else:
 		_render_chars()
 
-	# 장비 / 능력치 / 가방
-	UI.tip_cls = s.cls
-	equip_view.set_equipment(s.equipment, s.cls, int(s.get("wset", 1)))
-	var st := Data.compute_stats(s.cls, s.equipment, int(s.get("wset", 1)))
+	# 장비 / 능력치 / 가방 (새 캐릭터를 만드는 중이면 고른 직업의 시작 장비 미리보기)
+	var view := _view_char()
+	UI.tip_cls = view.cls
+	center_title.text = "장비 · 능력치" if not creating else "새 캐릭터 미리보기: %s %s (시작 장비)" % [Data.CLASSES[view.cls].icon, Data.CLASSES[view.cls].name]
+	equip_view.on_op = _inv_op if not creating else func(_o, _a): pass
+	bag_view.on_op = equip_view.on_op
+	equip_view.set_equipment(view.equipment, view.cls, int(view.get("wset", 1)))
+	var st := Data.compute_stats(view.cls, view.equipment, int(view.get("wset", 1)))
 	var risk := []
 	for sl in Data.GEAR_SLOTS:
-		if s.equipment[sl] != null:
-			risk.append(s.equipment[sl])
-	risk.append_array(s.bag)
-	var txt := UI.stats_text(s.cls, st)
-	if Data.active_weapons(s.equipment, int(s.get("wset", 1))).is_empty():
+		if view.equipment[sl] != null:
+			risk.append(view.equipment[sl])
+	risk.append_array(view.bag)
+	var txt := UI.stats_text(view.cls, st)
+	if Data.active_weapons(view.equipment, int(view.get("wset", 1))).is_empty():
 		txt += "\n[color=#e0a050][font_size=13]⚠ 사용 중인 세트에 무기 없음 - 맨손(공격력 x0.85)으로 싸웁니다[/font_size][/color]"
 	txt += "\n"
 	txt += "[color=#9a8e7a][font_size=12]위험 부담 장비 가치: 💰 %d[/font_size][/color]" % Data.items_value(risk)
 	stats_label.text = txt
-	bag_view.set_items(s.bag, Inv.bag_size(s.cls))
-	_render_skills()
+	bag_view.set_items(view.bag, Inv.bag_size(view.cls))
+	_render_skills(view)
 
 	for k in tab_btns:
 		tab_btns[k].button_pressed = k == tab
@@ -243,15 +262,20 @@ func refresh() -> void:
 		_:
 			_render_records()
 
-	relief_btn.visible = Account.needs_relief(s)
+	relief_btn.visible = Account.needs_relief(s) and not creating
 	_update_start()
+	_wrap_long(self)
 
 
 # 던전 입장 버튼: 맵 선택 -> 대기방
 func _update_start() -> void:
-	start_hint.text = ""
+	start_hint.text = "탈출하지 못하면 장착한 장비와 가방 속 물건을 모두 잃습니다"
 	start_btn.disabled = false
 	start_btn.text = "⚔ 던전 입장 (맵 선택)"
+	if creating:
+		start_btn.disabled = true
+		start_hint.text = "새 캐릭터를 만들거나 취소한 뒤 입장할 수 있습니다"
+		return
 	if Net.online():
 		var mine: Dictionary = Net.roster.get(Net.my_id(), {})
 		if mine.get("state", "lobby") == "raid":
@@ -519,7 +543,7 @@ func _mp_join() -> void:
 
 func _render_stash() -> void:
 	var s := save()
-	var gv := GridView.new("stash", 34.0)
+	var gv := GridView.new("stash", 32.0)
 	gv.on_op = _inv_op
 	gv.allow_sell = true
 	gv.hint = "드래그: 이동 (R 회전) · 우클릭: 장착 · Shift+클릭: 가방으로 · Ctrl+클릭: 판매"
@@ -671,6 +695,7 @@ func _render_chars() -> void:
 		class_box.add_child(UI.button("＋ 새 캐릭터 만들기", func():
 			creating = true
 			create_name = ""
+			create_skills = {}
 			refresh(), 14))
 	var cur: Dictionary = Data.CLASSES[s.cls]
 	class_box.add_child(_class_detail(cur))
@@ -713,6 +738,8 @@ func _render_create() -> void:
 		card.add_child(hb)
 		var id2: String = cid
 		_on_click(card, func():
+			if create_cls != id2:
+				create_skills = {}
 			create_cls = id2
 			refresh())
 		grid.add_child(card)
@@ -746,6 +773,10 @@ func _create() -> void:
 		return
 	creating = false
 	SaveData.op("create_char", [nm, create_cls])
+	if save().cls == create_cls:
+		for k in create_skills:
+			SaveData.op("set_skill", [k, create_skills[k]])
+	create_skills = {}
 	Net.update_class(save().cls)
 	refresh()
 
@@ -763,8 +794,29 @@ func _confirm_delete(id: String, nm: String) -> void:
 
 
 # 인벤토리의 Q/E 스킬 선택 (던전에 들어가기 전에 고름)
-func _render_skills() -> void:
+# 지금 가운데에 보여 줄 캐릭터: 선택한 캐릭터, 또는 만들고 있는 새 캐릭터의 시작 장비
+func _view_char() -> Dictionary:
 	var s := save()
+	if not creating:
+		return {"cls": s.cls, "equipment": s.equipment, "bag": s.bag, "skills": s.skills, "wset": s.get("wset", 1)}
+	var pc := Account.new_character("미리보기", create_cls)
+	for k in create_skills:
+		if create_skills[k] in Data.CLASSES[create_cls][k]:
+			pc.skills[k] = create_skills[k]
+	return pc
+
+
+# 너비 제한 없는 긴 글은 줄바꿈 (창이 화면 밖으로 넓어지지 않도록)
+func _wrap_long(n: Node) -> void:
+	for c in n.get_children():
+		if c is Label and not (c.get_parent() is Button) and c.text.length() > 24 and c.autowrap_mode == TextServer.AUTOWRAP_OFF:
+			c.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			c.custom_minimum_size.x = maxf(c.custom_minimum_size.x, 120.0)
+		_wrap_long(c)
+
+
+func _render_skills(view: Dictionary) -> void:
+	var s := view
 	UI.clear(skill_box)
 	var cur: Dictionary = Data.CLASSES[s.cls]
 	var top := HBoxContainer.new()
@@ -772,7 +824,8 @@ func _render_skills() -> void:
 	var sp := Control.new()
 	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top.add_child(sp)
-	top.add_child(UI.button("⇄ 무기 세트 교체 (현재 %d)" % int(s.get("wset", 1)), func(): SaveData.op("swap_set"), 12))
+	if not creating:
+		top.add_child(UI.button("⇄ 무기 세트 교체 (현재 %d)" % int(s.get("wset", 1)), func(): SaveData.op("swap_set"), 12))
 	skill_box.add_child(top)
 	for slot in ["q", "e"]:
 		var row := HBoxContainer.new()
@@ -791,7 +844,10 @@ func _render_skills() -> void:
 			var sl: String = slot
 			var id2: String = sid
 			_on_click(card, func():
-				if save().skills.get(sl, "") != id2:
+				if creating:
+					create_skills[sl] = id2
+					refresh()
+				elif save().skills.get(sl, "") != id2:
 					SaveData.op("set_skill", [sl, id2]))
 			card.mouse_entered.connect(func(): UI.show_tip(UI.skill_tip(id2)))
 			card.mouse_exited.connect(func(): UI.hide_tip())
