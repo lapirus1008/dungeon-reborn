@@ -985,8 +985,6 @@ func _render_skills(view: Dictionary) -> void:
 	var sp := Control.new()
 	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top.add_child(sp)
-	if not creating:
-		top.add_child(UI.button("⇄ 사용할 무기 세트 (현재 %d · 던전에서 1/2키)" % int(s.get("wset", 1)), func(): SaveData.op("swap_set"), 12))
 	skill_box.add_child(top)
 	for slot in ["q", "e"]:
 		var row := HBoxContainer.new()

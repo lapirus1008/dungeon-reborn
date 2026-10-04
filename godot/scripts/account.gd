@@ -434,7 +434,7 @@ static func needs_relief(s: Dictionary) -> bool:
 static func take_loadout(s: Dictionary) -> Dictionary:
 	var c := cur(s)
 	var lo := {"cls": c.cls, "name": c.name, "char": c.id, "equipment": c.equipment.duplicate(), "bag": c.bag.duplicate(),
-		"skills": c.skills.duplicate(), "wset": int(c.get("wset", 1))}
+		"skills": c.skills.duplicate(), "wset": 1}
 	set_gear(s, empty_equipment(), [])
 	s.stats.raids += 1
 	c.stats.raids = int(c.stats.get("raids", 0)) + 1
