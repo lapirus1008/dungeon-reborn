@@ -109,6 +109,9 @@ static func ranged_profile(c) -> Dictionary:
 static func pay(c, cost: float) -> bool:
 	if cost <= 0.0:
 		return true
+	# Q/E 스킬은 마나를 쓰지 않음 (마나는 지팡이 기본 공격용 장전량)
+	if c.skill_casting and c.res_type() == "mana":
+		return true
 	if c.res < cost:
 		c.game.notify(c, "toast", ["%s이(가) 부족합니다" % Data.RES_NAMES.get(c.res_type(), "자원")])
 		return false
@@ -478,6 +481,19 @@ static func _use(c, slot: String, aim: Dictionary, charge: float) -> bool:
 		return false
 	var ok := false
 	var custom_cd := -1.0
+	c.skill_casting = true
+	ok = _cast(c, sid, slot, aim, charge)
+	c.skill_casting = false
+	custom_cd = c.get_meta("custom_cd", -1.0)
+	c.remove_meta("custom_cd")
+	if ok:
+		c.cd[cd_key] = custom_cd if custom_cd >= 0.0 else cd_of(c, sid)
+	return ok
+
+
+static func _cast(c, sid: String, slot: String, aim: Dictionary, charge: float) -> bool:
+	var ok := false
+	var custom_cd := -1.0
 	match sid:
 		"fighter_whirlwind":
 			ok = _whirlwind(c)
@@ -533,6 +549,7 @@ static func _use(c, slot: String, aim: Dictionary, charge: float) -> bool:
 			c.psi_n = 0
 			c.psi_t = 0.0
 			c.psi_aim = aim
+			c.set_meta("custom_cd", 0.0)
 			return true
 		"sm_blade_dance":
 			ok = _blade_dance(c)
@@ -544,8 +561,8 @@ static func _use(c, slot: String, aim: Dictionary, charge: float) -> bool:
 				custom_cd = 1.0
 		"druid_shadow_assault":
 			ok = _shadow_assault(c)
-	if ok:
-		c.cd[cd_key] = custom_cd if custom_cd >= 0.0 else cd_of(c, sid)
+	if custom_cd >= 0.0:
+		c.set_meta("custom_cd", custom_cd)
 	return ok
 
 

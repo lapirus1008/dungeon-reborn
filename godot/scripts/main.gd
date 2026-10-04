@@ -832,10 +832,18 @@ func _autotest() -> void:
 			q.invuln = 999.0
 			out.append("파이터 장검: 타이밍 방어 → 패링 %s, 우클릭 반격 %s" % ["O" if parried else "X", "O" if countered else "X"])
 		elif cls2 == "pyromancer" and mon != null:
+			# 마나 = 지팡이에 장전된 양: 입장 시 가득, Q/E는 마나를 쓰지 않음, 안에서 새로 낀 지팡이는 0부터
+			var full_ok: bool = q.res >= q.res_max() - 0.1 and q.res_max() > 0.0
+			var r0: float = q.res
+			q.cd.q = 0.0
+			var q_used := Skills.use_q(q, q.aim())
+			var free_ok: bool = q_used and absf(q.res - r0) < 0.01
+			q.cd.q = 0.0
 			mon.invuln = 0.0
 			mon.stun = 99.0
 			q.equipment.w1 = Data.make_item("pyro_staff")
 			q.recalc()
+			var new_zero: bool = q.res == 0.0
 			q.draw_t = 0.0
 			q.res = q.res_max()
 			q.pos = game.dungeon.resolve_circle(mon.pos + Vector3(0, 0, 4.0), q.radius)
@@ -861,6 +869,7 @@ func _autotest() -> void:
 			await get_tree().process_frame
 			Input.action_release("attack")
 			var struck: bool = game.zones.filter(func(z): return z.kind == "lightning").size() > z0
+			out.append("마나(지팡이 장전): 입장 시 가득 %s, Q 스킬 마나 미사용 %s, 던전에서 새로 낀 지팡이 0부터 %s" % ["O" if full_ok else "X", "O" if free_ok else "X", "O" if new_zero else "X"])
 			out.append("화염 지팡이 레이저 4타+폭발 피해 %.0f (마나 %.0f 사용 = %.1f칸), 번개 지팡이 조준점 번개 %s" % [beam_dmg, mana_used, mana_used / Skills.MANA_CELL, "O" if struck else "X"])
 		elif cls2 == "swordmaster":
 			var n_sw := Skills.sword_count(q)

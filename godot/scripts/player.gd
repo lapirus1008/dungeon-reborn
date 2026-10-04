@@ -48,6 +48,7 @@ var counter_rmb := true
 var psi_rmb := true
 var combo_i := 0 # 로그 단검 콤보 단계
 var combo_t := 0.0
+var mana_item = null # 마나가 장전된 지금 무기
 var held := "" # 손에 든 것: 소모품 칸("c3"/"c4"/"c5") 또는 "torch", 비어 있으면 무기
 var torch_t := 0.0 # 불붙은 횃불 남은 시간
 var puppet = null # 호스트 화면에 원격 플레이어를 그리는 NetActor
@@ -69,6 +70,14 @@ func _init(g, p: Vector3, c: String, eq: Dictionary, b: Array, pname := "당신"
 	skills = sk.duplicate() if sk.size() else Account.default_skills(c)
 	stats = st
 	res = st.res_max if st.res == "mana" else st.res_max * 0.4
+	if st.res == "mana":
+		# 마나는 지팡이/오브에 장전된 것: 던전에 가지고 들어간 무기는 가득 찬 상태
+		for s in ["w1", "w1o", "w2", "w2o"]:
+			var w = equipment.get(s)
+			if w != null and Data.base_of(w).get("cat", "") in ["staff", "orb"]:
+				w["mana"] = st.res_max
+		mana_item = _caster_weapon()
+		res = float(mana_item.get("mana", 0.0)) if mana_item != null else 0.0
 	block_mul = 1.0 - st.block_pct / 100.0 if st.block_pct > 0.0 else 0.4
 	charges = 1
 	if c == "druid" and Skills.has_fx(self, "nature_seed"):
@@ -91,8 +100,31 @@ func recalc() -> void:
 	hp = clampf(ratio * max_hp, 1.0, max_hp)
 	armor = st.armor
 	res = minf(res, st.res_max)
+	_sync_weapon_mana()
 	block_mul = 1.0 - st.block_pct / 100.0 if st.block_pct > 0.0 else 0.4
 	game.on_weapon_changed(self)
+
+
+# 지금 손에 든 세트의 마나 무기 (지팡이 또는 오브)
+func _caster_weapon():
+	for s in ["w%d" % wset, "w%do" % wset]:
+		var w = equipment.get(s)
+		if w != null and Data.base_of(w).get("cat", "") in ["staff", "orb"]:
+			return w
+	return null
+
+
+# 무기를 바꾸면 그 무기에 남은 마나로 (던전 안에서 새로 낀 무기는 0부터 재생)
+func _sync_weapon_mana() -> void:
+	if res_type() != "mana":
+		return
+	var w = _caster_weapon()
+	if w == mana_item:
+		return
+	if mana_item != null:
+		mana_item["mana"] = res
+	mana_item = w
+	res = minf(float(w.get("mana", 0.0)), res_max()) if w != null else 0.0
 
 
 # 무기 세트 교체 (X)
