@@ -288,6 +288,10 @@ static func fire_basic(c, aim: Dictionary) -> bool:
 	if c is Player and wcat(c) == "crossbow":
 		var cb = c.active_crossbow()
 		if cb == null or not cb.get("loaded", false):
+			if cb != null and c.reload_t <= 0.0 and c.cd.lmb <= 0.0:
+				c.cd.lmb = 0.5
+				c.game.sfx("draw_soft", c.pos, 0.0)
+				c.game.notify(c, "toast", ["장전되지 않음 — R: 재장전" if c.bolt_count() > 0 else "볼트가 없습니다"])
 			return false
 		cb["loaded"] = false
 	if not pay(c, prof.cost):

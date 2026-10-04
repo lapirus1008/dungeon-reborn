@@ -88,7 +88,7 @@ func _setup_input() -> void:
 		"move_forward": [KEY_W], "move_back": [KEY_S], "move_left": [KEY_A], "move_right": [KEY_D],
 		"jump": [KEY_SPACE], "skill_q": [KEY_Q], "skill_e": [KEY_E],
 		"interact": [KEY_F], "inventory": [KEY_TAB, KEY_I], "map": [KEY_M],
-		"weapon1": [KEY_1], "weapon2": [KEY_2], "use3": [KEY_3], "use4": [KEY_4], "use5": [KEY_5], "torch": [KEY_G], "menu": [KEY_ESCAPE],
+		"weapon1": [KEY_1], "weapon2": [KEY_2], "use3": [KEY_3], "use4": [KEY_4], "use5": [KEY_5], "torch": [KEY_G], "reload": [KEY_R], "menu": [KEY_ESCAPE],
 	}
 	for action in keys:
 		if not InputMap.has_action(action):
@@ -880,9 +880,17 @@ func _autotest() -> void:
 			Input.action_release("attack")
 			var shot: bool = game.projectiles.filter(func(pr): return pr.kind == "bolt").size() > nb0 or not cbw.get("loaded", true)
 			await _wait(1.8)
-			var reloaded: bool = cbw.get("loaded", false) and q.bolt_count() == 1
+			var no_auto: bool = not cbw.get("loaded", false) and q.bolt_count() == 2
+			Input.action_press("reload")
+			await get_tree().process_frame
+			await get_tree().process_frame
+			Input.action_release("reload")
+			var anim_ok: bool = q.reload_t > 0.0
+			await _wait(1.8)
+			var reloaded: bool = anim_ok and cbw.get("loaded", false) and q.bolt_count() == 1
 			q.bag = q.bag.filter(func(it): return it.base != "bolts")
 			cbw["loaded"] = false
+			q.start_reload()
 			await _wait(1.8)
 			var no_bolt_ok: bool = not cbw.get("loaded", false)
 			cbw["loaded"] = true
@@ -890,7 +898,7 @@ func _autotest() -> void:
 			Inv.add_auto(q.bag, Inv.bag_size(q.cls), cbw)
 			await _wait(0.2)
 			var unloaded: bool = not cbw.get("loaded", false)
-			out.append("석궁: 입장 시 장전 %s, 발사 %s, 가방 볼트로 재장전 %s, 볼트 없으면 재장전 불가 %s, 가방으로 내리면 장전 풀림 %s" % ["O" if entry_loaded else "X", "O" if shot else "X", "O" if reloaded else "X", "O" if no_bolt_ok else "X", "O" if unloaded else "X"])
+			out.append("석궁: 입장 시 장전 %s, 발사 %s, 자동 재장전 없음(0/2) %s, R 재장전(모션) %s, 볼트 없으면 재장전 불가 %s, 가방으로 내리면 장전 풀림 %s" % ["O" if entry_loaded else "X", "O" if shot else "X", "O" if no_auto else "X", "O" if reloaded else "X", "O" if no_bolt_ok else "X", "O" if unloaded else "X"])
 		elif cls2 == "pyromancer" and mon != null:
 			# 마나 = 지팡이에 장전된 양: 입장 시 가득, Q/E는 마나를 쓰지 않음, 안에서 새로 낀 지팡이는 0부터
 			var full_ok: bool = q.res >= q.res_max() - 0.1 and q.res_max() > 0.0

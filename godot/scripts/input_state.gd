@@ -5,7 +5,7 @@ extends RefCounted
 # 네트워크로 보내는 "누르고 있는" 동작 (비트 순서 고정)
 const HELD := ["move_forward", "move_back", "move_left", "move_right", "sprint", "attack", "secondary", "interact", "skill_q", "skill_e"]
 # 한 번 누름 이벤트로 보내는 동작
-const PRESS := ["attack", "secondary", "skill_q", "skill_e", "jump", "weapon1", "weapon2", "use3", "interact", "use4", "use5", "torch"]
+const PRESS := ["attack", "secondary", "skill_q", "skill_e", "jump", "weapon1", "weapon2", "use3", "interact", "use4", "use5", "torch", "reload"]
 
 var remote := false
 var held := {}

@@ -34,6 +34,9 @@ var target_name: Label
 var target_hp: ProgressBar
 var prompt_label: Label
 var channel_box: VBoxContainer
+var ammo_box: VBoxContainer
+var ammo_label: Label
+var ammo_hint: Label
 var channel_label: Label
 var channel_bar: ProgressBar
 var channel_t := 0.0
@@ -184,6 +187,19 @@ func _ready() -> void:
 	bars.add_theme_constant_override("separation", 5)
 	status_label = UI.label("", 13, Color(1.0, 0.75, 0.5))
 	bars.add_child(status_label)
+	# 하단 오른쪽: 석궁 장전/볼트 (장전 수 / 가방 볼트)
+	ammo_box = VBoxContainer.new()
+	ammo_box.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	ammo_box.position = Vector2(-190, -150)
+	ammo_box.custom_minimum_size = Vector2(170, 0)
+	ammo_box.visible = false
+	ammo_label = UI.label("", 30)
+	ammo_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	ammo_hint = UI.label("", 13, Color(1.0, 0.75, 0.5))
+	ammo_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	ammo_box.add_child(ammo_label)
+	ammo_box.add_child(ammo_hint)
+	root.add_child(ammo_box)
 	shield_label = UI.label("", 14, Color(0.55, 0.8, 1.0))
 	bars.add_child(shield_label)
 	var hp_stack := Control.new()
@@ -730,7 +746,11 @@ func update_hud(dt: float) -> void:
 	var cbx = p.active_crossbow() if p.has_method("active_crossbow") else null
 	if cbx != null:
 		var n: int = p.bolt_count()
-		sts.append("➶ 볼트 %d · %s" % [n, "장전됨" if cbx.get("loaded", false) else ("장전 중 %.1f" % p.reload_t if n > 0 else "볼트 없음")])
+		var ld: bool = cbx.get("loaded", false)
+		ammo_label.text = "➶ %d / %d" % [1 if ld else 0, n]
+		ammo_hint.text = "재장전 중..." if p.reload_t > 0.0 else ("" if ld else ("R: 재장전" if n > 0 else "볼트 없음"))
+		ammo_label.add_theme_color_override("font_color", UI.TEXT if ld else Color("#ff6a4a"))
+	ammo_box.visible = cbx != null
 	status_label.text = " · ".join(sts)
 	var tl := maxf(0.0, g.time_left)
 	timer_label.text = "%d:%02d" % [int(tl / 60.0), int(tl) % 60]

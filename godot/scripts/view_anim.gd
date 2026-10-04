@@ -22,8 +22,18 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 		R.rotation = Vector3(-0.4, sin(a) * 1.5, 0.6)
 		R.position = R0 + Vector3(-sin(a) * 0.15, 0.05, 0)
 		return
+	# 석궁 재장전: 석궁을 아래로 기울이고 왼손으로 볼트를 끼워 당김
+	if p.reload_t > 0.0:
+		var rk: float = 1.0 - clampf(p.reload_t / 1.4, 0.0, 1.0)
+		var tilt := sin(clampf(rk * 1.25, 0.0, 1.0) * PI * 0.5) * (1.0 - clampf((rk - 0.85) / 0.15, 0.0, 1.0))
+		R.position += Vector3(-0.08, -0.12, 0.05) * tilt
+		R.rotation = Vector3(-0.7, 0.25, 0.35) * tilt
+		var ins := clampf((rk - 0.3) / 0.4, 0.0, 1.0)
+		L.position += Vector3(0.2, -0.05 + 0.1 * ins, 0.12 - 0.2 * ins) * tilt
+		L.rotation = Vector3(-0.5 * ins, 0.0, 0.4) * tilt
+		return
 	# 은신 집중: 양손을 모음
-	if p.channel_t > 0.0:
+	if p.channel_t > 0.0 or p.channel_ready:
 		R.position = R0 + Vector3(-0.12, 0.05, 0.1)
 		L.position = L0 + Vector3(0.12, 0.05, 0.1)
 		return

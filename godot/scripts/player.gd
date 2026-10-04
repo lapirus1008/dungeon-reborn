@@ -50,6 +50,7 @@ var combo_i := 0 # 로그 단검 콤보 단계
 var combo_t := 0.0
 var mana_item = null # 마나가 장전된 지금 무기
 var reload_t := 0.0 # 석궁 재장전 남은 시간
+var reload_key := false
 var reload_item = null
 var held := "" # 손에 든 것: 소모품 칸("c3"/"c4"/"c5") 또는 "torch", 비어 있으면 무기
 var torch_t := 0.0 # 불붙은 횃불 남은 시간
@@ -112,7 +113,7 @@ func recalc() -> void:
 	game.on_weapon_changed(self)
 
 
-# 석궁: 가방에 든 볼트로 재장전 (장착 칸 없음). 쏘면 가방 볼트 1개를 넣어 다시 장전,
+# 석궁: 가방에 든 볼트로 재장전 (장착 칸 없음). 쏘면 0/N이 되고 R을 눌러 가방 볼트 1개를 끼움,
 # 석궁을 가방으로 내리면 장전이 풀림. 던전 입장 시 장착한 석궁은 장전된 상태
 func active_crossbow():
 	var w = equipment.get("w%d" % wset)
@@ -138,27 +139,40 @@ func _take_bolt() -> bool:
 	return false
 
 
+const RELOAD_TIME := 1.4
+
+
+# R: 가방 볼트 1개를 석궁에 끼우는 재장전 (자동 재장전 없음)
+func start_reload() -> void:
+	var cb = active_crossbow()
+	if cb == null or cb.get("loaded", false) or reload_t > 0.0 or draw_t > 0.0 or held != "":
+		return
+	if bolt_count() <= 0:
+		game.notify(self, "toast", ["볼트가 없습니다"])
+		return
+	reload_item = cb
+	reload_t = RELOAD_TIME / stats.get("act_mul", 1.0)
+	game.sfx("draw_wood", pos, 0.05)
+
+
 func _tick_reload(dt: float) -> void:
 	for it in bag:
 		if it.get("loaded", false):
 			it.erase("loaded")
+	if reload_t <= 0.0:
+		return
 	var cb = active_crossbow()
-	if cb == null or cb.get("loaded", false):
+	# 무기를 바꾸거나 볼트가 사라지면 재장전 중단
+	if cb == null or cb != reload_item or cb.get("loaded", false) or bolt_count() <= 0 or held != "":
 		reload_t = 0.0
 		reload_item = null
 		return
-	if bolt_count() <= 0:
-		reload_t = 0.0
-		reload_item = null
-		return
-	if reload_item != cb:
-		reload_item = cb
-		reload_t = 1.4 / stats.get("act_mul", 1.0)
-		game.sfx("draw_wood", pos, 0.05)
 	reload_t -= dt
 	if reload_t <= 0.0:
+		reload_t = 0.0
 		if _take_bolt():
 			cb["loaded"] = true
+			game.sfx("draw_blade", pos, 0.1)
 		reload_item = null
 		game.inv_changed(self)
 
@@ -288,6 +302,11 @@ func update(dt: float) -> void:
 				pick_slot("c" + k)
 		if inp.just_pressed("torch"):
 			toggle_torch()
+		# R: 누른 순간 재장전 (원격 입력도 한 프레임 눌림으로 들어옴)
+		var r_now := inp.pressed("reload")
+		if r_now and not reload_key:
+			start_reload()
+		reload_key = r_now
 	if held == "torch":
 		torch_t -= dt
 		if torch_t <= 0.0:
