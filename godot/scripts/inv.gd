@@ -306,6 +306,8 @@ static func _equip(ctx: Dictionary, src: String, it: Dictionary, slot: String) -
 	if slot.length() == 3 and slot.ends_with("o") and _is_2h(eq.get(slot.left(2))):
 		return {"ok": false, "msg": "양손 무기를 들고 있습니다"}
 	var back := src if src != "equip" and not ctx.stores[src].get("eq") is Dictionary else ("bag" if ctx.stores.has("bag") else "stash")
+	if src == "cont" and ctx.stores.has("bag"):
+		back = "bag" # 상자/상대 가방에서 끌어 장착: 내 장비는 상대 쪽으로 넘어가지 않음
 	# 양손 무기: 보조 칸의 장비를 저장소로
 	if _is_2h(it) and slot in ["w1", "w2"]:
 		var off = eq.get(slot + "o")
@@ -344,6 +346,17 @@ static func _equip(ctx: Dictionary, src: String, it: Dictionary, slot: String) -
 			prev = null
 		eq[slot] = it
 		eq[from] = prev
+		return {"ok": true}
+	if src == "cont" and ctx.stores.has("bag"):
+		if prev != null:
+			if not add_auto(ctx.stores.bag.list, ctx.stores.bag.grid, prev):
+				return {"ok": false, "msg": BAG_FULL}
+			eq[slot] = null
+		_take(ctx, src, it.id)
+		it.erase("x")
+		it.erase("y")
+		it.r = false
+		eq[slot] = it
 		return {"ok": true}
 	var st: Dictionary = ctx.stores[src]
 	var others: Array = st.list.filter(func(o): return o.id != it.id)
@@ -385,8 +398,59 @@ static func quick(ctx: Dictionary, src: String, id: String, order: Array) -> Dic
 					return r
 		return {"ok": false, "msg": "장비를 넣을 자리가 없습니다"}
 	if not valid_slots(it, ctx.cls).is_empty():
+		if src != "bag" and ctx.stores.has("bag"):
+			return _quick_external(ctx, src, it)
 		return _equip(ctx, src, it, "")
 	return transfer(ctx, src, id, order)
+
+
+const BAG_FULL := "가방이 가득 찼습니다"
+
+
+# 창고/상대 가방/상자/시체 장비에서 우클릭: 내 장비는 절대 바뀌지 않음
+#  소모품: 같은 종류 칸에 나눠 겹치기 → 남은 수량은 내 가방 (가방이 차면 남은 수량은 그 자리에)
+#  장비/소모품: 빈 장착 칸 → 내 가방 → 가방도 가득 차면 알림
+static func _quick_external(ctx: Dictionary, src: String, it: Dictionary) -> Dictionary:
+	var slots := valid_slots(it, ctx.cls)
+	var eq: Dictionary = ctx.equipment
+	var mx := Data.max_stack(it)
+	if mx > 1:
+		var topped := false
+		for q in slots:
+			var o = eq.get(q)
+			if o != null and o.id != it.id and o.base == it.base:
+				var n := mini(mx - int(o.get("count", 1)), int(it.get("count", 1)))
+				if n > 0:
+					o.count = int(o.get("count", 1)) + n
+					it.count = int(it.get("count", 1)) - n
+					topped = true
+					if it.count <= 0:
+						_take(ctx, src, it.id)
+						return {"ok": true}
+		if topped:
+			# 칸에 겹치고 남은 수량은 가방으로
+			var r := move(ctx, src, it.id, "bag", -1, 0, false)
+			return {"ok": true} if r.ok else {"ok": true, "msg": BAG_FULL}
+	# 빈 장착 칸 (활성 세트 우선) — 양손 무기는 보조 칸까지 비어 있어야 함
+	var ws := int(ctx.get("wset", 1))
+	var order := slots.duplicate()
+	order.sort_custom(func(a, b): return (1 if a.begins_with("w%d" % ws) else 0) > (1 if b.begins_with("w%d" % ws) else 0))
+	for q in order:
+		if eq.get(q) != null:
+			continue
+		if _is_2h(it) and q in ["w1", "w2"] and eq.get(q + "o") != null:
+			continue
+		if q.length() == 3 and q.ends_with("o") and _is_2h(eq.get(q.left(2))):
+			continue
+		var r := _equip(ctx, src, it, q)
+		if r.ok:
+			return r
+	# 내 가방으로 (같은 소모품은 가방 안에서 겹침)
+	var c0 := int(it.get("count", 1))
+	var rb := move(ctx, src, it.id, "bag", -1, 0, false)
+	if rb.ok:
+		return rb
+	return {"ok": int(it.get("count", 1)) < c0, "msg": BAG_FULL}
 
 
 # 다른 저장소로 바로 옮기기 (order 중 src가 아닌 첫 번째로)

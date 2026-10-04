@@ -1789,7 +1789,7 @@ func _ctx_of(p) -> Dictionary:
 		stores["cont"] = {"list": p.container.items, "grid": Vector2i(p.container.get("gw", Inv.CONT_W), p.container.get("gh", 8))}
 		if p.container.kind == "corpse":
 			stores["ceq"] = {"eq": p.container.equipment, "list": [], "grid": Vector2i.ZERO}
-	return {"cls": p.cls, "equipment": p.equipment, "stores": stores}
+	return {"cls": p.cls, "equipment": p.equipment, "stores": stores, "wset": p.wset}
 
 
 func inv_op(p, op: String, args: Array) -> void:

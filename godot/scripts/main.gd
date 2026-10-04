@@ -829,6 +829,7 @@ func _autotest() -> void:
 			await get_tree().process_frame
 			var cancel_ok: bool = q.channel_t <= 0.0 and not q.channel_ready and q.cd.e <= 0.0
 			Skills._use(q, "e", q.aim(), 0.0)
+			q.invuln = 999.0 # 기다리는 동안 다른 몬스터에게 기절당하지 않게
 			await _wait(4.2)
 			var ready_ok: bool = q.channel_ready and q.stealth <= 0.0
 			Input.action_press("attack")
@@ -836,6 +837,7 @@ func _autotest() -> void:
 			await get_tree().process_frame
 			Input.action_release("attack")
 			var st_ok: bool = q.stealth > 0.0 and not q.channel_ready and q.cd.e > 0.0
+			q.invuln = 0.0
 			q.take_damage(1.0, mon, {"from": mon.pos})
 			var brk_ok: bool = q.stealth <= 0.0
 			q.invuln = 999.0
@@ -1299,6 +1301,51 @@ func _inv_checks() -> Array:
 	Account.apply(d, "quick", ["bag", rf.id])
 	var swap_ok: bool = d.equipment.c3.base == "rock_flask" and d.bag.any(func(x): return x.base == "health_potion")
 	ok.call("소모품 최대 3개 + 칸이 다 차면 첫 번째 칸과 교체", full_ok and swap_ok)
+	# 상대 가방/상자에서 우클릭: 내 장비는 바뀌지 않음 (나눠 겹치기 → 가방 → 가득 차면 알림)
+	var xeq := Account.empty_equipment()
+	var xp := Data.make_item("health_potion")
+	xp.count = 2
+	xeq.c3 = xp
+	xeq.c4 = Data.make_item("bandage")
+	xeq.c5 = Data.make_item("fire_flask")
+	var xbag := []
+	var xcont := []
+	var xctx := {"cls": "fighter", "equipment": xeq, "wset": 1, "stores": {"bag": {"list": xbag, "grid": Vector2i(2, 2)}, "cont": {"list": xcont, "grid": Vector2i(6, 8)}}}
+	var cp := Data.make_item("health_potion")
+	cp.count = 3
+	Inv.add_auto(xcont, Vector2i(6, 8), cp)
+	var xr1 := Inv.quick(xctx, "cont", cp.id, ["bag"])
+	var split_ok: bool = xr1.ok and xeq.c3.count == 3 and xbag.size() == 1 and xbag[0].count == 2 and xcont.is_empty()
+	ok.call("상대 가방 우클릭: 3번에 1개 겹치고 남은 2개는 내 가방", split_ok)
+	# 가방이 가득 차면 남은 수량은 상대 가방에 그대로
+	xeq.c3.count = 2
+	xbag.clear()
+	Inv.add_auto(xbag, Vector2i(2, 2), Data.make_item("old_helmet") if Data.ITEM_BASES.has("old_helmet") else Data.make_item("golden_crown"))
+	var cp2 := Data.make_item("health_potion")
+	cp2.count = 3
+	Inv.add_auto(xcont, Vector2i(6, 8), cp2)
+	var xr2 := Inv.quick(xctx, "cont", cp2.id, ["bag"])
+	ok.call("가방이 차면 1개만 겹치고 2개는 상대 가방에 + 알림", xr2.ok and xr2.get("msg", "") == Inv.BAG_FULL and xeq.c3.count == 3 and cp2.count == 2 and Inv.index_of(xcont, cp2.id) >= 0)
+	# 칸이 다 찼고 다른 소모품: 내 3번 칸은 그대로, 가방도 차 있으면 거부 + 알림
+	var rf2 := Data.make_item("rock_flask")
+	Inv.add_auto(xcont, Vector2i(6, 8), rf2)
+	var xr3 := Inv.quick(xctx, "cont", rf2.id, ["bag"])
+	ok.call("칸·가방이 다 차면 교체 없이 '가방이 가득 찼습니다'", not xr3.ok and xr3.get("msg", "") == Inv.BAG_FULL and xeq.c3.base == "health_potion" and Inv.index_of(xcont, rf2.id) >= 0)
+	# 장비: 칸이 차 있으면 내 장비는 그대로, 가방으로
+	xbag.clear()
+	xctx.stores.bag.grid = Vector2i(10, 7)
+	var mych := Data.make_item("old_plate_chest")
+	xeq.chest = mych
+	var och := Data.make_item("soldier_armor")
+	Inv.add_auto(xcont, Vector2i(6, 8), och)
+	var xr4 := Inv.quick(xctx, "cont", och.id, ["bag"])
+	ok.call("상대 장비 우클릭: 내 상의는 그대로, 가방으로 들어옴", xr4.ok and xeq.chest.id == mych.id and Inv.index_of(xbag, och.id) >= 0)
+	# 빈 칸이면 바로 장착
+	xeq.head = null
+	var ohd := Data.make_item("traveler_helmet")
+	Inv.add_auto(xcont, Vector2i(6, 8), ohd)
+	var xr5 := Inv.quick(xctx, "cont", ohd.id, ["bag"])
+	ok.call("상대 장비 우클릭: 빈 칸이면 바로 장착", xr5.ok and xeq.head != null and xeq.head.id == ohd.id)
 	var bp := Data.make_item("bandage")
 	var bp2 := Data.make_item("bandage")
 	Inv.add_auto(d.bag, Inv.bag_size(d.cls), bp)
