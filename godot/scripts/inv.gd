@@ -307,12 +307,12 @@ static func _equip(ctx: Dictionary, src: String, it: Dictionary, slot: String) -
 		return {"ok": false, "msg": "양손 무기를 들고 있습니다"}
 	var back := src if src != "equip" and not ctx.stores[src].get("eq") is Dictionary else ("bag" if ctx.stores.has("bag") else "stash")
 	if src == "cont" and ctx.stores.has("bag"):
-		back = "bag" # 상자/상대 가방에서 끌어 장착: 내 장비는 상대 쪽으로 넘어가지 않음
-	# 양손 무기: 보조 칸의 장비를 저장소로
+		back = "bag" # 상자/상대 가방에서 끌어 장착: 밀려난 내 장비는 먼저 내 가방으로
+	# 양손 무기: 보조 칸의 장비를 저장소로 (가방이 차 있으면 상자/상대 가방으로)
 	if _is_2h(it) and slot in ["w1", "w2"]:
 		var off = eq.get(slot + "o")
 		if off != null and off.id != it.id:
-			if not _stash_back(ctx, back, off):
+			if not _stash_back(ctx, back, off) and not (_external(ctx, src) and _stash_back(ctx, "cont", off)):
 				return {"ok": false, "msg": "보조 장비를 넣을 자리가 없습니다"}
 			eq[slot + "o"] = null
 	var prev = eq.get(slot)
@@ -329,7 +329,8 @@ static func _equip(ctx: Dictionary, src: String, it: Dictionary, slot: String) -
 	if src != "equip" and ctx.stores[src].has("eq"):
 		# 상대 장비 칸에서 바로 내 장비로: 내 기존 장비는 가방으로
 		if prev != null:
-			if not _stash_back(ctx, back if back != src else "bag", prev):
+			# 끌어 장착은 의도적: 내 가방이 차 있으면 기존 장비는 시체 가방으로
+			if not _stash_back(ctx, back if back != src else "bag", prev) and not _stash_back(ctx, "cont", prev):
 				return {"ok": false, "msg": "기존 장비를 넣을 자리가 없습니다"}
 			eq[slot] = null
 		_take(ctx, src, it.id)
@@ -347,10 +348,9 @@ static func _equip(ctx: Dictionary, src: String, it: Dictionary, slot: String) -
 		eq[slot] = it
 		eq[from] = prev
 		return {"ok": true}
-	if src == "cont" and ctx.stores.has("bag"):
+	# 상자/상대 가방에서 끌어 장착: 밀려난 내 장비는 내 가방으로 (가방이 차 있으면 아래에서 그 자리와 맞교환)
+	if src == "cont" and ctx.stores.has("bag") and (prev == null or add_auto(ctx.stores.bag.list, ctx.stores.bag.grid, prev)):
 		if prev != null:
-			if not add_auto(ctx.stores.bag.list, ctx.stores.bag.grid, prev):
-				return {"ok": false, "msg": BAG_FULL}
 			eq[slot] = null
 		_take(ctx, src, it.id)
 		it.erase("x")
@@ -405,6 +405,10 @@ static func quick(ctx: Dictionary, src: String, id: String, order: Array) -> Dic
 
 
 const BAG_FULL := "가방이 가득 찼습니다"
+
+
+static func _external(ctx: Dictionary, src: String) -> bool:
+	return src in ["cont", "ceq"] and ctx.stores.has("cont")
 
 
 # 창고/상대 가방/상자/시체 장비에서 우클릭: 내 장비는 절대 바뀌지 않음
