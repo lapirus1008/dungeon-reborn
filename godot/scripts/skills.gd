@@ -113,6 +113,7 @@ static func pay(c, cost: float) -> bool:
 		c.game.notify(c, "toast", ["%s이(가) 부족합니다" % Data.RES_NAMES.get(c.res_type(), "자원")])
 		return false
 	c.res -= cost
+	c.res_idle = 0.0
 	return true
 
 
@@ -148,7 +149,10 @@ static func tick_resource(c, dt: float) -> void:
 	var rm: float = c.stats.get("regen_mul", 1.0)
 	match c.res_type():
 		"mana":
-			c.res = minf(c.res_max(), c.res + dt * 3.0 * rm)
+			# 마나: 쓰지 않을 때만 천천히 재생 (마지막 사용 후 1.5초부터)
+			c.res_idle += dt
+			if c.res_idle >= 1.5:
+				c.res = minf(c.res_max(), c.res + dt * 2.5 * rm)
 		"soul":
 			# 영혼 에너지는 쓰러진 적의 영혼을 흡수해서 얻음 (아주 느린 자연 회복)
 			c.res = minf(c.res_max(), c.res + dt * 0.4 * rm)
@@ -324,6 +328,10 @@ static func ray_hit(c, aim: Dictionary, max_d := 18.0) -> Dictionary:
 
 const BEAM_TICK := 0.32
 const BEAM_TICKS := 4
+const MANA_CELL := 20.0 # 마나 바 1칸
+# 레이저 한 번은 아주 조금, 마지막 폭발까지 쓰면 합쳐서 정확히 1칸
+const BEAM_TICK_COST := 1.0
+const BEAM_BLAST_COST := MANA_CELL - BEAM_TICK_COST * BEAM_TICKS
 
 
 static func tick_beam(c, dt: float, holding: bool, aim: Dictionary) -> void:
@@ -342,7 +350,7 @@ static func tick_beam(c, dt: float, holding: bool, aim: Dictionary) -> void:
 	c.beam_t += dt
 	c.cast = 0.15
 	if c.beam_n < BEAM_TICKS and c.beam_t >= BEAM_TICK * (c.beam_n + 1):
-		if not pay(c, 3.0):
+		if not pay(c, BEAM_TICK_COST):
 			c.beam_on = false
 			c.cd.lmb = 0.5
 			return
@@ -353,7 +361,11 @@ static func tick_beam(c, dt: float, holding: bool, aim: Dictionary) -> void:
 			g.hit(c, h.actor, 13.0 * c.dmg_mul(), {"from": c.pos, "ranged": true, "dtype": "fire", "weapon": true})
 		g.sfx("fire", c.pos, 0.1)
 	elif c.beam_n >= BEAM_TICKS and c.beam_t >= BEAM_TICK * (BEAM_TICKS + 1):
-		# 마지막: 조준한 곳에 큰 폭발
+		# 마지막: 조준한 곳에 큰 폭발 (마나가 모자라면 폭발 없이 끝)
+		if not pay(c, BEAM_BLAST_COST):
+			c.beam_on = false
+			c.cd.lmb = 0.5
+			return
 		var h := ray_hit(c, aim)
 		g.beam_fx(aim.origin + Vector3(0, -0.15, 0), h.point, Color(1.0, 0.75, 0.3), 0.25)
 		g.explode(Vector3(h.point.x, maxf(0.3, h.point.y), h.point.z), 2.6, 58.0 * c.dmg_mul(), c, "fire", {"dtype": "fire", "burn": 2})

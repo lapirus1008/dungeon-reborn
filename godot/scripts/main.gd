@@ -843,10 +843,12 @@ func _autotest() -> void:
 			var c0: Vector3 = mon.center()
 			q.pitch = atan2(c0.y - (q.pos.y + Player.EYE), q.pos.distance_to(Vector3(mon.pos.x, q.pos.y, mon.pos.z)))
 			var mh0: float = mon.hp
+			var mana0: float = q.res
 			Input.action_press("attack")
 			await _wait(1.9)
 			Input.action_release("attack")
 			var beam_dmg: float = mh0 - mon.hp
+			var mana_used: float = mana0 - q.res
 			await _wait(1.2)
 			q.equipment.w1 = Data.make_item("stormcaller_staff")
 			q.recalc()
@@ -859,7 +861,7 @@ func _autotest() -> void:
 			await get_tree().process_frame
 			Input.action_release("attack")
 			var struck: bool = game.zones.filter(func(z): return z.kind == "lightning").size() > z0
-			out.append("화염 지팡이 레이저 4타+폭발 피해 %.0f, 번개 지팡이 조준점 번개 %s" % [beam_dmg, "O" if struck else "X"])
+			out.append("화염 지팡이 레이저 4타+폭발 피해 %.0f (마나 %.0f 사용 = %.1f칸), 번개 지팡이 조준점 번개 %s" % [beam_dmg, mana_used, mana_used / Skills.MANA_CELL, "O" if struck else "X"])
 		elif cls2 == "swordmaster":
 			var n_sw := Skills.sword_count(q)
 			Skills._use(q, "q", q.aim(), 1.0)

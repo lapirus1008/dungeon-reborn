@@ -213,6 +213,21 @@ func _ready() -> void:
 	res_label.add_theme_color_override("font_shadow_color", Color.BLACK)
 	res_label.add_theme_constant_override("shadow_outline_size", 4)
 	res_stack.add_child(mana_bar)
+	# 마나는 칸으로 표시 (1칸 = 화염 지팡이 레이저 4타 + 폭발 한 번)
+	var cells := Control.new()
+	cells.name = "Cells"
+	cells.custom_minimum_size = Vector2(340, 14)
+	cells.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cells.draw.connect(func():
+		if game == null or game.player == null or game.player.res_type() != "mana":
+			return
+		var mx: float = game.player.res_max()
+		var n := int(mx / Skills.MANA_CELL)
+		for i in range(1, n + 1):
+			var x := 340.0 * i * Skills.MANA_CELL / mx
+			if x < 339.0:
+				cells.draw_rect(Rect2(x - 1, 0, 2, 14), Color(0, 0, 0, 0.85)))
+	res_stack.add_child(cells)
 	res_stack.add_child(res_label)
 	bars.add_child(res_stack)
 	root.add_child(bars)
@@ -688,6 +703,7 @@ func update_hud(dt: float) -> void:
 	if p.res_type() != "":
 		mana_bar.value = p.res / maxf(1.0, p.res_max())
 		res_label.text = "%s %d / %d" % [Data.RES_NAMES[p.res_type()], roundi(p.res), roundi(p.res_max())]
+		mana_bar.get_parent().get_node("Cells").queue_redraw()
 	var sts := []
 	if p.stun > 0.0:
 		sts.append("기절")

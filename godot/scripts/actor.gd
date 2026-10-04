@@ -70,6 +70,7 @@ var frozen := 0.0 # 서리 장벽 (무적, 행동 불가)
 var parry := 0.0
 var block_t := 0.0 # 방어 자세를 잡은 시간 (장검: 막 들자마자 맞으면 패링)
 var counter_t := 0.0 # 패링 후 우클릭 반격 가능 시간
+var res_idle := 99.0 # 마지막으로 자원을 쓴 뒤 지난 시간
 var beam_on := false # 화염 지팡이 레이저 중
 var beam_t := 0.0
 var beam_n := 0
