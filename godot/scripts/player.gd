@@ -49,6 +49,8 @@ var psi_rmb := true
 var combo_i := 0 # 로그 단검 콤보 단계
 var combo_t := 0.0
 var mana_item = null # 마나가 장전된 지금 무기
+var reload_t := 0.0 # 석궁 재장전 남은 시간
+var reload_item = null
 var held := "" # 손에 든 것: 소모품 칸("c3"/"c4"/"c5") 또는 "torch", 비어 있으면 무기
 var torch_t := 0.0 # 불붙은 횃불 남은 시간
 var puppet = null # 호스트 화면에 원격 플레이어를 그리는 NetActor
@@ -77,6 +79,11 @@ func _init(g, p: Vector3, c: String, eq: Dictionary, b: Array, pname := "당신"
 			if w != null and Data.base_of(w).get("cat", "") in ["staff", "orb"]:
 				w["mana"] = st.res_max
 		mana_item = _caster_weapon()
+	# 던전에 가지고 들어간 석궁은 모두 장전된 상태
+	for s2 in ["w1", "w2"]:
+		var cb = equipment.get(s2)
+		if cb != null and Data.base_of(cb).get("cat", "") == "crossbow":
+			cb["loaded"] = true
 		res = float(mana_item.get("mana", 0.0)) if mana_item != null else 0.0
 	block_mul = 1.0 - st.block_pct / 100.0 if st.block_pct > 0.0 else 0.4
 	charges = 1
@@ -103,6 +110,41 @@ func recalc() -> void:
 	_sync_weapon_mana()
 	block_mul = 1.0 - st.block_pct / 100.0 if st.block_pct > 0.0 else 0.4
 	game.on_weapon_changed(self)
+
+
+# 석궁: 볼트 칸에 볼트가 있어야 재장전 (쏘면 볼트 1개를 넣어 다시 장전, 볼트를 빼면 장전이 풀림)
+func active_crossbow():
+	var w = equipment.get("w%d" % wset)
+	return w if w != null and Data.base_of(w).get("cat", "") == "crossbow" else null
+
+
+func _tick_reload(dt: float) -> void:
+	var cb = active_crossbow()
+	if cb == null:
+		reload_t = 0.0
+		reload_item = null
+		return
+	if equipment.get("ammo") == null:
+		if cb.get("loaded", false):
+			cb["loaded"] = false
+			game.notify(self, "toast", ["볼트가 없어 장전이 풀렸습니다"])
+		reload_t = 0.0
+		return
+	if cb.get("loaded", false):
+		return
+	if reload_item != cb:
+		reload_item = cb
+		reload_t = 1.4 / stats.get("act_mul", 1.0)
+		game.sfx("draw_wood", pos, 0.05)
+	reload_t -= dt
+	if reload_t <= 0.0:
+		var am = equipment.ammo
+		am.count = int(am.get("count", 1)) - 1
+		if am.count <= 0:
+			equipment.ammo = null
+		cb["loaded"] = true
+		reload_item = null
+		game.inv_changed(self)
 
 
 # 지금 손에 든 세트의 마나 무기 (지팡이 또는 오브)
@@ -205,6 +247,7 @@ func update(dt: float) -> void:
 	Skills.tick_soul_storm(self, dt)
 	Skills.tick_barrier(self, dt)
 	Skills.tick_psionic(self, dt)
+	_tick_reload(dt)
 	if combo_t > 0.0:
 		combo_t -= dt
 	if cast > 0.0:
@@ -645,7 +688,7 @@ func net_state() -> Dictionary:
 		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion, cd.util],
 		"chg": charges, "hold": [hold_q, hold_e],
 		"s": [stun, slow, root, stealth, frozen, parry, immune, dr, spin_t, channel_t, charge_t, cast],
-		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "dw": draw_t,
+		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "dw": draw_t, "ld": active_crossbow() != null and active_crossbow().get("loaded", false), "rl": reload_t,
 		"k": [kills, pvp_kills], "ch": ch,
 	}
 
@@ -697,6 +740,10 @@ func apply_net_state(d: Dictionary) -> void:
 	dots.resize(int(d.dot))
 	blocking = d.bl
 	torch_t = d.get("tt", 0.0)
+	reload_t = d.get("rl", 0.0)
+	var cbw = active_crossbow()
+	if cbw != null:
+		cbw["loaded"] = d.get("ld", false)
 	var psi: int = int(d.get("psi", -1))
 	psi_on = psi >= 0
 	psi_n = maxi(0, psi)

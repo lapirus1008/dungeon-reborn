@@ -264,14 +264,14 @@ const PASSIVES := {
 # w1/w1o: 무기 세트 1 (주무기/보조, 1키), w2/w2o: 세트 2 (2키), c3/c4/c5: 소모품 칸 (3/4/5키, 각 최대 3개), torch: 횃불 칸 (G키), sw1~sw4: 소드마스터 검 슬롯
 const GEAR_SLOTS := ["w1", "w1o", "w2", "w2o", "head", "chest", "necklace", "ring1", "legs", "ring2", "hands", "feet"]
 const QUICK_SLOTS := ["c3", "c4", "c5"]
-const UTIL_SLOTS := ["c3", "c4", "c5", "torch"]
+const UTIL_SLOTS := ["c3", "c4", "c5", "torch", "ammo"]
 const SWORD_SLOTS := ["sw1", "sw2", "sw3", "sw4"]
 const ALL_SLOTS := GEAR_SLOTS + UTIL_SLOTS + SWORD_SLOTS
 const SLOT_NAMES := {
 	"w1": "세트 1", "w1o": "세트 1 보조", "w2": "세트 2", "w2o": "세트 2 보조",
 	"head": "머리", "chest": "상의", "hands": "장갑", "legs": "하의", "feet": "신발",
 	"necklace": "목걸이", "ring1": "반지", "ring2": "반지", "ring": "반지",
-	"c3": "3", "c4": "4", "c5": "5", "torch": "횃불",
+	"c3": "3", "c4": "4", "c5": "5", "torch": "횃불", "ammo": "볼트",
 	"sw1": "검 슬롯", "sw2": "검 슬롯", "sw3": "검 슬롯", "sw4": "검 슬롯",
 }
 const WEAPON_NAMES := {
@@ -542,6 +542,8 @@ func _build_items() -> void:
 	# ---- 소모품 / 투척 / 보물
 	_add("health_potion", {"name": "체력 물약", "slot": "consumable", "heal": 60, "value": 15, "icon": "🧪", "size": [1, 1], "rarity": 1, "stack": 3})
 	_add("bandage", {"name": "붕대", "slot": "consumable", "heal": 30, "value": 6, "icon": "🩹", "size": [1, 1], "rarity": 0, "stack": 3})
+	_add("bolts", {"name": "석궁 볼트", "slot": "ammo", "value": 1, "icon": "➶", "size": [1, 2], "rarity": 0, "stack": 30,
+		"desc": "석궁에 장전하는 볼트. 장비창 볼트 칸에 넣어 두어야 장전됩니다 (가방으로 내리면 장전이 풀림)."})
 	_add("torch", {"name": "횃불", "slot": "torch", "value": 3, "icon": "🕯", "size": [1, 2], "rarity": 0, "stack": 3, "burn": 120.0,
 		"desc": "G키로 불을 붙여 손에 듭니다. 2분 동안 주변을 밝게 비추고, 좌클릭으로 휘두를 수 있습니다."})
 	# 플라스크: 소모품 칸에 넣고 꺼낸 뒤 좌클릭으로 조준 지점에 던짐
@@ -699,6 +701,8 @@ func gear_slots_for(item: Dictionary, cls := "") -> Array:
 			return QUICK_SLOTS
 		"torch":
 			return ["torch"]
+		"ammo":
+			return ["ammo"]
 		"head", "chest", "hands", "legs", "feet", "necklace":
 			return [b.slot]
 	return []
@@ -755,7 +759,7 @@ func make_item(base_id: String, _rarity: int = -1) -> Dictionary:
 	var b: Dictionary = ITEM_BASES[base_id]
 	var rar: int = b.get("rarity", 0)
 	# 소모품/횃불은 등급이 없음: 같은 종류는 모두 같은 아이템으로 합쳐짐
-	var plain: bool = b.slot in ["consumable", "torch"]
+	var plain: bool = b.slot in ["consumable", "torch", "ammo"]
 	if plain:
 		rar = 0
 	var stats := {}
@@ -910,7 +914,7 @@ func weapon_classes(cat: String) -> Array:
 
 func can_equip(item: Dictionary, cls: String) -> bool:
 	var b := base_of(item)
-	if not is_gear(item) and not (b.slot in ["consumable", "utility", "torch"]):
+	if not is_gear(item) and not (b.slot in ["consumable", "utility", "torch", "ammo"]):
 		return false
 	if b.slot == "weapon" and not (b.cat in CLASSES[cls].weapons):
 		return false

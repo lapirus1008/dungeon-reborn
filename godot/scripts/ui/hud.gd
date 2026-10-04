@@ -234,7 +234,7 @@ func _ready() -> void:
 
 	skills_row = HBoxContainer.new()
 	skills_row.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	skills_row.position = Vector2(-318, -80)
+	skills_row.position = Vector2(-273, -80)
 	skills_row.add_theme_constant_override("separation", 6)
 	root.add_child(skills_row)
 
@@ -447,7 +447,7 @@ func start(g) -> void:
 	var cls: Dictionary = Data.CLASSES[g.player.cls]
 	UI.clear(skills_row)
 	skill_boxes.clear()
-	for k in ["rmb", "q", "e", "w1", "w2", "c3", "c4", "c5", "torch"]:
+	for k in ["q", "e", "w1", "w2", "c3", "c4", "c5", "torch"]:
 		var box := PanelContainer.new()
 		var sb := StyleBoxFlat.new()
 		sb.bg_color = Color(0.04, 0.03, 0.02, 0.85)
@@ -725,6 +725,11 @@ func update_hud(dt: float) -> void:
 		sts.append("회오리 검")
 	if p.immune > 0.0:
 		sts.append("면역")
+	var cbx = p.active_crossbow() if p.has_method("active_crossbow") else null
+	if cbx != null:
+		var am = p.equipment.get("ammo")
+		var n: int = int(am.get("count", 1)) if am != null else 0
+		sts.append("➶ 볼트 %d · %s" % [n, "장전됨" if cbx.get("loaded", false) else ("장전 중 %.1f" % p.reload_t if n > 0 else "볼트 없음")])
 	status_label.text = " · ".join(sts)
 	var tl := maxf(0.0, g.time_left)
 	timer_label.text = "%d:%02d" % [int(tl / 60.0), int(tl) % 60]
@@ -733,7 +738,7 @@ func update_hud(dt: float) -> void:
 	var ex: int = g.exit_portals().size()
 	portal_label.text = "🌀 탈출 포탈 %d개 열림" % ex if ex > 0 else "🌀 포탈 대기 중"
 
-	for k in ["rmb", "q", "e"]:
+	for k in ["q", "e"]:
 		var sbx: Dictionary = skill_boxes[k]
 		var def := Skills.skill_def(p, k)
 		if sbx.name.text != def.name:

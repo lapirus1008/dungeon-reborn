@@ -12,7 +12,7 @@ const LAYOUT := {
 	"head": Rect2i(3, 0, 2, 2),
 	"w2": Rect2i(6, 0, 1, 3), "w2o": Rect2i(7, 0, 1, 3),
 	"chest": Rect2i(3, 2, 2, 3), "necklace": Rect2i(5, 2, 1, 1),
-	"torch": Rect2i(0, 5, 1, 2),
+	"torch": Rect2i(0, 5, 1, 2), "ammo": Rect2i(1, 5, 1, 2),
 	"ring1": Rect2i(2, 5, 1, 1), "legs": Rect2i(3, 5, 2, 3), "ring2": Rect2i(5, 5, 1, 1),
 	"hands": Rect2i(2, 6, 1, 2), "feet": Rect2i(5, 6, 1, 2),
 	"c3": Rect2i(7, 5, 1, 1), "c4": Rect2i(7, 6, 1, 1), "c5": Rect2i(7, 7, 1, 1),

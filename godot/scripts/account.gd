@@ -10,7 +10,7 @@ const MAX_CHARS := 8
 
 # 상인 목록 (가격은 서버가 이 표로 검증)
 const SHOP := [
-	["health_potion", 30], ["bandage", 12], ["torch", 6], ["fire_flask", 24], ["rock_flask", 24], ["lightning_flask", 30], ["mimic_flask", 40],
+	["health_potion", 30], ["bandage", 12], ["torch", 6], ["bolts", 30, 30], ["fire_flask", 24], ["rock_flask", 24], ["lightning_flask", 30], ["mimic_flask", 40],
 	["old_sword", 30], ["old_longsword", 40], ["old_dagger", 25], ["old_mace", 30], ["old_staff", 35], ["old_shield", 30], ["old_crossbow", 40],
 	["old_plate_chest", 30], ["old_leather_chest", 25], ["old_cloth_chest", 20],
 ]
@@ -140,7 +140,7 @@ static func _fix_item(it: Dictionary) -> void:
 		it["fixed"] = fresh_item.fixed
 	if it.get("stats", {}).has("dmg"):
 		it.stats.dmg = int(it.stats.dmg)
-	if Data.ITEM_BASES.get(it.base, {}).get("slot", "") in ["consumable", "torch"]:
+	if Data.ITEM_BASES.get(it.base, {}).get("slot", "") in ["consumable", "torch", "ammo"]:
 		it["rarity"] = 0
 		it["count"] = clampi(int(it.count), 1, Data.max_stack(it))
 
@@ -273,6 +273,14 @@ static func all_items(d: Dictionary) -> Array:
 	return out
 
 
+# 한 번에 사는 수량 (볼트는 30개 묶음)
+static func shop_count(base: String) -> int:
+	for e in SHOP:
+		if e[0] == base:
+			return int(e[2]) if e.size() > 2 else 1
+	return 1
+
+
 static func shop_price(base: String) -> int:
 	for e in SHOP:
 		if e[0] == base:
@@ -399,6 +407,7 @@ static func apply(s: Dictionary, op: String, args: Array) -> Dictionary:
 			if price < 0 or not Data.ITEM_BASES.has(base) or s.gold < price:
 				return _r(false)
 			var it := Data.make_item(base)
+			it.count = shop_count(base)
 			if not Inv.add_auto(s.stash, Inv.STASH, it):
 				return _r(false, "보관함이 가득 찼습니다")
 			s.gold -= price

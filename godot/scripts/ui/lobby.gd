@@ -718,7 +718,7 @@ func _class_detail(cur: Dictionary) -> RichTextLabel:
 	t += "[font_size=12][color=#9a8e7a]무기: %s[/color][/font_size]\n" % ", ".join(cur.weapons.map(func(w): return Data.WEAPON_NAMES.get(w, w)))
 	if cur.res != "":
 		t += "[font_size=12][color=#8fd0ff]자원: %s[/color][/font_size]\n" % Data.RES_NAMES[cur.res]
-	var keys := {"lmb": "좌클릭", "rmb": "우클릭", "lmb_p": "표범 좌클릭", "rmb_p": "표범 우클릭"}
+	var keys := {"lmb": "좌클릭", "lmb_p": "표범 좌클릭"}
 	for k in keys:
 		if cur.skills.has(k):
 			var sk: Dictionary = cur.skills[k]
@@ -813,7 +813,7 @@ func _refresh_create_screen() -> void:
 	t += "[font_size=14][color=#c9c0b0]%s[/color][/font_size]\n\n" % c.desc
 	t += "[font_size=15][color=#d9b45a]역할[/color][/font_size]\n[font_size=14]%s[/font_size]\n\n" % CLASS_ROLE.get(create_cls, "")
 	t += "[font_size=15][color=#d9b45a]특징[/color][/font_size]\n[font_size=14]"
-	for k in ["lmb", "rmb"]:
+	for k in ["lmb"]:
 		var sk: Dictionary = c.skills[k]
 		t += "· %s %s: %s\n" % ["좌클릭" if k == "lmb" else "우클릭", sk.name, sk.desc]
 	if c.res != "":

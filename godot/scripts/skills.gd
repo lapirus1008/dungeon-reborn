@@ -57,10 +57,7 @@ static func is_melee(c) -> bool:
 
 # 우클릭 = 방어 자세 (방패, 한손검, 장검, 단검, 철퇴 모두 각자 방어 자세)
 static func uses_block(c) -> bool:
-	if c.panther:
-		return false
-	var off := Data.offhand_cat(c.equipment, c.wset) if c.get("equipment") != null else ""
-	return off == "shield" or wcat(c) in ["sword", "longsword", "mace", "dagger"]
+	return true # 우클릭은 무조건 방어 (무기마다 막는 양만 다름)
 
 
 # 무기 종류별 근접 공격 (bash = 지팡이 치기)
@@ -288,6 +285,11 @@ static func fire_basic(c, aim: Dictionary) -> bool:
 	var prof := ranged_profile(c)
 	if prof.is_empty() or c.cd.lmb > 0.0:
 		return false
+	if c is Player and wcat(c) == "crossbow":
+		var cb = c.active_crossbow()
+		if cb == null or not cb.get("loaded", false):
+			return false
+		cb["loaded"] = false
 	if not pay(c, prof.cost):
 		return false
 	c.cd.lmb = prof.cd / c.stats.get("act_mul", 1.0)
