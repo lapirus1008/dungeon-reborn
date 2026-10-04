@@ -7,9 +7,9 @@ extends RefCounted
 const STASH := Vector2i(12, 10)
 const CONT_W := 6
 # 직업마다 가방 크기가 다르다 (가벼운 직업은 넓게, 마법사는 좁게)
-# 가방 크기 (가로 6칸): 인간 종족 7줄(42칸), 언데드 종족 6줄(36칸)
-const HUMAN_BAG := Vector2i(6, 7)
-const UNDEAD_BAG := Vector2i(6, 6)
+# 가방 크기 (가로 10칸): 인간 종족 7줄, 언데드 종족 6줄
+const HUMAN_BAG := Vector2i(10, 7)
+const UNDEAD_BAG := Vector2i(10, 6)
 const BAG := {
 	"fighter": HUMAN_BAG, "rogue": HUMAN_BAG, "priest": HUMAN_BAG, "pyromancer": HUMAN_BAG, "swordmaster": HUMAN_BAG, "druid": HUMAN_BAG,
 	"deathknight": UNDEAD_BAG, "cryomancer": UNDEAD_BAG,
@@ -134,7 +134,7 @@ static func move(ctx: Dictionary, src: String, id: String, dst: String, x: int, 
 		return {"ok": false}
 	if dst == "equip":
 		return _equip(ctx, src, it, slot)
-	if not ctx.stores.has(dst):
+	if not ctx.stores.has(dst) or ctx.stores[dst].has("eq"):
 		return {"ok": false}
 	var st: Dictionary = ctx.stores[dst]
 	if src == dst and x >= 0 and int(it.get("x", -1)) == x and int(it.get("y", -1)) == y and bool(it.get("r", false)) == r:
@@ -193,6 +193,13 @@ static func _peek(ctx: Dictionary, src: String, id: String):
 		return null
 	if not ctx.stores.has(src):
 		return null
+	if ctx.stores[src].has("eq"):
+		# 쓰러진 상대의 장비 칸 (꺼내기만 가능)
+		var eqs: Dictionary = ctx.stores[src].eq
+		for s in eqs:
+			if eqs[s] != null and eqs[s].id == id:
+				return eqs[s]
+		return null
 	var i := index_of(ctx.stores[src].list, id)
 	return ctx.stores[src].list[i] if i >= 0 else null
 
@@ -210,6 +217,12 @@ static func _take(ctx: Dictionary, src: String, id: String) -> void:
 		var s := slot_of(ctx.equipment, id)
 		if s != "":
 			ctx.equipment[s] = null
+		return
+	if ctx.stores[src].has("eq"):
+		var eqs: Dictionary = ctx.stores[src].eq
+		for s in eqs:
+			if eqs[s] != null and eqs[s].id == id:
+				eqs[s] = null
 		return
 	var list: Array = ctx.stores[src].list
 	var i := index_of(list, id)
@@ -260,6 +273,20 @@ static func _equip(ctx: Dictionary, src: String, it: Dictionary, slot: String) -
 		return {"ok": false, "msg": "장착할 수 없는 물건입니다"}
 	var eq: Dictionary = ctx.equipment
 	var from := slot_of(eq, it.id) if src == "equip" else ""
+	if slot == "" and Data.base_of(it).slot == "consumable":
+		# 소모품 우클릭: 같은 종류 칸에 겹치기 → 빈 칸 → 다 차 있으면 첫 번째 칸(3)과 교체
+		for q in slots:
+			var o = eq.get(q)
+			if o != null and o.id != it.id and o.base == it.base and int(o.get("count", 1)) < Data.max_stack(it):
+				slot = q
+				break
+		if slot == "":
+			for q in slots:
+				if eq.get(q) == null:
+					slot = q
+					break
+		if slot == "":
+			slot = slots[0]
 	if slot == "":
 		# 활성 세트 우선, 빈 칸 우선
 		var ws := int(ctx.get("wset", 1))
@@ -277,7 +304,7 @@ static func _equip(ctx: Dictionary, src: String, it: Dictionary, slot: String) -
 	# 양손 무기를 든 세트의 보조 칸에는 넣을 수 없음
 	if slot.length() == 3 and slot.ends_with("o") and _is_2h(eq.get(slot.left(2))):
 		return {"ok": false, "msg": "양손 무기를 들고 있습니다"}
-	var back := src if src != "equip" else ("bag" if ctx.stores.has("bag") else "stash")
+	var back := src if src != "equip" and not ctx.stores[src].get("eq") is Dictionary else ("bag" if ctx.stores.has("bag") else "stash")
 	# 양손 무기: 보조 칸의 장비를 저장소로
 	if _is_2h(it) and slot in ["w1", "w2"]:
 		var off = eq.get(slot + "o")
@@ -295,6 +322,18 @@ static func _equip(ctx: Dictionary, src: String, it: Dictionary, slot: String) -
 		it.count = int(it.get("count", 1)) - n
 		if it.count <= 0:
 			_take(ctx, src, it.id)
+		return {"ok": true}
+	if src != "equip" and ctx.stores[src].has("eq"):
+		# 상대 장비 칸에서 바로 내 장비로: 내 기존 장비는 가방으로
+		if prev != null:
+			if not _stash_back(ctx, back if back != src else "bag", prev):
+				return {"ok": false, "msg": "기존 장비를 넣을 자리가 없습니다"}
+			eq[slot] = null
+		_take(ctx, src, it.id)
+		it.erase("x")
+		it.erase("y")
+		it.r = false
+		eq[slot] = it
 		return {"ok": true}
 	if src == "equip":
 		# 장비 칸끼리 교환 (예: 반지 1 <-> 반지 2, 세트 1 <-> 세트 2)

@@ -1,24 +1,25 @@
 # 장비창 (던전본 배치)
-#  세트1(주/보조, 1키) · 머리 · 세트2(주/보조, 2키) / 상의 · 목걸이 / 소모품 벨트 3번·4번 (각 3칸)
-#  반지 · 하의 · 반지 / 장갑(왼쪽 아래) · 신발(오른쪽 아래) / 검 슬롯 4칸(소드마스터)
+#  세트1(주/보조, 1키) · 머리 · 세트2(주/보조, 2키) / 상의 · 목걸이
+#  횃불(G) · 반지 · 하의 · 반지 · 소모품 3/4/5 / 장갑(하의 왼쪽 아래) · 신발(하의 오른쪽 아래) / 검 슬롯 4칸(소드마스터)
 # 드래그로 장착/교체 · 우클릭: 해제 · Shift+클릭: 버리기(던전) / 보관함으로
+# store가 "equip"가 아니면 (쓰러진 상대의 장비) 꺼내기만 가능
 class_name EquipView
 extends Control
 
-# 칸 위치와 크기 (칸 단위, 8 x 10)
+# 칸 위치와 크기 (칸 단위, 8 x 8)
 const LAYOUT := {
 	"w1": Rect2i(0, 0, 1, 3), "w1o": Rect2i(1, 0, 1, 3),
 	"head": Rect2i(3, 0, 2, 2),
 	"w2": Rect2i(6, 0, 1, 3), "w2o": Rect2i(7, 0, 1, 3),
 	"chest": Rect2i(3, 2, 2, 3), "necklace": Rect2i(5, 2, 1, 1),
-	"c3a": Rect2i(5, 6, 1, 1), "c3b": Rect2i(6, 6, 1, 1), "c3c": Rect2i(7, 6, 1, 1),
-	"c4a": Rect2i(5, 7, 1, 1), "c4b": Rect2i(6, 7, 1, 1), "c4c": Rect2i(7, 7, 1, 1),
+	"torch": Rect2i(0, 5, 1, 2),
 	"ring1": Rect2i(2, 5, 1, 1), "legs": Rect2i(3, 5, 2, 3), "ring2": Rect2i(5, 5, 1, 1),
-	"hands": Rect2i(0, 8, 2, 2), "feet": Rect2i(6, 8, 2, 2),
-	"sw1": Rect2i(2, 10, 1, 1), "sw2": Rect2i(3, 10, 1, 1), "sw3": Rect2i(4, 10, 1, 1), "sw4": Rect2i(5, 10, 1, 1),
+	"hands": Rect2i(2, 6, 1, 2), "feet": Rect2i(5, 6, 1, 2),
+	"c3": Rect2i(7, 5, 1, 1), "c4": Rect2i(7, 6, 1, 1), "c5": Rect2i(7, 7, 1, 1),
+	"sw1": Rect2i(2, 8, 1, 1), "sw2": Rect2i(3, 8, 1, 1), "sw3": Rect2i(4, 8, 1, 1), "sw4": Rect2i(5, 8, 1, 1),
 }
 const GRID_W := 8
-const GRID_H := 10
+const GRID_H := 8
 
 var equipment: Dictionary = {}
 var cls := "fighter"
@@ -27,6 +28,7 @@ var cell := 36.0
 var on_op: Callable
 var hint := "우클릭: 해제 · 드래그: 옮기기"
 var drop_outside := false
+var store := "equip"
 var _hover := ""
 
 
@@ -45,10 +47,18 @@ func _exit_tree() -> void:
 	InvDrag.unregister(self)
 
 
+# 양손 무기를 든 세트는 주무기 칸이 보조 칸까지 차지
+func _two_handed(set_slot: String) -> bool:
+	var it = equipment.get(set_slot)
+	return it != null and Data.base_of(it).slot == "weapon" and Data.base_of(it).cat in Data.TWO_HANDED
+
+
 func _slots() -> Array:
 	var out := []
 	for s in LAYOUT:
 		if s.begins_with("sw") and cls != "swordmaster":
+			continue
+		if s in ["w1o", "w2o"] and _two_handed(s.left(2)):
 			continue
 		out.append(s)
 	return out
@@ -109,6 +119,8 @@ func _short_name(s: String, r: Rect2) -> String:
 
 func _rect(s: String) -> Rect2:
 	var r: Rect2i = LAYOUT[s]
+	if s in ["w1", "w2"] and _two_handed(s):
+		r = r.merge(LAYOUT[s + "o"])
 	return Rect2(Vector2(r.position) * cell, Vector2(r.size) * cell).grow(-2)
 
 
@@ -121,14 +133,17 @@ func slot_at(local: Vector2) -> String:
 
 func _draw() -> void:
 	var drag_ok := []
-	if InvDrag.is_active():
+	if InvDrag.is_active() and store == "equip":
 		drag_ok = Inv.valid_slots(InvDrag.inst.item, cls)
-	# 활성 무기 세트 표시
-	var act := ["w1", "w1o"] if wset == 1 else ["w2", "w2o"]
-	var ar := _rect(act[0]).merge(_rect(act[1])).grow(2)
-	draw_rect(ar, Color(1.0, 0.82, 0.3, 0.85), false, 2.0)
+	# 무기 세트 이름 (사용 중인 세트는 금색 테두리)
 	var font := get_theme_default_font()
-	draw_string(font, Vector2(ar.position.x, ar.end.y + 12), "▲ 사용 중 (1/2키)", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1.0, 0.82, 0.3))
+	for n in [1, 2]:
+		var lo: Rect2i = LAYOUT["w%d" % n].merge(LAYOUT["w%do" % n])
+		var ar := Rect2(Vector2(lo.position) * cell, Vector2(lo.size) * cell).grow(-2).grow(2)
+		var on = n == wset
+		if on:
+			draw_rect(ar, Color(1.0, 0.82, 0.3, 0.85), false, 2.0)
+		draw_string(font, Vector2(ar.position.x, ar.end.y + 13), "세트 %d (%d키)" % [n, n], HORIZONTAL_ALIGNMENT_CENTER, ar.size.x, 11, Color(1.0, 0.82, 0.3) if on else UI.MUTED)
 	for s in _slots():
 		var r := _rect(s)
 		var it = equipment.get(s)
@@ -145,7 +160,7 @@ func _draw() -> void:
 
 func drop_target(gp: Vector2, _d) -> Dictionary:
 	var s := slot_at(gp - global_position)
-	if s == "":
+	if s == "" or store != "equip":
 		return {}
 	return {"dst": "equip", "slot": s}
 
@@ -169,13 +184,13 @@ func _gui_input(ev: InputEvent) -> void:
 		accept_event()
 		if ev.button_index == MOUSE_BUTTON_RIGHT:
 			UI.hide_tip()
-			on_op.call("quick", ["equip", it.id])
+			on_op.call("quick", [store, it.id])
 		elif ev.button_index == MOUSE_BUTTON_LEFT:
 			if ev.shift_pressed:
-				on_op.call("transfer", ["equip", it.id])
+				on_op.call("transfer", [store, it.id])
 			else:
 				var r := _rect(s)
-				InvDrag.begin(it, "equip", self, Vector2(0.5, 0.5), cell)
+				InvDrag.begin(it, store, self, Vector2(0.5, 0.5), cell)
 
 
 func _notification(what: int) -> void:

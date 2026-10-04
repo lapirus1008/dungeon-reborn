@@ -256,7 +256,9 @@ static func humanoid(o: Dictionary) -> Node3D:
 	rig.add_child(leg_l)
 	rig.add_child(leg_r)
 
-	var wpn := weapon(wpn_type, o.get("orb", Color(0.4, 0.67, 1.0)))
+	if wpn_type == "orb":
+		wpn_type = "staff"
+	var wpn := weapon(wpn_type, o.get("orb", Color(0.4, 0.67, 1.0))) if wpn_type != "unarmed" else Node3D.new()
 	if wpn_type == "bow":
 		wpn.rotation = Vector3(0, PI / 2, 0)
 		wpn.position = Vector3(0, -0.65, -0.05)
@@ -550,6 +552,30 @@ static func held_item_view(base_id: String) -> Node3D:
 	var hand := box(Vector3(0.09, 0.09, 0.26), mat(Color(0.85, 0.66, 0.51)))
 	hand.position = Vector3(0.0, -0.06, 0.16)
 	r.add_child(hand)
+	var l := Node3D.new()
+	root.add_child(l)
+	root.set_meta("R", r)
+	root.set_meta("L", l)
+	return root
+
+
+# 1인칭: 불붙은 횃불
+static func torch_view() -> Node3D:
+	var root := Node3D.new()
+	var r := Node3D.new()
+	root.add_child(r)
+	var stick := cyl(0.025, 0.035, 0.5, mat(Color(0.35, 0.22, 0.1)), 6)
+	stick.rotation.x = -0.35
+	stick.position = Vector3(0, 0.1, -0.05)
+	r.add_child(stick)
+	var flame := cyl(0.0, 0.07, 0.18, glow_mat(Color(1.0, 0.6, 0.2), 4.0), 6)
+	flame.position = Vector3(0, 0.38, -0.15)
+	r.add_child(flame)
+	var hand := box(Vector3(0.09, 0.09, 0.26), mat(Color(0.85, 0.66, 0.51)))
+	hand.position = Vector3(0.0, -0.06, 0.16)
+	r.add_child(hand)
+	for n in root.find_children("*", "GeometryInstance3D", true, false):
+		(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var l := Node3D.new()
 	root.add_child(l)
 	root.set_meta("R", r)
@@ -958,7 +984,7 @@ static func ice_block(h: float) -> MeshInstance3D:
 
 # ------------------------------------------------------------------ 1인칭 뷰모델 (카메라 자식)
 # res://assets/viewmodels/<직업>.glb 가 있으면 교체 (자식 노드 "R", "L"이 있으면 손 애니메이션이 적용됨)
-static func view_model(cls: String, wmodel: String, panther := false) -> Node3D:
+static func view_model(cls: String, wmodel: String, panther := false, off := "") -> Node3D:
 	var key := "panther" if panther else cls
 	var custom := AssetRegistry.scene("viewmodels", key)
 	if custom != null:
@@ -1025,18 +1051,29 @@ static func view_model(cls: String, wmodel: String, panther := false) -> Node3D:
 				w.rotation = Vector3(-1.2, 0, 0)
 				w.scale = Vector3.ONE * 0.7
 				R.add_child(w)
-				var w2 := weapon("dagger")
-				w2.position = Vector3(0, 0, -0.14)
-				w2.rotation = Vector3(-1.2, 0, 0)
-				w2.scale = Vector3.ONE * 0.7
-				L.add_child(w2)
+			"unarmed", "orb":
+				pass # 맨손 (보조 칸의 오브/단검/방패는 아래에서 왼손에)
+			"crossbow":
+				w = Node3D.new()
+				var wood := mat(Color(0.4, 0.27, 0.14))
+				var stock := box(Vector3(0.06, 0.06, 0.5), wood)
+				stock.position.z = -0.15
+				w.add_child(stock)
+				var limb := box(Vector3(0.5, 0.03, 0.04), mat(Color(0.3, 0.3, 0.32), 0.4, 0.7))
+				limb.position.z = -0.38
+				w.add_child(limb)
+				w.rotation = Vector3(-0.1, 0, 0)
+				R.add_child(w)
+				L.position = Vector3(-0.1, -0.38, -0.7)
 			"mace":
 				w = weapon("mace")
 				w.position = Vector3(0, 0, -0.12)
 				w.rotation = Vector3(-0.6, 0, -0.2)
 				w.scale = Vector3.ONE * 0.6
 				R.add_child(w)
-				if AssetRegistry.theme_section("weapons").has("book"):
+				if off != "":
+					pass
+				elif AssetRegistry.theme_section("weapons").has("book"):
 					var tb := weapon("book")
 					tb.position = Vector3(0.05, 0.06, -0.22)
 					tb.rotation = Vector3(-0.3, 0.3, 0)
@@ -1054,12 +1091,23 @@ static func view_model(cls: String, wmodel: String, panther := false) -> Node3D:
 				w.rotation = Vector3(-0.35, 0, -0.12)
 				w.scale = Vector3.ONE * 0.42
 				R.add_child(w)
-		if cls == "fighter" and AssetRegistry.theme_section("weapons").has("shield"):
+		# 보조 칸 (현재 세트): 방패 / 단검 / 오브
+		if off == "dagger":
+			var w2 := weapon("dagger")
+			w2.position = Vector3(0, 0, -0.14)
+			w2.rotation = Vector3(-1.2, 0, 0)
+			w2.scale = Vector3.ONE * 0.7
+			L.add_child(w2)
+		elif off == "orb":
+			var ob := orb(orb_color(cls), 0.09, false)
+			ob.position = Vector3(0.02, 0.04, -0.22)
+			L.add_child(ob)
+		elif off == "shield" and AssetRegistry.theme_section("weapons").has("shield"):
 			var tsh := weapon("shield")
 			tsh.position = Vector3(0.02, 0.0, -0.3)
 			tsh.rotation = Vector3(0, 0.25, 0)
 			L.add_child(tsh)
-		elif cls == "fighter":
+		elif off == "shield":
 			var sh := cyl(0.2, 0.2, 0.04, mat(Color(0.29, 0.2, 0.09)), 14)
 			sh.rotation.x = PI / 2
 			sh.position = Vector3(-0.06, -0.02, -0.3)

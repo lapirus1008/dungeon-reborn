@@ -242,6 +242,9 @@ func build_level(d: int) -> void:
 	else:
 		player.pos = spawn_at.call(0, 0)
 		used_spawns = 1
+	if d == 1:
+		for p in players:
+			p.give_start_torches()
 	for p in players:
 		var rr = dungeon.room_at(p.pos.x, p.pos.z)
 		if rr != null and not (rr in used_rooms):
@@ -362,7 +365,7 @@ func _make_view() -> void:
 	player_light.shadow_enabled = shadows_enabled()
 	player_light.shadow_bias = 0.08
 	world.add_child(player_light)
-	view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment, player.wset), player.panther)
+	view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment, player.wset), player.panther, Data.offhand_cat(player.equipment, player.wset))
 	camera.add_child(view_model)
 	shield_bubble = Models.shield_bubble(0.75)
 	shield_bubble.visible = false
@@ -1307,10 +1310,12 @@ func _rebuild_view_model() -> void:
 		return
 	if view_model != null and is_instance_valid(view_model):
 		view_model.queue_free()
-	if player.held != "" and player.equipment.get(Data.BELT[player.held][0]) != null:
-		view_model = Models.held_item_view(player.equipment[Data.BELT[player.held][0]].base)
+	if player.held == "torch":
+		view_model = Models.torch_view()
+	elif player.held != "" and player.equipment.get(player.held) != null:
+		view_model = Models.held_item_view(player.equipment[player.held].base)
 	else:
-		view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment, player.wset), player.panther)
+		view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment, player.wset), player.panther, Data.offhand_cat(player.equipment, player.wset))
 	camera.add_child(view_model)
 
 
@@ -1465,7 +1470,7 @@ func on_death(actor, src) -> void:
 	elif actor.kind == "bot":
 		if is_human(src):
 			src.pvp_kills += 1
-		drop_bag(actor.pos, actor.all_items(), actor.name + "의 시체", Color(0.2, 0.33, 0.67))
+		drop_corpse(actor, actor.name + "의 시체", Color(0.2, 0.33, 0.67))
 		actor.hp_bar.visible = false
 	elif is_human(actor):
 		if is_human(src) and src != actor:
@@ -1578,7 +1583,9 @@ func _add_bag_node(id: int, pp: Vector3, color: Color, nm: String) -> Dictionary
 
 
 func refresh_bag(bag: Dictionary) -> void:
-	if bag.items.is_empty():
+	if bag.kind == "corpse":
+		bag.n = _corpse_count(bag)
+	if bag.items.is_empty() and (bag.kind != "corpse" or bag.n == 0):
 		if is_instance_valid(bag.node):
 			bag.node.queue_free()
 		loot_bags.erase(bag)
@@ -1587,7 +1594,7 @@ func refresh_bag(bag: Dictionary) -> void:
 				close_container_for(p)
 		_bc("bag_del", [bag.id])
 	else:
-		_bc("bag_n", [bag.id, bag.items.size()])
+		_bc("bag_n", [bag.id, bag.n if bag.kind == "corpse" else bag.items.size()])
 
 
 func open_chest(chest: Dictionary, _by) -> void:
@@ -1616,7 +1623,39 @@ func bot_extract(bot) -> void:
 
 # ------------------------------------------------------------------ 상자/전리품 창 (서버 측, 플레이어별)
 func cont_view(o: Dictionary) -> Dictionary:
-	return {"cid": ("c%d" if o.kind == "chest" else "b%d") % o.id, "id": o.id, "name": o.name, "items": o.items, "pos": o.pos, "kind": o.kind, "gw": o.get("gw", Inv.CONT_W), "gh": o.get("gh", 8)}
+	return {"cid": ("c%d" if o.kind == "chest" else "b%d") % o.id, "id": o.id, "name": o.name, "items": o.items, "pos": o.pos, "kind": o.kind, "gw": o.get("gw", Inv.CONT_W), "gh": o.get("gh", 8),
+		"equipment": o.get("equipment", {}), "cls": o.get("cls", "")}
+
+
+# 쓰러진 모험가: 장비 칸과 가방이 그대로 보이는 시체
+func drop_corpse(a, nm: String, color: Color) -> void:
+	var eq := {}
+	for s in Data.ALL_SLOTS:
+		var it = a.equipment.get(s)
+		eq[s] = it.duplicate(true) if it != null else null
+	var bag: Array = a.bag.duplicate(true)
+	if bag.is_empty() and eq.values().all(func(v): return v == null):
+		return
+	var pp := Vector3(a.pos.x, 0, a.pos.z)
+	bag_seq += 1
+	var b := _add_bag_node(bag_seq, pp, color, nm)
+	b.kind = "corpse"
+	b.equipment = eq
+	b.cls = a.cls
+	b.items = bag
+	var gs := Inv.bag_size(a.cls)
+	b.gw = gs.x
+	b.gh = gs.y
+	b.n = _corpse_count(b)
+	_bc("bag_add", [bag_seq, pp, color, nm, b.n])
+
+
+func _corpse_count(o: Dictionary) -> int:
+	var n: int = o.items.size()
+	for s in o.get("equipment", {}):
+		if o.equipment[s] != null:
+			n += 1
+	return n
 
 
 func open_container_for(p, o: Dictionary) -> void:
@@ -1647,7 +1686,7 @@ func container_changed(o: Dictionary) -> void:
 					hud.refresh_panels()
 			elif p.peer_id > 1:
 				Net.send_ev(p.peer_id, "cont_upd", [cont_view(o)])
-	if o.kind == "bag":
+	if o.kind in ["bag", "corpse"]:
 		refresh_bag(o)
 
 
@@ -1673,6 +1712,8 @@ func _ctx_of(p) -> Dictionary:
 	var stores := {"bag": {"list": p.bag, "grid": Inv.bag_size(p.cls)}}
 	if p.container != null:
 		stores["cont"] = {"list": p.container.items, "grid": Vector2i(p.container.get("gw", Inv.CONT_W), p.container.get("gh", 8))}
+		if p.container.kind == "corpse":
+			stores["ceq"] = {"eq": p.container.equipment, "list": [], "grid": Vector2i.ZERO}
 	return {"cls": p.cls, "equipment": p.equipment, "stores": stores}
 
 
@@ -1702,18 +1743,14 @@ func inv_op(p, op: String, args: Array) -> void:
 			var it = Inv._peek(_ctx_of(p), src, str(args[1]))
 			if it == null:
 				return
-			# 가방의 소모품은 오른쪽 클릭으로 사용
-			if src == "bag" and Data.base_of(it).slot == "consumable":
-				_use_item(p, it)
-				return
 			var order := ["bag"] if src != "bag" else ["cont"]
 			res = Inv.quick(_ctx_of(p), src, it.id, order)
 		"transfer":
 			if args.size() < 2:
 				return
 			var src := str(args[0])
-			# 던전본처럼: 상자가 열려 있지 않으면 Shift+클릭 = 바닥에 버리기
-			if src != "cont" and p.container == null:
+			# 던전본처럼: 내 인벤토리(가방/장비)에서 Shift+클릭 = 항상 바닥에 버리기
+			if src != "cont":
 				inv_op(p, "drop", args)
 				return
 			res = Inv.transfer(_ctx_of(p), src, str(args[1]), ["cont", "bag"] if src == "equip" else (["bag"] if src == "cont" else ["cont"]))
@@ -1917,7 +1954,7 @@ func finish_player(p, success: bool, killer := "") -> void:
 				notify(h, "killfeed", ["%s 이(가) 탈출했습니다" % p.name, false, true])
 	elif online() and items.size():
 		# 함께하기: 쓰러진 자리에 소지품이 떨어져 다른 사람이 주울 수 있음
-		drop_bag(p.pos, items.duplicate(true), "%s의 시체" % p.name, Color(0.55, 0.25, 0.2))
+		drop_corpse(p, "%s의 시체" % p.name, Color(0.55, 0.25, 0.2))
 	if p == player:
 		result = r
 		end_timer = 0.3 if success else 2.5
@@ -1984,7 +2021,9 @@ func find_interactable(pl = null):
 
 
 func _item_count(o: Dictionary) -> int:
-	return o.items.size() if is_auth() else int(o.get("n", 0))
+	if o.kind == "corpse" or not is_auth():
+		return int(o.get("n", 0))
+	return o.items.size()
 
 
 func _prompt_for(o) -> String:
@@ -2199,7 +2238,10 @@ func _update_view(dt: float) -> void:
 		return
 	player.update_camera(camera, view_model, shield_bubble, dt)
 	player_light.position = camera.position + Vector3(0, 0.6, 0) - Actor.fwd(player.yaw) * 0.5
-	player_light.light_energy = 1.3 + sin(time * 13.0) * 0.08 + sin(time * 7.3) * 0.1
+	# 횃불을 들면 훨씬 밝고 넓게
+	var lit: bool = player.held == "torch"
+	player_light.omni_range = 26.0 if lit else 16.0
+	player_light.light_energy = (2.6 if lit else 1.3) + sin(time * 13.0) * 0.08 + sin(time * 7.3) * 0.1
 	dungeon.animate_torches(time, camera.global_position)
 	update_explored()
 	hud.update_hud(dt)

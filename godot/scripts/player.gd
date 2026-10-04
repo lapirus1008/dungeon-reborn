@@ -43,7 +43,8 @@ var killer_name := ""
 var char_id := ""
 var hold_q := -1.0 # 누르고 있는 Q/E (화염 폭발, 치료)
 var hold_e := -1.0
-var held := "" # 손에 든 소모품 벨트 ("3"/"4"), 비어 있으면 무기
+var held := "" # 손에 든 것: 소모품 칸("c3"/"c4"/"c5") 또는 "torch", 비어 있으면 무기
+var torch_t := 0.0 # 불붙은 횃불 남은 시간
 var puppet = null # 호스트 화면에 원격 플레이어를 그리는 NetActor
 var ch: Array = [] # 이번 프레임 진행 바 [문구, 비율] (원격 전송용)
 
@@ -102,16 +103,8 @@ func swap_weapon_set() -> void:
 	game.on_weapon_changed(self)
 
 
-func on_block(amount: float) -> void:
-	stamina -= amount * 0.7 * (1.0 - stats.get("flags", {}).get("block_eff", 0.0))
-	stamina_delay = 0.8
+func on_block(_amount: float) -> void:
 	game.sfx("block", pos)
-	if stamina <= 0.0:
-		stamina = 0.0
-		exhausted = true
-		blocking = false
-		add_stun(0.6)
-		game.notify(self, "toast", ["방어가 무너졌다!"])
 
 
 func on_parry(_src) -> void:
@@ -183,16 +176,24 @@ func update(dt: float) -> void:
 	var act := can_act and not locked and channel_t <= 0.0
 	_combat(dt, act)
 
-	# 1/2: 무기 세트 바로 선택 · 3/4: 소모품 벨트 꺼내기 (한 번 더 누르면 다음 소모품으로 로테이션), 좌클릭으로 사용
+	# 1/2: 무기 세트 선택 · 3/4/5: 소모품 꺼내기(같은 키 = 내려놓기), 좌클릭으로 사용 · G: 횃불
 	if can_act and not locked:
 		for k in [1, 2]:
 			if inp.just_pressed("weapon%d" % k):
 				set_held("")
 				if wset != k:
 					swap_weapon_set()
-		for k in ["3", "4"]:
+		for k in ["3", "4", "5"]:
 			if inp.just_pressed("use" + k):
-				pick_belt(k)
+				pick_slot("c" + k)
+		if inp.just_pressed("torch"):
+			toggle_torch()
+	if held == "torch":
+		torch_t -= dt
+		if torch_t <= 0.0:
+			torch_t = 0.0
+			set_held("")
+			game.notify(self, "toast", ["횃불이 다 탔습니다"])
 
 	# 원격 플레이어: 클라이언트가 보낸 위치를 검증 후 채택 (넉백/돌진 중에는 서버 위치 유지)
 	if inp.remote and has_net:
@@ -241,17 +242,8 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 	if wl > 0.0:
 		wish /= wl
 
-	# 달리기 판정 (히스테리시스)
-	if stamina <= 0.5:
-		exhausted = true
-	elif exhausted and stamina >= SPRINT_RESUME:
-		exhausted = false
-	var want_sprint := inp.pressed("sprint") and iz > 0.0 and not locked
-	var busy := blocking or spin_t > 0.0 or channel_t > 0.0 or charge_t >= 0.0
-	if not want_sprint or busy or exhausted:
-		sprinting = false
-	elif not sprinting:
-		sprinting = stamina >= SPRINT_MIN
+	# 던전본처럼 달리기/스태미나 없음: 이동 속도는 장비·능력치로만 정해짐
+	sprinting = false
 	var speed: float = stats.base_speed * stats.speed_mul
 	if sprinting:
 		speed *= 1.45
@@ -283,31 +275,20 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 				Sfx.play("step", -1.0, 0.15)
 
 	# 점프
-	if can_act and inp.just_pressed("jump") and pos.y <= 0.001 and stamina > SPRINT_MIN and not locked and root <= 0.0:
+	if can_act and inp.just_pressed("jump") and pos.y <= 0.001 and not locked and root <= 0.0:
 		vy = 6.2
-		stamina -= 10.0
-		stamina_delay = 0.6
 	vy -= 20.0 * dt
 	pos.y = maxf(0.0, pos.y + vy * dt)
 	if pos.y == 0.0:
 		vy = 0.0
 
-	# 스태미나: 달리는 중에만 소모, 그 외에는 잠시 후 회복
-	if sprinting and moving:
-		stamina -= 18.0 * dt
-		stamina_delay = 0.7
-	elif stamina_delay > 0.0:
-		stamina_delay -= dt
-	else:
-		stamina = minf(100.0, stamina + (8.0 if blocking else 28.0) * dt)
-	stamina = maxf(0.0, stamina)
+	stamina = 100.0
+	exhausted = false
 
 
 func _start_swing(prof: Dictionary, bash := false) -> void:
 	swing_side = -swing_side
 	swing = {"t": 0.0, "prof": prof, "done": false, "side": swing_side, "bash": bash}
-	stamina -= prof.stamina
-	stamina_delay = 0.6
 	cd.lmb = prof.cd / stats.get("act_mul", 1.0)
 	game.sfx("swing", pos)
 	if inp.remote:
@@ -337,9 +318,19 @@ func _combat(dt: float, act: bool) -> void:
 			_start_swing(Skills.melee_profile(self, true), true)
 
 	# 소모품을 들고 있으면: 좌클릭 = 사용, 우클릭 = 내려놓기
-	if held != "":
+	if held == "torch":
 		blocking = false
-		if equipment.get(Data.BELT[held][0]) == null:
+		if act and inp.just_pressed("attack") and cd.lmb <= 0.0 and free:
+			# 횃불 휘두르기: 약한 화염 피해
+			cd.lmb = 0.8
+			attack_anim = 0.25
+			game.sfx("swing", pos)
+			game.melee_hit(self, 18.0 * dmg_mul(), 2.4, 1.6, {"knock": 2.0})
+		elif rmb_pressed:
+			set_held("")
+	elif held != "":
+		blocking = false
+		if equipment.get(held) == null:
 			set_held("")
 		elif act and inp.just_pressed("attack"):
 			use_held()
@@ -391,25 +382,6 @@ func _combat(dt: float, act: bool) -> void:
 			swing = null
 
 
-# 벨트의 아이템 (앞에서부터, 빈 칸 제외)
-func belt_items(k: String) -> Array:
-	var out := []
-	for s in Data.BELT[k]:
-		if equipment.get(s) != null:
-			out.append(equipment[s])
-	return out
-
-
-# 빈 칸을 뒤로 모음 (shift = 1이면 한 칸 로테이션: 두 번째가 첫 번째로)
-func _arrange_belt(k: String, shift := 0) -> void:
-	var items := belt_items(k)
-	if shift > 0 and items.size() > 1:
-		items.append(items.pop_front())
-	var slots: Array = Data.BELT[k]
-	for i in slots.size():
-		equipment[slots[i]] = items[i] if i < items.size() else null
-
-
 func set_held(k: String) -> void:
 	if held == k:
 		return
@@ -417,33 +389,53 @@ func set_held(k: String) -> void:
 	game.on_weapon_changed(self)
 
 
-func pick_belt(k: String) -> void:
-	if belt_items(k).is_empty():
-		game.notify(self, "toast", ["소모품 %s번 벨트가 비어 있습니다" % k])
+# 3/4/5: 그 칸의 소모품을 손에 듦 (다시 누르면 무기로)
+func pick_slot(slot: String) -> void:
+	if held == slot:
+		set_held("")
 		return
-	if held == k:
-		_arrange_belt(k, 1)
-		game.on_weapon_changed(self)
-	else:
-		_arrange_belt(k)
-		set_held(k)
-	var it: Dictionary = equipment[Data.BELT[k][0]]
+	var it = equipment.get(slot)
+	if it == null:
+		game.notify(self, "toast", ["소모품 칸 %s이 비어 있습니다" % slot.right(1)])
+		return
+	set_held(slot)
 	game.notify(self, "toast", ["%s %s (좌클릭: 사용)" % [Data.base_of(it).icon, Data.base_of(it).name]])
-	game.inv_changed(self)
 
 
-# 손에 든 소모품 사용 (좌클릭). 다 쓰면 다음 소모품, 벨트가 비면 무기로
+# 손에 든 소모품 사용 (좌클릭). 다 쓰면 무기로
 func use_held() -> void:
-	var k := held
-	var slot: String = Data.BELT[k][0]
-	use_slot(slot, int(k))
+	var slot := held
+	use_slot(slot, int(slot.right(1)))
 	if equipment.get(slot) == null:
-		_arrange_belt(k)
-		if belt_items(k).is_empty():
-			set_held("")
-		else:
-			game.on_weapon_changed(self)
+		set_held("")
+
+
+# G: 횃불 켜서 들기 / 내려놓기 (불붙은 횃불은 다 탈 때까지 다시 들 수 있음)
+func toggle_torch() -> void:
+	if held == "torch":
+		set_held("")
+		return
+	if torch_t <= 0.0:
+		var t = equipment.get("torch")
+		if t == null:
+			game.notify(self, "toast", ["횃불이 없습니다"])
+			return
+		t.count = int(t.get("count", 1)) - 1
+		if t.count <= 0:
+			equipment.torch = null
+		torch_t = float(Data.base_of(t).get("burn", 120.0))
+		game.sfx("fire", pos)
 		game.inv_changed(self)
+	set_held("torch")
+
+
+# 던전 입장 시 기본 횃불 2개
+func give_start_torches() -> void:
+	var t = equipment.get("torch")
+	if t == null:
+		t = Data.make_item("torch")
+		equipment.torch = t
+	t.count = maxi(int(t.get("count", 1)), 2)
 
 
 func use_slot(slot: String, key: int) -> void:
@@ -457,10 +449,10 @@ func use_slot(slot: String, key: int) -> void:
 		return
 	if cd.potion > 0.0:
 		return
-	if b.has("heal") and hp >= max_hp:
+	if not b.has("heal"):
+		return
+	if hp >= max_hp:
 		game.notify(self, "toast", ["체력이 가득 찼습니다"])
-	elif b.has("mana") and (res_type() != "mana" or res >= res_max()):
-		game.notify(self, "toast", ["마나가 가득 찼거나 쓸 수 없습니다"])
 	else:
 		use_consumable(it.id)
 
@@ -552,7 +544,7 @@ func net_state() -> Dictionary:
 		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion, cd.util],
 		"chg": charges, "hold": [hold_q, hold_e],
 		"s": [stun, slow, root, stealth, frozen, parry, immune, dr, spin_t, channel_t, charge_t, cast],
-		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held,
+		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t,
 		"k": [kills, pvp_kills], "ch": ch,
 	}
 
@@ -603,6 +595,7 @@ func apply_net_state(d: Dictionary) -> void:
 	slow_mul = d.sm2
 	dots.resize(int(d.dot))
 	blocking = d.bl
+	torch_t = d.get("tt", 0.0)
 	if held != d.get("hd", ""):
 		held = d.get("hd", "")
 		game._rebuild_view_model()

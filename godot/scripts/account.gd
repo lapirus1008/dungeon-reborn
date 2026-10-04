@@ -10,7 +10,7 @@ const MAX_CHARS := 8
 
 # 상인 목록 (가격은 서버가 이 표로 검증)
 const SHOP := [
-	["health_potion", 30], ["bandage", 12], ["mana_potion", 30], ["fire_flask", 24], ["rock_flask", 24], ["lightning_flask", 30], ["mimic_flask", 40],
+	["health_potion", 30], ["bandage", 12], ["torch", 6], ["fire_flask", 24], ["rock_flask", 24], ["lightning_flask", 30], ["mimic_flask", 40],
 	["old_sword", 30], ["old_longsword", 40], ["old_dagger", 25], ["old_mace", 30], ["old_staff", 35], ["old_shield", 30], ["old_crossbow", 40],
 	["old_plate_chest", 30], ["old_leather_chest", 25], ["old_cloth_chest", 20],
 ]
@@ -44,14 +44,12 @@ static func new_character(name: String, cls: String) -> Dictionary:
 	eq.feet = Data.make_item("old_%s_feet" % at)
 	var pot := Data.make_item("health_potion")
 	pot.count = 2
-	eq.c3a = pot
+	eq.c3 = pot
 	var band := Data.make_item("bandage")
 	band.count = 2
-	eq.c4a = band
+	eq.c4 = band
 	var bag := []
-	if Data.CLASSES[cls].res == "mana":
-		bag.append(Data.make_item("mana_potion"))
-	eq.c3b = Data.make_item("fire_flask")
+	eq.c5 = Data.make_item("fire_flask")
 	Inv.repack(bag, Inv.bag_size(cls))
 	# 소드마스터: 검 슬롯에 영검으로 쓸 검
 	if cls == "swordmaster":
@@ -142,10 +140,13 @@ static func _fix_item(it: Dictionary) -> void:
 		it["fixed"] = fresh_item.fixed
 	if it.get("stats", {}).has("dmg"):
 		it.stats.dmg = int(it.stats.dmg)
+	if Data.ITEM_BASES.get(it.base, {}).get("slot", "") in ["consumable", "torch"]:
+		it["rarity"] = 0
+		it["count"] = clampi(int(it.count), 1, Data.max_stack(it))
 
 
 # 예전 무기/장신구 칸 이름 -> 새 칸
-const LEGACY_SLOTS := {"weapon": "w1", "trinket": "ring1", "q1": "c3a", "q2": "c4a", "q3": "c3b", "util": "c4b"}
+const LEGACY_SLOTS := {"weapon": "w1", "trinket": "ring1", "q1": "c3", "q2": "c4", "q3": "c5", "util": "c5", "c3a": "c3", "c4a": "c4", "c3b": "c5", "c3c": "c5", "c4b": "c5", "c4c": "c5"}
 
 
 static func _norm_char(c: Dictionary) -> Dictionary:

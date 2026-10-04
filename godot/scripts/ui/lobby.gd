@@ -13,6 +13,18 @@ var create_cls := "fighter"
 var create_name := ""
 var create_skills := {} # 새 캐릭터 미리보기에서 고른 Q/E
 var center_title: Label
+var create_screen: Control
+var cs_info: RichTextLabel
+var cs_preview: CharPreview
+var cs_skills: VBoxContainer
+var cs_classes: HBoxContainer
+var cs_name: LineEdit
+var cs_focus := "" # 오른쪽에서 설명을 보여 줄 스킬/패시브
+const CLASS_ROLE := {
+	"fighter": "근접 탱커 · 방패로 전열 유지, 양손검으로 광역 공격", "swordmaster": "근접 딜러 · 패링과 영검", "rogue": "암살자 · 은신과 기습",
+	"deathknight": "근접 브루저 · 영혼 에너지와 흡혈", "druid": "변신 · 표범 형태와 나무 정령 소환", "pyromancer": "원거리 화염 마법 · 폭발 피해",
+	"cryomancer": "원거리 냉기 마법 · 둔화와 제어", "priest": "치유와 보호 · 아군 지원",
+}
 var creating := false
 var equip_view: EquipView
 var stats_label: RichTextLabel
@@ -123,7 +135,7 @@ func _ready() -> void:
 	var howto := RichTextLabel.new()
 	howto.bbcode_enabled = true
 	howto.fit_content = true
-	howto.text = "[color=#e6dccb][b]조작법[/b][/color]\n[color=#9a8e7a][font_size=13]WASD 이동 · Shift 달리기 · Space 점프\n좌클릭 공격 · 우클릭 보조 · Q/E 스킬\n1·2 무기 세트 선택 · 3·4 소모품 칸 (물약·붕대·플라스크)\nF 상호작용/줍기 · Tab 인벤토리 · M 지도 · Esc 메뉴 (게임은 계속 진행)[/font_size][/color]"
+	howto.text = "[color=#e6dccb][b]조작법[/b][/color]\n[color=#9a8e7a][font_size=13]WASD 이동 · Space 점프\n좌클릭 공격 · 우클릭 보조 · Q/E 스킬\n1·2 무기 세트 선택 · 3·4 소모품 칸 (물약·붕대·플라스크)\nF 상호작용/줍기 · Tab 인벤토리 · M 지도 · Esc 메뉴 (게임은 계속 진행)[/font_size][/color]"
 	lv.add_child(howto)
 	body.add_child(left)
 
@@ -222,10 +234,8 @@ func refresh() -> void:
 	var s := save()
 	gold_label.text = ("☁ %s · " % SaveData.account_name if SaveData.online else "") + "💰 %d 골드" % s.gold
 	UI.clear(class_box)
-	if creating:
-		_render_create()
-	else:
-		_render_chars()
+	_render_chars()
+	_refresh_create_screen()
 
 	# 장비 / 능력치 / 가방 (새 캐릭터를 만드는 중이면 고른 직업의 시작 장비 미리보기)
 	var view := _view_char()
@@ -718,50 +728,203 @@ func _class_detail(cur: Dictionary) -> RichTextLabel:
 
 
 # 새 캐릭터: 직업 + 이름
-func _render_create() -> void:
-	class_box.add_child(UI.label("직업을 고르고 이름을 정하세요", 14, UI.MUTED))
-	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 6)
-	grid.add_theme_constant_override("v_separation", 6)
-	class_box.add_child(grid)
-	for cid in Data.CLASS_ORDER:
-		var c: Dictionary = Data.CLASSES[cid]
-		var card := _card(create_cls == cid)
-		var hb := HBoxContainer.new()
-		hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var l := UI.label("%s %s" % [c.icon, c.name], 15, UI.GOLD if create_cls == cid else UI.TEXT)
-		l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		hb.add_child(l)
-		card.add_child(hb)
-		var id2: String = cid
-		_on_click(card, func():
-			if create_cls != id2:
-				create_skills = {}
-			create_cls = id2
-			refresh())
-		grid.add_child(card)
-	var nh := HBoxContainer.new()
-	nh.add_child(UI.label("이름", 14, UI.MUTED))
-	var ed := LineEdit.new()
-	ed.text = create_name
-	ed.max_length = 12
-	ed.placeholder_text = "2~12자"
-	ed.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ed.text_changed.connect(func(t): create_name = t)
-	ed.text_submitted.connect(func(_t): _create())
-	nh.add_child(ed)
-	class_box.add_child(nh)
-	var bh := HBoxContainer.new()
-	var ok := UI.button("만들기", _create, 14)
-	ok.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bh.add_child(ok)
-	bh.add_child(UI.button("취소", func():
+# ------------------------------------------------------------------ 직업 선택 화면 (던전본 캐릭터 생성)
+#  왼쪽: 직업 설명 · 역할 · 사용 가능 무기 / 가운데: 캐릭터 모습 / 오른쪽: 스킬 · 패시브 · 능력치 / 아래: 8직업 + 이름 + 선택
+func _build_create_screen() -> void:
+	create_screen = ColorRect.new()
+	(create_screen as ColorRect).color = Color(0.03, 0.025, 0.02, 0.97)
+	create_screen.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	create_screen.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(create_screen)
+	var m := MarginContainer.new()
+	m.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	for side in ["left", "right", "top", "bottom"]:
+		m.add_theme_constant_override("margin_" + side, 28)
+	create_screen.add_child(m)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 12)
+	m.add_child(v)
+	var t := UI.label("직업을 선택하세요", 18, UI.MUTED)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(t)
+	var row := HBoxContainer.new()
+	row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", 16)
+	v.add_child(row)
+	var lp := UI.panel_box(Vector2(380, 0))
+	cs_info = RichTextLabel.new()
+	cs_info.bbcode_enabled = true
+	cs_info.fit_content = true
+	cs_info.custom_minimum_size = Vector2(350, 0)
+	lp.add_child(cs_info)
+	row.add_child(lp)
+	var center := CenterContainer.new()
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cs_preview = CharPreview.new(Vector2(520, 600))
+	center.add_child(cs_preview)
+	row.add_child(center)
+	var rp := UI.panel_box(Vector2(400, 0))
+	var rs := ScrollContainer.new()
+	rs.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	cs_skills = VBoxContainer.new()
+	cs_skills.add_theme_constant_override("separation", 8)
+	cs_skills.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rs.add_child(cs_skills)
+	rp.add_child(rs)
+	row.add_child(rp)
+	cs_classes = HBoxContainer.new()
+	cs_classes.alignment = BoxContainer.ALIGNMENT_CENTER
+	cs_classes.add_theme_constant_override("separation", 8)
+	v.add_child(cs_classes)
+	var bottom := HBoxContainer.new()
+	bottom.alignment = BoxContainer.ALIGNMENT_CENTER
+	bottom.add_theme_constant_override("separation", 10)
+	bottom.add_child(UI.label("이름", 15, UI.MUTED))
+	cs_name = LineEdit.new()
+	cs_name.max_length = 12
+	cs_name.placeholder_text = "2~12자"
+	cs_name.custom_minimum_size = Vector2(240, 0)
+	cs_name.text_changed.connect(func(tx): create_name = tx)
+	cs_name.text_submitted.connect(func(_tx): _create())
+	bottom.add_child(cs_name)
+	var ok := UI.big_button("선택", _create)
+	ok.custom_minimum_size = Vector2(240, 0)
+	bottom.add_child(ok)
+	bottom.add_child(UI.button("취소", func():
 		creating = false
 		refresh(), 14))
-	class_box.add_child(bh)
-	class_box.add_child(UI.label("새 캐릭터는 직업 기본 무기와 낡은 방어구, 물약을 가지고 시작합니다. 골드와 보관함은 모든 캐릭터가 함께 씁니다.", 12, UI.MUTED))
-	class_box.add_child(_class_detail(Data.CLASSES[create_cls]))
+	v.add_child(bottom)
+
+
+func _refresh_create_screen() -> void:
+	if not creating:
+		if create_screen != null:
+			create_screen.visible = false
+		return
+	if create_screen == null:
+		_build_create_screen()
+	create_screen.visible = true
+	var c: Dictionary = Data.CLASSES[create_cls]
+	var pc := Account.new_character("미리보기", create_cls)
+	cs_preview.set_char(create_cls, Data.weapon_model(create_cls, pc.equipment, 1), true)
+	if cs_name.text != create_name:
+		cs_name.text = create_name
+	var t := "[center][font_size=40]%s[/font_size]\n[font_size=26][color=#d9b45a][b]%s[/b][/color][/font_size][/center]\n" % [c.icon, c.name]
+	t += "[font_size=14][color=#c9c0b0]%s[/color][/font_size]\n\n" % c.desc
+	t += "[font_size=15][color=#d9b45a]역할[/color][/font_size]\n[font_size=14]%s[/font_size]\n\n" % CLASS_ROLE.get(create_cls, "")
+	t += "[font_size=15][color=#d9b45a]특징[/color][/font_size]\n[font_size=14]"
+	for k in ["lmb", "rmb"]:
+		var sk: Dictionary = c.skills[k]
+		t += "· %s %s: %s\n" % ["좌클릭" if k == "lmb" else "우클릭", sk.name, sk.desc]
+	if c.res != "":
+		t += "· 자원: %s\n" % Data.RES_NAMES[c.res]
+	t += "· 가방: %d칸 (%s 종족)\n" % [Inv.bag_size(create_cls).x * Inv.bag_size(create_cls).y, "언데드" if Inv.bag_size(create_cls) == Inv.UNDEAD_BAG else "인간"]
+	t += "[/font_size]\n[font_size=15][color=#d9b45a]사용 가능한 무기[/color][/font_size]\n[font_size=14]%s[/font_size]" % " · ".join(c.weapons.map(func(w): return Data.WEAPON_NAMES.get(w, w)))
+	cs_info.text = t
+	# 오른쪽: 스킬 (Q/E 고르기) · 패시브 · 능력치
+	UI.clear(cs_skills)
+	for slot in ["q", "e"]:
+		cs_skills.add_child(UI.label("스킬 %s" % slot.to_upper(), 15, UI.GOLD))
+		var hb := HBoxContainer.new()
+		hb.add_theme_constant_override("separation", 6)
+		for sid in c[slot]:
+			var sk: Dictionary = Data.SKILLS[sid]
+			var sel: bool = create_skills.get(slot, c[slot][0]) == sid
+			var card := _card(sel)
+			card.custom_minimum_size = Vector2(0, 40)
+			var l := UI.label("%s %s" % [sk.get("icon", ""), sk.name], 13, UI.GOLD if sel else UI.TEXT)
+			l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			card.add_child(l)
+			var sl: String = slot
+			var id2: String = sid
+			_on_click(card, func():
+				create_skills[sl] = id2
+				cs_focus = "s:" + id2
+				refresh())
+			card.mouse_entered.connect(func(): UI.show_tip(UI.skill_tip(id2)))
+			card.mouse_exited.connect(func(): UI.hide_tip())
+			hb.add_child(card)
+		cs_skills.add_child(hb)
+	var focus := cs_focus
+	if focus == "" or not (focus.substr(2) in c.q or focus.substr(2) in c.e or focus.begins_with("p:")):
+		focus = "s:" + create_skills.get("q", c.q[0])
+	if focus.begins_with("s:"):
+		var fs: Dictionary = Data.SKILLS[focus.substr(2)]
+		var d := RichTextLabel.new()
+		d.bbcode_enabled = true
+		d.fit_content = true
+		d.text = "[font_size=15][color=#d9b45a]%s %s[/color][/font_size]  [font_size=12][color=#9a8e7a]재사용 %.0f초[/color][/font_size]\n[font_size=13]%s[/font_size]" % [fs.get("icon", ""), fs.name, fs.cd, fs.desc]
+		cs_skills.add_child(d)
+	cs_skills.add_child(UI.label("패시브 (능력치 조건을 채우면 자동 활성)", 15, UI.GOLD))
+	var ph := HBoxContainer.new()
+	ph.add_theme_constant_override("separation", 6)
+	var ps: Array = Data.PASSIVES[create_cls]
+	for i in ps.size():
+		var pa: Dictionary = ps[i]
+		var b := UI.button(pa.name, func():
+			cs_focus = "p:%d" % i
+			refresh(), 11)
+		b.toggle_mode = true
+		b.button_pressed = focus == "p:%d" % i
+		ph.add_child(b)
+	var pw := HFlowContainer.new()
+	for ch in ph.get_children():
+		ph.remove_child(ch)
+		pw.add_child(ch)
+	cs_skills.add_child(pw)
+	if focus.begins_with("p:"):
+		var pa: Dictionary = ps[int(focus.substr(2))]
+		var req := []
+		for k in pa.req:
+			req.append("%s %d" % [Data.ATTR_NAMES[k], pa.req[k]])
+		var d := RichTextLabel.new()
+		d.bbcode_enabled = true
+		d.fit_content = true
+		d.text = "[font_size=15][color=#d9b45a]%s[/color][/font_size]  [font_size=12][color=#9a8e7a]조건: %s[/color][/font_size]\n[font_size=13]%s[/font_size]" % [pa.name, ", ".join(req), pa.desc]
+		cs_skills.add_child(d)
+	cs_skills.add_child(UI.label("기본 능력치", 15, UI.GOLD))
+	var ah := HBoxContainer.new()
+	ah.add_theme_constant_override("separation", 6)
+	var base: Dictionary = Data.CLASS_ATTRS[create_cls]
+	for k in Data.ATTRS:
+		var bx := VBoxContainer.new()
+		bx.custom_minimum_size = Vector2(52, 0)
+		var ic := UI.label(Data.ATTR_ICONS[k], 18)
+		ic.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		bx.add_child(ic)
+		var val := UI.label(str(base[k]), 15, UI.GOLD if Data.POWER_ATTR[create_cls] == k else UI.TEXT)
+		val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		bx.add_child(val)
+		var nm := UI.label(Data.ATTR_NAMES[k], 11, UI.MUTED)
+		nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		bx.add_child(nm)
+		ah.add_child(bx)
+	cs_skills.add_child(ah)
+	# 아래: 8직업
+	UI.clear(cs_classes)
+	for cid in Data.CLASS_ORDER:
+		var cc: Dictionary = Data.CLASSES[cid]
+		var card := _card(cid == create_cls)
+		card.custom_minimum_size = Vector2(110, 86)
+		var cv := VBoxContainer.new()
+		cv.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var ic := UI.label(cc.icon, 30)
+		ic.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cv.add_child(ic)
+		var nl := UI.label(cc.name, 13, UI.GOLD if cid == create_cls else UI.TEXT)
+		nl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		nl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cv.add_child(nl)
+		card.add_child(cv)
+		var id3: String = cid
+		_on_click(card, func():
+			if create_cls != id3:
+				create_skills = {}
+				cs_focus = ""
+			create_cls = id3
+			refresh())
+		cs_classes.add_child(card)
 
 
 func _create() -> void:

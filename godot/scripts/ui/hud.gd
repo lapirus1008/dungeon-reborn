@@ -46,12 +46,18 @@ var shield_label: Label
 var minimap: MiniMap
 var bigmap: MiniMap
 var bigmap_wrap: Control
-var inv_panel: PanelContainer
+var inv_panel: Control # 던전 인벤토리 전체 (대상 | 내 정보 | 내 장비·가방)
 var inv_equip: EquipView
+var inv_preview: CharPreview
+var inv_name: Label
+var inv_attrs: HBoxContainer
+var inv_skills: HBoxContainer
+var cont_equip: EquipView
+var cont_scroll: ScrollContainer
 var inv_bag: GridView
 var inv_title: Label
 var inv_stats: RichTextLabel
-var cont_panel: PanelContainer
+var cont_panel: Control
 var cont_title: Label
 var cont_grid: GridView
 var menu: Control
@@ -213,7 +219,7 @@ func _ready() -> void:
 
 	skills_row = HBoxContainer.new()
 	skills_row.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	skills_row.position = Vector2(-284, -80)
+	skills_row.position = Vector2(-318, -80)
 	skills_row.add_theme_constant_override("separation", 6)
 	root.add_child(skills_row)
 
@@ -248,63 +254,101 @@ func _bar(color: Color, sz: Vector2, transparent_bg := false) -> ProgressBar:
 	return b
 
 
+# 던전본 파밍 화면: 왼쪽 = 대상(상자/시체), 가운데 = 내 정보, 오른쪽 = 내 장비·가방
 func _build_inventory() -> void:
-	inv_panel = UI.panel_box(Vector2(600, 0))
-	inv_panel.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
-	inv_panel.position = Vector2(-640, -360)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 8)
-	inv_panel.add_child(v)
-	inv_title = UI.title("소지품")
-	v.add_child(inv_title)
+	inv_panel = Control.new()
+	inv_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	inv_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	inv_panel.visible = false
+	root.add_child(inv_panel)
 	var row := HBoxContainer.new()
+	row.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	row.offset_top = 40
 	row.add_theme_constant_override("separation", 10)
-	inv_equip = EquipView.new(32.0)
-	inv_equip.on_op = _inv_op
-	inv_equip.drop_outside = true
-	inv_equip.hint = "우클릭: 해제 · Shift+클릭: 바닥에 버리기 · 드래그: 옮기기"
-	row.add_child(inv_equip)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	inv_panel.add_child(row)
+
+	# 왼쪽: 대상
+	cont_panel = UI.panel_box(Vector2(430, 690))
+	var lv := VBoxContainer.new()
+	lv.add_theme_constant_override("separation", 8)
+	cont_panel.add_child(lv)
+	cont_title = UI.title("")
+	lv.add_child(cont_title)
+	cont_equip = EquipView.new(32.0)
+	cont_equip.store = "ceq"
+	cont_equip.on_op = _inv_op
+	cont_equip.hint = "드래그: 내 가방·장비칸으로 · 우클릭: 가져오기/장착"
+	lv.add_child(cont_equip)
+	cont_scroll = ScrollContainer.new()
+	cont_scroll.custom_minimum_size = Vector2(Inv.CONT_W * 36 + 14, 300)
+	cont_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	cont_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	cont_grid = GridView.new("cont", 36.0)
+	cont_grid.on_op = _inv_op
+	cont_grid.hint = "드래그: 가방이나 장비칸으로 · 우클릭: 가져오기/장착 · Shift+클릭: 가방으로"
+	cont_scroll.add_child(cont_grid)
+	lv.add_child(cont_scroll)
+	lv.add_child(UI.button("모두 가져가기", _take_all))
+	lv.add_child(UI.label("F / Tab 닫기", 12, UI.MUTED))
+	cont_panel.visible = false
+	row.add_child(cont_panel)
+
+	# 가운데: 내 정보 (캐릭터 모습, 능력치, Q/E)
+	var mid := UI.panel_box(Vector2(340, 690))
+	var mv := VBoxContainer.new()
+	mv.add_theme_constant_override("separation", 8)
+	mid.add_child(mv)
+	inv_preview = CharPreview.new(Vector2(320, 330))
+	mv.add_child(inv_preview)
+	inv_name = _centered(UI.label("", 16, UI.GOLD))
+	mv.add_child(inv_name)
+	inv_attrs = HBoxContainer.new()
+	inv_attrs.alignment = BoxContainer.ALIGNMENT_CENTER
+	inv_attrs.add_theme_constant_override("separation", 4)
+	mv.add_child(inv_attrs)
+	inv_skills = HBoxContainer.new()
+	inv_skills.alignment = BoxContainer.ALIGNMENT_CENTER
+	inv_skills.add_theme_constant_override("separation", 8)
+	mv.add_child(inv_skills)
+	var ss := ScrollContainer.new()
+	ss.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	ss.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	inv_stats = RichTextLabel.new()
 	inv_stats.bbcode_enabled = true
 	inv_stats.fit_content = true
-	inv_stats.custom_minimum_size = Vector2(320, 0)
+	inv_stats.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	inv_stats.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(inv_stats)
-	v.add_child(row)
+	ss.add_child(inv_stats)
+	mv.add_child(ss)
+	row.add_child(mid)
+
+	# 오른쪽: 내 장비 + 가방
+	var right := UI.panel_box(Vector2(420, 690))
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	right.add_child(v)
+	inv_title = UI.title("소지품")
+	v.add_child(inv_title)
+	inv_equip = EquipView.new(34.0)
+	inv_equip.on_op = _inv_op
+	inv_equip.drop_outside = true
+	inv_equip.hint = "우클릭: 해제 · Shift+클릭: 바닥에 버리기 · 드래그: 옮기기"
+	v.add_child(inv_equip)
 	inv_bag = GridView.new("bag", 36.0)
 	inv_bag.on_op = _inv_op
 	inv_bag.drop_outside = true
 	v.add_child(inv_bag)
-	var hint := UI.label("드래그 이동 (R 회전) · 우클릭: 장착/해제/물약 사용 · Shift+클릭: 바닥에 버리기 (상자 열림: 상자로) · 1/2: 무기 세트 · 3/4: 소모품 꺼내기(다시 누르면 다음 것) → 좌클릭 사용", 12, UI.MUTED)
+	var hint := UI.label("드래그 이동 (R 회전) · 우클릭: 장착/해제 · Shift+클릭: 바닥에 버리기 · 1/2: 무기 세트 · 3/4/5: 소모품 꺼내기 → 좌클릭 사용 · G: 횃불 · Tab/Esc 닫기 (게임은 계속 진행)", 12, UI.MUTED)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.custom_minimum_size = Vector2(560, 0)
+	hint.custom_minimum_size = Vector2(380, 0)
 	v.add_child(hint)
-	v.add_child(UI.label("Tab / Esc 닫기 · 게임은 계속 진행 중입니다", 12, UI.MUTED))
-	inv_panel.visible = false
-	root.add_child(inv_panel)
+	row.add_child(right)
 
 
 func _build_container() -> void:
-	cont_panel = UI.panel_box(Vector2(260, 0))
-	cont_panel.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	cont_panel.position = Vector2(40, -260)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 8)
-	cont_panel.add_child(v)
-	cont_title = UI.title("")
-	v.add_child(cont_title)
-	var sc := ScrollContainer.new()
-	sc.custom_minimum_size = Vector2(Inv.CONT_W * 36 + 14, 360)
-	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	cont_grid = GridView.new("cont", 36.0)
-	cont_grid.on_op = _inv_op
-	cont_grid.hint = "드래그: 가방이나 장비칸으로 · 우클릭: 가져오기/장착 · Shift+클릭: 가방으로"
-	sc.add_child(cont_grid)
-	v.add_child(sc)
-	v.add_child(UI.button("모두 가져가기", _take_all))
-	v.add_child(UI.label("F / Tab 닫기", 12, UI.MUTED))
-	cont_panel.visible = false
-	root.add_child(cont_panel)
+	pass # _build_inventory 에서 함께 만듦
 
 
 func _build_bigmap() -> void:
@@ -388,7 +432,7 @@ func start(g) -> void:
 	var cls: Dictionary = Data.CLASSES[g.player.cls]
 	UI.clear(skills_row)
 	skill_boxes.clear()
-	for k in ["rmb", "q", "e", "w1", "w2", "b3", "b4"]:
+	for k in ["rmb", "q", "e", "w1", "w2", "c3", "c4", "c5", "torch"]:
 		var box := PanelContainer.new()
 		var sb := StyleBoxFlat.new()
 		sb.bg_color = Color(0.04, 0.03, 0.02, 0.85)
@@ -397,11 +441,11 @@ func start(g) -> void:
 		sb.set_corner_radius_all(4)
 		sb.set_content_margin_all(4)
 		box.add_theme_stylebox_override("panel", sb)
-		var small: bool = k.begins_with("w")
+		var small: bool = k != "rmb" and k != "q" and k != "e"
 		box.custom_minimum_size = Vector2(56 if small else 84, 58)
 		var v := VBoxContainer.new()
 		v.add_theme_constant_override("separation", 0)
-		var key_text: String = {"rmb": "우클릭", "q": "Q", "e": "E", "w1": "1 무기", "w2": "2 무기", "b3": "3 소모품", "b4": "4 소모품"}[k]
+		var key_text: String = {"rmb": "우클릭", "q": "Q", "e": "E", "w1": "1", "w2": "2", "c3": "3", "c4": "4", "c5": "5", "torch": "G 횃불"}[k]
 		v.add_child(_centered(UI.label(key_text, 11, UI.GOLD)))
 		var nm := _centered(UI.label("", 13 if not small else 15))
 		nm.clip_text = true
@@ -488,7 +532,22 @@ func render_inventory() -> void:
 	var p = game.player
 	UI.tip_cls = p.cls
 	inv_equip.set_equipment(p.equipment, p.cls, p.wset)
-	inv_bag.hint = ("우클릭: 장착/사용 · Shift+클릭: 상자에 넣기" if container != null else "우클릭: 장착/사용 · Shift+클릭: 바닥에 버리기") + " · R: 회전"
+	inv_preview.set_char(p.cls, Data.weapon_model(p.cls, p.equipment, p.wset), p.equipment.get("head") != null)
+	inv_name.text = "%s · %s %s" % [p.name, Data.CLASSES[p.cls].icon, Data.CLASSES[p.cls].name]
+	UI.clear(inv_attrs)
+	var at: Dictionary = p.stats.get("attrs", {})
+	for k in Data.ATTRS:
+		var bx := VBoxContainer.new()
+		bx.custom_minimum_size = Vector2(48, 0)
+		bx.add_child(_centered(UI.label(Data.ATTR_ICONS[k], 16)))
+		bx.add_child(_centered(UI.label(str(int(at.get(k, 0))), 15, UI.GOLD if Data.POWER_ATTR[p.cls] == k else UI.TEXT)))
+		bx.tooltip_text = Data.ATTR_NAMES[k]
+		inv_attrs.add_child(bx)
+	UI.clear(inv_skills)
+	for sl in ["q", "e"]:
+		var sk: Dictionary = Data.SKILLS[Skills.skill_id(p, sl)]
+		inv_skills.add_child(UI.label("%s %s %s" % [sl.to_upper(), sk.get("icon", ""), sk.name], 13))
+	inv_bag.hint = "우클릭: 장착/사용 · Shift+클릭: 바닥에 버리기" + " · R: 회전"
 	inv_bag.set_items(p.bag, Inv.bag_size(p.cls))
 	var items := []
 	for s in Data.ALL_SLOTS:
@@ -508,6 +567,13 @@ func _inv_op(op: String, args: Array) -> void:
 func render_container() -> void:
 	var c: Dictionary = container
 	cont_title.text = c.name
+	var corpse: bool = c.get("kind", "") == "corpse"
+	cont_equip.visible = corpse
+	if corpse:
+		cont_equip.set_equipment(c.equipment, c.get("cls", "fighter"), 1)
+		cont_grid.cell = 32.0
+	else:
+		cont_grid.cell = 36.0
 	cont_grid.set_items(c.items, Vector2i(int(c.get("gw", Inv.CONT_W)), int(c.get("gh", 8))))
 
 
@@ -614,9 +680,8 @@ func update_hud(dt: float) -> void:
 	shield_bar.visible = p.shield > 0.0
 	hp_text.text = "%d / %d" % [ceili(p.hp), roundi(p.max_hp)] + (" (+%d)" % ceili(p.shield) if p.shield > 0.0 else "")
 	shield_label.text = ("🔷 보호막 %d · %.1f초" % [ceili(p.shield), maxf(0.0, p.shield_t)]) if p.shield > 0.0 else ""
-	st_bar.value = p.stamina / 100.0
+	st_bar.visible = false # 던전본: 스태미나 없음
 	# 스태미나 고갈 시 붉게 (30%까지 회복해야 다시 달리기 가능)
-	(st_bar.get_theme_stylebox("fill") as StyleBoxFlat).bg_color = Color(0.6, 0.25, 0.2) if p.exhausted else Color(0.85, 0.75, 0.31)
 	if p.res_type() != "":
 		mana_bar.value = p.res / maxf(1.0, p.res_max())
 		res_label.text = "%s %d / %d" % [Data.RES_NAMES[p.res_type()], roundi(p.res), roundi(p.res_max())]
@@ -641,8 +706,6 @@ func update_hud(dt: float) -> void:
 		sts.append("회오리 검")
 	if p.immune > 0.0:
 		sts.append("면역")
-	if p.exhausted:
-		sts.append("지침")
 	status_label.text = " · ".join(sts)
 	var tl := maxf(0.0, g.time_left)
 	timer_label.text = "%d:%02d" % [int(tl / 60.0), int(tl) % 60]
@@ -693,23 +756,23 @@ func update_hud(dt: float) -> void:
 		var st2: StyleBoxFlat = sbx.style
 		st2.border_color = Color("#ffd060") if p.wset == n else Color("#5a4a32")
 		st2.set_border_width_all(2 if p.wset == n else 1)
-	# 3/4: 소모품 벨트 (첫 번째 = 꺼낼 것, 작은 아이콘 = 로테이션 순서), 손에 들면 금색
-	for k in ["3", "4"]:
-		var sbx: Dictionary = skill_boxes["b" + k]
-		var items: Array = p.belt_items(k)
+	# 3/4/5: 소모품 칸 · G: 횃불 (손에 들고 있으면 금색)
+	for k in ["c3", "c4", "c5", "torch"]:
+		var sbx: Dictionary = skill_boxes[k]
+		var it = p.equipment.get(k)
 		var txt := "-"
 		var throw := false
-		if items.size():
-			var first: Dictionary = items[0]
-			txt = Data.base_of(first).icon + str(int(first.get("count", 1)))
-			for j in range(1, items.size()):
-				txt += " " + Data.base_of(items[j]).icon
-			throw = Data.base_of(first).has("throw")
+		if it != null:
+			txt = Data.base_of(it).icon + str(int(it.get("count", 1)))
+			throw = Data.base_of(it).has("throw")
+		if k == "torch" and p.torch_t > 0.0:
+			txt = "🔥%d초" % ceili(p.torch_t)
 		if sbx.name.text != txt:
 			sbx.name.text = txt
-		var c2: float = p.cd.util if throw else p.cd.potion
+		var c2: float = p.cd.util if throw else (p.cd.potion if k != "torch" else 0.0)
 		(sbx.cd as ProgressBar).value = clampf(c2, 0.0, 1.0)
-		sbx.name.modulate = Color(0.5, 0.5, 0.5) if items.is_empty() or c2 > 0.0 else Color.WHITE
+		var usable: bool = it != null or (k == "torch" and p.torch_t > 0.0)
+		sbx.name.modulate = Color(0.5, 0.5, 0.5) if not usable or c2 > 0.0 else Color.WHITE
 		var st3: StyleBoxFlat = sbx.style
 		st3.border_color = Color("#ffd060") if p.held == k else Color("#5a4a32")
 		st3.set_border_width_all(2 if p.held == k else 1)
