@@ -727,8 +727,7 @@ func update_hud(dt: float) -> void:
 		sts.append("면역")
 	var cbx = p.active_crossbow() if p.has_method("active_crossbow") else null
 	if cbx != null:
-		var am = p.equipment.get("ammo")
-		var n: int = int(am.get("count", 1)) if am != null else 0
+		var n: int = p.bolt_count()
 		sts.append("➶ 볼트 %d · %s" % [n, "장전됨" if cbx.get("loaded", false) else ("장전 중 %.1f" % p.reload_t if n > 0 else "볼트 없음")])
 	status_label.text = " · ".join(sts)
 	var tl := maxf(0.0, g.time_left)

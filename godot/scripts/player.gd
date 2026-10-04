@@ -112,25 +112,44 @@ func recalc() -> void:
 	game.on_weapon_changed(self)
 
 
-# 석궁: 볼트 칸에 볼트가 있어야 재장전 (쏘면 볼트 1개를 넣어 다시 장전, 볼트를 빼면 장전이 풀림)
+# 석궁: 가방에 든 볼트로 재장전 (장착 칸 없음). 쏘면 가방 볼트 1개를 넣어 다시 장전,
+# 석궁을 가방으로 내리면 장전이 풀림. 던전 입장 시 장착한 석궁은 장전된 상태
 func active_crossbow():
 	var w = equipment.get("w%d" % wset)
 	return w if w != null and Data.base_of(w).get("cat", "") == "crossbow" else null
 
 
+func bolt_count() -> int:
+	var n := 0
+	for it in bag:
+		if it.base == "bolts":
+			n += int(it.get("count", 1))
+	return n
+
+
+func _take_bolt() -> bool:
+	for i in bag.size():
+		var it = bag[i]
+		if it.base == "bolts":
+			it.count = int(it.get("count", 1)) - 1
+			if it.count <= 0:
+				bag.remove_at(i)
+			return true
+	return false
+
+
 func _tick_reload(dt: float) -> void:
+	for it in bag:
+		if it.get("loaded", false):
+			it.erase("loaded")
 	var cb = active_crossbow()
-	if cb == null:
+	if cb == null or cb.get("loaded", false):
 		reload_t = 0.0
 		reload_item = null
 		return
-	if equipment.get("ammo") == null:
-		if cb.get("loaded", false):
-			cb["loaded"] = false
-			game.notify(self, "toast", ["볼트가 없어 장전이 풀렸습니다"])
+	if bolt_count() <= 0:
 		reload_t = 0.0
-		return
-	if cb.get("loaded", false):
+		reload_item = null
 		return
 	if reload_item != cb:
 		reload_item = cb
@@ -138,11 +157,8 @@ func _tick_reload(dt: float) -> void:
 		game.sfx("draw_wood", pos, 0.05)
 	reload_t -= dt
 	if reload_t <= 0.0:
-		var am = equipment.ammo
-		am.count = int(am.get("count", 1)) - 1
-		if am.count <= 0:
-			equipment.ammo = null
-		cb["loaded"] = true
+		if _take_bolt():
+			cb["loaded"] = true
 		reload_item = null
 		game.inv_changed(self)
 

@@ -264,14 +264,14 @@ const PASSIVES := {
 # w1/w1o: 무기 세트 1 (주무기/보조, 1키), w2/w2o: 세트 2 (2키), c3/c4/c5: 소모품 칸 (3/4/5키, 각 최대 3개), torch: 횃불 칸 (G키), sw1~sw4: 소드마스터 검 슬롯
 const GEAR_SLOTS := ["w1", "w1o", "w2", "w2o", "head", "chest", "necklace", "ring1", "legs", "ring2", "hands", "feet"]
 const QUICK_SLOTS := ["c3", "c4", "c5"]
-const UTIL_SLOTS := ["c3", "c4", "c5", "torch", "ammo"]
+const UTIL_SLOTS := ["c3", "c4", "c5", "torch"]
 const SWORD_SLOTS := ["sw1", "sw2", "sw3", "sw4"]
 const ALL_SLOTS := GEAR_SLOTS + UTIL_SLOTS + SWORD_SLOTS
 const SLOT_NAMES := {
 	"w1": "세트 1", "w1o": "세트 1 보조", "w2": "세트 2", "w2o": "세트 2 보조",
 	"head": "머리", "chest": "상의", "hands": "장갑", "legs": "하의", "feet": "신발",
 	"necklace": "목걸이", "ring1": "반지", "ring2": "반지", "ring": "반지",
-	"c3": "3", "c4": "4", "c5": "5", "torch": "횃불", "ammo": "볼트",
+	"c3": "3", "c4": "4", "c5": "5", "torch": "횃불",
 	"sw1": "검 슬롯", "sw2": "검 슬롯", "sw3": "검 슬롯", "sw4": "검 슬롯",
 }
 const WEAPON_NAMES := {
@@ -701,8 +701,6 @@ func gear_slots_for(item: Dictionary, cls := "") -> Array:
 			return QUICK_SLOTS
 		"torch":
 			return ["torch"]
-		"ammo":
-			return ["ammo"]
 		"head", "chest", "hands", "legs", "feet", "necklace":
 			return [b.slot]
 	return []
@@ -914,7 +912,7 @@ func weapon_classes(cat: String) -> Array:
 
 func can_equip(item: Dictionary, cls: String) -> bool:
 	var b := base_of(item)
-	if not is_gear(item) and not (b.slot in ["consumable", "utility", "torch", "ammo"]):
+	if not is_gear(item) and not (b.slot in ["consumable", "utility", "torch"]):
 		return false
 	if b.slot == "weapon" and not (b.cat in CLASSES[cls].weapons):
 		return false

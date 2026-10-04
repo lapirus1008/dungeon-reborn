@@ -166,6 +166,7 @@ static func move(ctx: Dictionary, src: String, id: String, dst: String, x: int, 
 		if pos.is_empty():
 			return {"ok": false, "msg": "%s에 자리가 없습니다" % store_name(dst)}
 	_take(ctx, src, it.id)
+	it.erase("loaded") # 석궁을 가방/상자로 내리면 장전이 풀림
 	it.x = pos.x
 	it.y = pos.y
 	it.r = pos.r
