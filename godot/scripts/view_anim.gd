@@ -78,11 +78,19 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 				# 양손 무기: 왼손이 따라감
 				L.position = R.position + Vector3(-0.08, -0.04, 0.08)
 	if p.blocking:
-		L.position = Vector3(-0.14, -0.2, -0.5)
-		L.rotation.y = 0.5
-		if p.cls == "deathknight":
-			R.position = Vector3(0.05, -0.22, -0.5)
-			R.rotation = Vector3(0, 0, 1.2)
+		# 방어 자세: 방패는 왼손을 앞으로, 무기는 가로로 세워 막음 (단검은 양손 교차)
+		var off: String = Data.offhand_cat(p.equipment, p.wset)
+		if off == "shield":
+			L.position = Vector3(-0.14, -0.2, -0.5)
+			L.rotation.y = 0.5
+		else:
+			R.position = Vector3(0.04, -0.16, -0.48)
+			R.rotation = Vector3(0.25, 0, 1.3)
+			if off == "dagger":
+				L.position = Vector3(-0.04, -0.18, -0.48)
+				L.rotation = Vector3(0.25, 0, -1.3)
+			elif Skills.wcat(p) == "longsword":
+				L.position = R.position + Vector3(-0.12, -0.02, 0.04)
 	if p.parry > 0.0:
 		R.position = Vector3(0.05, -0.15, -0.5)
 		R.rotation = Vector3(0, 0, 1.3)

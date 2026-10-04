@@ -44,6 +44,7 @@ var char_id := ""
 var hold_q := -1.0 # 누르고 있는 Q/E (화염 폭발, 치료)
 var hold_e := -1.0
 var psi_lmb := true
+var counter_rmb := true
 var psi_rmb := true
 var combo_i := 0 # 로그 단검 콤보 단계
 var combo_t := 0.0
@@ -312,19 +313,30 @@ func _combat(dt: float, act: bool) -> void:
 
 	# 우클릭: 방패/무기 방어, 패링, 단검 투척, 지팡이 치기, 표범 포효
 	blocking = false
-	if Skills.uses_block(self):
-		blocking = rmb_held and free and draw_t <= 0.0 and not psi_on
+	var rmb_new := rmb_held and not counter_rmb
+	counter_rmb = rmb_held
+	if counter_t > 0.0 and rmb_new and swing == null and held == "":
+		# 패링 성공 후 우클릭: 강력한 반격
+		counter_t = 0.0
+		var cp := Skills.melee_profile(self)
+		cp.dmg *= 2.4
+		cp.hit_at = 0.16
+		cp.dur = 0.45
+		cp["side"] = -1.0
+		cp["power"] = true
+		cp.range += 0.4
+		_start_swing(cp)
+		game.notify(self, "toast", ["반격!"])
+	elif Skills.uses_block(self):
+		blocking = rmb_held and free and draw_t <= 0.0 and not psi_on and held == ""
 	elif rmb_pressed:
-		if cls == "swordmaster":
-			Skills.start_parry(self)
-		elif cls == "rogue":
-			Skills.throw_knife(self, aim())
-		elif panther:
+		if panther:
 			Skills.roar(self)
 		elif free and cd.rmb <= 0.0:
 			cd.rmb = 0.8
 			_start_swing(Skills.melee_profile(self, true), true)
 
+	block_t = block_t + dt if blocking else 0.0
 	# 좌클릭을 새로 누른 순간 (심령의 검: 누른 채로 소환을 시작했으면 한 번 떼야 발사)
 	var lmb_edge := lmb_held and not psi_lmb
 	psi_lmb = lmb_held
@@ -349,6 +361,12 @@ func _combat(dt: float, act: bool) -> void:
 			use_held()
 		elif rmb_pressed:
 			set_held("")
+	# 지팡이 (화염: 누르는 동안 레이저 / 번개: 조준점 번개)
+	elif Skills.staff_mode(self) != "":
+		if Skills.staff_mode(self) == "fire":
+			Skills.tick_beam(self, dt, lmb_held and draw_t <= 0.0, aim())
+		elif lmb_edge and draw_t <= 0.0:
+			Skills.lightning_strike(self, aim())
 	# 좌클릭
 	elif psi_on:
 		# 심령의 검 소환 중: 좌클릭 = 소환된 만큼 발사, 우클릭 = 취소 (재사용 대기 없음)

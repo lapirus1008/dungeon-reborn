@@ -767,7 +767,7 @@ func _autotest() -> void:
 	_on_results_continue()
 	await get_tree().process_frame
 	# 전투 감각: 로그 3페이즈 콤보 · 뒤잡기 내려찍기 · 소드마스터 심령의 검 차지/취소
-	for cls2 in ["rogue", "swordmaster"]:
+	for cls2 in ["rogue", "swordmaster", "fighter", "pyromancer"]:
 		_test_char(cls2)
 		start_raid()
 		game.force_act = true
@@ -807,6 +807,59 @@ func _autotest() -> void:
 					sides.append(int(q.swing.side))
 			Input.action_release("attack")
 			out.append("로그: 뒤잡기 양손 내려찍기 %s, 콤보 순서 %s" % ["O" if back_ok else "X", sides])
+		elif cls2 == "fighter" and mon != null:
+			# 장검 패링: 방어 자세를 잡자마자 맞으면 패링 → 다시 우클릭 = 반격
+			q.equipment.w1 = Data.make_item("old_longsword")
+			q.equipment.w1o = null
+			q.recalc()
+			q.draw_t = 0.0
+			q.pos = game.dungeon.resolve_circle(mon.pos + Vector3(0, 0, 1.8), q.radius)
+			q.yaw = Actor.yaw_to(mon.pos.x - q.pos.x, mon.pos.z - q.pos.z)
+			q.invuln = 0.0
+			Input.action_press("secondary")
+			await get_tree().process_frame
+			await get_tree().process_frame
+			var hp0: float = q.hp
+			q.take_damage(30.0, mon, {"from": mon.pos})
+			var parried: bool = q.counter_t > 0.0 and q.hp == hp0 and mon.stun > 0.0
+			Input.action_release("secondary")
+			await get_tree().process_frame
+			Input.action_press("secondary")
+			await get_tree().process_frame
+			await get_tree().process_frame
+			Input.action_release("secondary")
+			var countered: bool = q.swing != null and q.swing.prof.get("power", false)
+			q.invuln = 999.0
+			out.append("파이터 장검: 타이밍 방어 → 패링 %s, 우클릭 반격 %s" % ["O" if parried else "X", "O" if countered else "X"])
+		elif cls2 == "pyromancer" and mon != null:
+			mon.invuln = 0.0
+			mon.stun = 99.0
+			q.equipment.w1 = Data.make_item("pyro_staff")
+			q.recalc()
+			q.draw_t = 0.0
+			q.res = q.res_max()
+			q.pos = game.dungeon.resolve_circle(mon.pos + Vector3(0, 0, 4.0), q.radius)
+			q.yaw = Actor.yaw_to(mon.pos.x - q.pos.x, mon.pos.z - q.pos.z)
+			var c0: Vector3 = mon.center()
+			q.pitch = atan2(c0.y - (q.pos.y + Player.EYE), q.pos.distance_to(Vector3(mon.pos.x, q.pos.y, mon.pos.z)))
+			var mh0: float = mon.hp
+			Input.action_press("attack")
+			await _wait(1.9)
+			Input.action_release("attack")
+			var beam_dmg: float = mh0 - mon.hp
+			await _wait(1.2)
+			q.equipment.w1 = Data.make_item("stormcaller_staff")
+			q.recalc()
+			q.cd.lmb = 0.0
+			q.draw_t = 0.0
+			q.res = q.res_max()
+			var z0: int = game.zones.filter(func(z): return z.kind == "lightning").size()
+			Input.action_press("attack")
+			await get_tree().process_frame
+			await get_tree().process_frame
+			Input.action_release("attack")
+			var struck: bool = game.zones.filter(func(z): return z.kind == "lightning").size() > z0
+			out.append("화염 지팡이 레이저 4타+폭발 피해 %.0f, 번개 지팡이 조준점 번개 %s" % [beam_dmg, "O" if struck else "X"])
 		elif cls2 == "swordmaster":
 			var n_sw := Skills.sword_count(q)
 			Skills._use(q, "q", q.aim(), 1.0)

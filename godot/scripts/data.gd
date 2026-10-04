@@ -967,7 +967,8 @@ func compute_stats(cls: String, equipment: Dictionary, wset: int = 1) -> Diction
 				weapon_dmg = float(s.get("dmg", WEAPON_REF.get(b.cat, 110.0)))
 				dtype = b.get("dtype", "phys")
 				wcat = b.cat
-				block = maxf(block, 75.0)
+				# 무기로 막기: 단검은 약하게
+				block = maxf(block, 50.0 if b.cat == "dagger" else 75.0)
 				t.ms += {"sword": -10, "longsword": -30, "mace": -15, "staff": -30, "crossbow": -30, "dagger": 0}.get(b.cat, 0) - b.get("ms", 0)
 			if b.has("ufx") and b.ufx != "":
 				uniques.append(b.ufx)

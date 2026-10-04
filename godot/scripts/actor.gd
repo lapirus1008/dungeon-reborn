@@ -68,6 +68,11 @@ var root := 0.0
 var stealth := 0.0
 var frozen := 0.0 # 서리 장벽 (무적, 행동 불가)
 var parry := 0.0
+var block_t := 0.0 # 방어 자세를 잡은 시간 (장검: 막 들자마자 맞으면 패링)
+var counter_t := 0.0 # 패링 후 우클릭 반격 가능 시간
+var beam_on := false # 화염 지팡이 레이저 중
+var beam_t := 0.0
+var beam_n := 0
 var immune := 0.0 # 해로운 효과 면역
 var dr := 0.0 # 받는 피해 감소율
 var dr_t := 0.0
@@ -271,6 +276,15 @@ func take_damage(amount: float, src, info: Dictionary = {}) -> float:
 	var blocked := false
 	if blocking and from != null:
 		var y := yaw_to(from.x - pos.x, from.z - pos.z)
+		# 장검: 공격이 오는 순간에 맞춰 막으면 (자세를 잡은 지 0.3초 안) 패링 → 우클릭으로 강력한 반격
+		if absf(angle_difference(yaw, y)) < 1.25 and is_hero() and block_t < 0.3 and Skills.wcat(self) == "longsword" and not info.get("ranged", false):
+			game.sfx("block", pos)
+			if src != null and src != self and src.alive:
+				src.add_stun(1.2)
+			counter_t = 1.5
+			on_parry(src)
+			game.on_damage(self, 0.0, src, true, {"parried": true})
+			return 0.0
 		if absf(angle_difference(yaw, y)) < 1.25:
 			blocked = true
 			dmg *= block_mul
@@ -382,7 +396,7 @@ func tick_common(dt: float) -> void:
 	if frozen > 0.0:
 		frozen -= dt
 	combat_t += dt
-	for k in ["petrified", "warcry_t", "dragon_cd", "vuln_t", "draw_t"]:
+	for k in ["petrified", "warcry_t", "dragon_cd", "vuln_t", "draw_t", "counter_t"]:
 		var v2: float = get(k)
 		if v2 > 0.0:
 			set(k, v2 - dt)

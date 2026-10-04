@@ -908,6 +908,31 @@ func explode(p: Vector3, rad: float, dmg: float, owner, kind: String, extra: Dic
 				notify(h, "shake", [0.3])
 
 
+# 레이저/번개 줄기 시각 효과 (모두에게)
+func beam_fx(a: Vector3, b: Vector3, color: Color, life := 0.3) -> void:
+	_bc("beam_fx", [a, b, color, life])
+	var len := a.distance_to(b)
+	if len < 0.05:
+		return
+	var m := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.06
+	cm.bottom_radius = 0.06
+	cm.height = len
+	cm.radial_segments = 6
+	m.mesh = cm
+	m.material_override = Models.glow_mat(color, 4.0)
+	m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	world.add_child(m)
+	m.global_position = (a + b) * 0.5
+	var up := (b - a).normalized()
+	var side := up.cross(Vector3.FORWARD if absf(up.dot(Vector3.FORWARD)) < 0.9 else Vector3.RIGHT).normalized()
+	m.global_basis = Basis(side, up, side.cross(up)).orthonormalized()
+	var tw := m.create_tween()
+	tw.tween_property(m, "scale", Vector3(0.2, 1.0, 0.2), life)
+	tw.tween_callback(m.queue_free)
+
+
 # 폭발 시각 효과만 (피해 없음)
 func explode_fx(p: Vector3, rad: float, color: Color) -> void:
 	_bc("explode_fx", [p, rad, color])
@@ -1154,6 +1179,10 @@ func update_zones(dt: float) -> void:
 
 func _zone_tick(z: Dictionary) -> void:
 	var owner = z.owner
+	if z.kind == "lightning":
+		explode_fx(z.pos + Vector3(0, 0.3, 0), z.radius, Color(0.55, 0.75, 1.0))
+		beam_fx(z.pos + Vector3(randf_range(-0.5, 0.5), 9.0, randf_range(-0.5, 0.5)), z.pos, Color(0.7, 0.85, 1.0), 0.25)
+		sfx("fire", z.pos, 0.2)
 	var hits := 0
 	var cands := []
 	for a in actors:
@@ -2282,6 +2311,7 @@ func _draw_actors(dt: float) -> void:
 
 # 소드마스터 심령의 검: 소환된 검이 머리 위에 떠 있음 (1인칭은 화면 앞쪽 위)
 var psi_nodes := {}
+var aim_ring: MeshInstance3D
 
 
 func _update_psi_visuals() -> void:
@@ -2321,7 +2351,26 @@ func _update_view(dt: float) -> void:
 		return
 	player.update_camera(camera, view_model, shield_bubble, dt)
 	player_light.position = camera.position + Vector3(0, 0.6, 0) - Actor.fwd(player.yaw) * 0.5
-	# 횃불을 들면 훨씬 밝고 넓게
+	# 번개 지팡이: 번개가 떨어질 자리를 조준점 바닥에 동그랗게 표시
+	var show_ring: bool = player.alive and player.held == "" and Skills.staff_mode(player) == "lightning"
+	if show_ring and (aim_ring == null or not is_instance_valid(aim_ring)):
+		aim_ring = MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 2.0
+		tm.outer_radius = 2.2
+		tm.rings = 32
+		tm.ring_segments = 4
+		aim_ring.mesh = tm
+		aim_ring.material_override = Models.glow_mat(Color(0.55, 0.75, 1.0), 2.0)
+		aim_ring.scale = Vector3(1, 0.05, 1)
+		aim_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		world.add_child(aim_ring)
+	if aim_ring != null and is_instance_valid(aim_ring):
+		aim_ring.visible = show_ring
+		if show_ring:
+			var am: Dictionary = player.aim()
+			aim_ring.position = aim_point(am.origin, am.dir, 22.0) + Vector3(0, 0.05, 0)
+		# 횃불을 들면 훨씬 밝고 넓게
 	var lit: bool = player.held == "torch"
 	player_light.omni_range = 26.0 if lit else 16.0
 	player_light.light_energy = (2.6 if lit else 1.3) + sin(time * 13.0) * 0.08 + sin(time * 7.3) * 0.1
@@ -2741,7 +2790,7 @@ func net_event(n: String, args: Array) -> void:
 		"sfx":
 			if player != null:
 				Sfx.play(args[0], player.pos.distance_to(args[1]), args[2])
-		"explode_fx", "spark", "spawn_ring_burst", "spawn_telegraph":
+		"explode_fx", "spark", "spawn_ring_burst", "spawn_telegraph", "beam_fx":
 			callv(n, args)
 		"frozen_fx":
 			var a = net_actors.get(args[0])

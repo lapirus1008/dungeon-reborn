@@ -55,11 +55,12 @@ static func is_melee(c) -> bool:
 	return true
 
 
+# 우클릭 = 방어 자세 (방패, 한손검, 장검, 단검, 철퇴 모두 각자 방어 자세)
 static func uses_block(c) -> bool:
-	if c.panther or c.cls in ["swordmaster", "rogue"]:
+	if c.panther:
 		return false
 	var off := Data.offhand_cat(c.equipment, c.wset) if c.get("equipment") != null else ""
-	return off == "shield" or wcat(c) in ["sword", "longsword", "mace"]
+	return off == "shield" or wcat(c) in ["sword", "longsword", "mace", "dagger"]
 
 
 # 무기 종류별 근접 공격 (bash = 지팡이 치기)
@@ -214,7 +215,7 @@ static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 		var dmg: float = prof.dmg * c.dmg_mul() * mult
 		var nd := maxf(d, 0.001)
 		var k: float = prof.knock
-		var dealt: float = g.hit(c, a, dmg, {"knock": Vector3(dx / nd * k, 0, dz / nd * k), "from": c.pos, "melee": true, "weapon": true, "dtype": c.stats.get("dtype", "phys"), "backstab": prof.get("backstab", false)})
+		var dealt: float = g.hit(c, a, dmg, {"knock": Vector3(dx / nd * k, 0, dz / nd * k), "from": c.pos, "melee": true, "weapon": true, "dtype": c.stats.get("dtype", "phys"), "backstab": prof.get("backstab", false) or prof.get("power", false)})
 		total += dealt
 		hits += 1
 		hit_list.append(a)
@@ -288,6 +289,88 @@ static func fire_basic(c, aim: Dictionary) -> bool:
 		if prof.has(k):
 			extra[k] = prof[k]
 	c.game.spawn_projectile(c, prof.kind, aim.origin, aim.dir, prof.speed, prof.dmg * c.dmg_mul(), extra)
+	return true
+
+
+# 지팡이 기본 공격: 화염 지팡이 = 누르고 있으면 레이저 4타 후 조준점 폭발, 번개 지팡이 = 조준점에 번개
+static func staff_mode(c) -> String:
+	if c.panther or wcat(c) != "staff":
+		return ""
+	match str(c.stats.get("dtype", "")):
+		"fire":
+			return "fire"
+		"lightning":
+			return "lightning"
+	return ""
+
+
+# 조준선을 따라가다 처음 맞는 적(또는 벽)까지
+static func ray_hit(c, aim: Dictionary, max_d := 18.0) -> Dictionary:
+	var g = c.game
+	var p: Vector3 = aim.origin
+	var dir: Vector3 = aim.dir
+	var d := 0.0
+	while d < max_d:
+		p += dir * 0.3
+		d += 0.3
+		if g.dungeon.is_solid(p.x, p.z) or p.y <= 0.0:
+			return {"point": p, "actor": null}
+		for a in g.actors:
+			if a.alive and not a.extracted and a != c and g.hostile(c, a):
+				if Vector2(a.pos.x - p.x, a.pos.z - p.z).length() < a.radius + 0.35 and p.y > a.pos.y - 0.2 and p.y < a.pos.y + a.height + 0.3:
+					return {"point": p, "actor": a}
+	return {"point": p, "actor": null}
+
+
+const BEAM_TICK := 0.32
+const BEAM_TICKS := 4
+
+
+static func tick_beam(c, dt: float, holding: bool, aim: Dictionary) -> void:
+	var g = c.game
+	if not holding:
+		if c.beam_on:
+			c.beam_on = false
+			c.cd.lmb = 0.35
+		return
+	if not c.beam_on:
+		if c.cd.lmb > 0.0:
+			return
+		c.beam_on = true
+		c.beam_t = 0.0
+		c.beam_n = 0
+	c.beam_t += dt
+	c.cast = 0.15
+	if c.beam_n < BEAM_TICKS and c.beam_t >= BEAM_TICK * (c.beam_n + 1):
+		if not pay(c, 3.0):
+			c.beam_on = false
+			c.cd.lmb = 0.5
+			return
+		c.beam_n += 1
+		var h := ray_hit(c, aim)
+		g.beam_fx(aim.origin + Vector3(0, -0.15, 0), h.point, FIRE, BEAM_TICK + 0.05)
+		if h.actor != null:
+			g.hit(c, h.actor, 13.0 * c.dmg_mul(), {"from": c.pos, "ranged": true, "dtype": "fire", "weapon": true})
+		g.sfx("fire", c.pos, 0.1)
+	elif c.beam_n >= BEAM_TICKS and c.beam_t >= BEAM_TICK * (BEAM_TICKS + 1):
+		# 마지막: 조준한 곳에 큰 폭발
+		var h := ray_hit(c, aim)
+		g.beam_fx(aim.origin + Vector3(0, -0.15, 0), h.point, Color(1.0, 0.75, 0.3), 0.25)
+		g.explode(Vector3(h.point.x, maxf(0.3, h.point.y), h.point.z), 2.6, 58.0 * c.dmg_mul(), c, "fire", {"dtype": "fire", "burn": 2})
+		c.beam_on = false
+		c.cd.lmb = 1.0 / c.stats.get("act_mul", 1.0)
+
+
+static func lightning_strike(c, aim: Dictionary) -> bool:
+	if c.cd.lmb > 0.0 or not pay(c, 8.0):
+		return false
+	var g = c.game
+	var p: Vector3 = g.aim_point(aim.origin, aim.dir, 22.0)
+	c.cd.lmb = 1.2 / c.stats.get("act_mul", 1.0)
+	c.cast = 0.3
+	g.spawn_telegraph(p, 2.2, 0.35)
+	g.add_zone({"pos": p, "radius": 2.2, "dur": 0.6, "delay": 0.35, "owner": c, "kind": "lightning", "dmg": 50.0 * c.dmg_mul(), "once": true, "dtype": "lightning"})
+	g.sfx("magic", c.pos, 0.1)
 	return true
 
 
