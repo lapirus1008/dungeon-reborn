@@ -7,14 +7,17 @@ extends RefCounted
 const STASH := Vector2i(12, 10)
 const CONT_W := 6
 # 직업마다 가방 크기가 다르다 (가벼운 직업은 넓게, 마법사는 좁게)
+# 가방 크기 (가로 6칸): 인간 종족 7줄(42칸), 언데드 종족 6줄(36칸)
+const HUMAN_BAG := Vector2i(6, 7)
+const UNDEAD_BAG := Vector2i(6, 6)
 const BAG := {
-	"fighter": Vector2i(9, 5), "swordmaster": Vector2i(9, 5), "rogue": Vector2i(10, 6), "deathknight": Vector2i(9, 5),
-	"druid": Vector2i(9, 5), "pyromancer": Vector2i(8, 5), "cryomancer": Vector2i(8, 5), "priest": Vector2i(9, 5),
+	"fighter": HUMAN_BAG, "rogue": HUMAN_BAG, "priest": HUMAN_BAG, "pyromancer": HUMAN_BAG, "swordmaster": HUMAN_BAG, "druid": HUMAN_BAG,
+	"deathknight": UNDEAD_BAG, "cryomancer": UNDEAD_BAG,
 }
 
 
 static func bag_size(cls: String) -> Vector2i:
-	return BAG.get(cls, Vector2i(9, 5))
+	return BAG.get(cls, HUMAN_BAG)
 
 
 static func rect_of(it: Dictionary) -> Rect2i:

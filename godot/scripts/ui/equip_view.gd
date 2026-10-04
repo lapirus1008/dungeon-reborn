@@ -11,8 +11,7 @@ const LAYOUT := {
 	"head": Rect2i(3, 0, 2, 2),
 	"w2": Rect2i(6, 0, 1, 3), "w2o": Rect2i(7, 0, 1, 3),
 	"chest": Rect2i(3, 2, 2, 3), "necklace": Rect2i(5, 2, 1, 1),
-	"util": Rect2i(0, 4, 1, 3),
-	"q1": Rect2i(7, 4, 1, 1), "q2": Rect2i(7, 5, 1, 1), "q3": Rect2i(7, 6, 1, 1),
+	"q1": Rect2i(6, 4, 2, 1), "q2": Rect2i(6, 5, 2, 1),
 	"ring1": Rect2i(2, 5, 1, 1), "legs": Rect2i(3, 5, 2, 3), "ring2": Rect2i(5, 5, 1, 1),
 	"hands": Rect2i(0, 8, 2, 2), "feet": Rect2i(6, 8, 2, 2),
 	"sw1": Rect2i(2, 10, 1, 1), "sw2": Rect2i(3, 10, 1, 1), "sw3": Rect2i(4, 10, 1, 1), "sw4": Rect2i(5, 10, 1, 1),
@@ -101,7 +100,7 @@ func _short_name(s: String, r: Rect2) -> String:
 	if r.size.x < cell * 1.2 and r.size.y > cell * 1.5:
 		return "\n".join(n.replace(" ", "").split(""))
 	if r.size.x < cell * 1.2:
-		return {"sw": "검", "q": "소모"}.get(s.left(2) if s.begins_with("sw") else s.left(1), n.left(2))
+		return {"sw": "검"}.get(s.left(2), n.left(2))
 	return n
 
 
@@ -126,7 +125,7 @@ func _draw() -> void:
 	var ar := _rect(act[0]).merge(_rect(act[1])).grow(2)
 	draw_rect(ar, Color(1.0, 0.82, 0.3, 0.85), false, 2.0)
 	var font := get_theme_default_font()
-	draw_string(font, Vector2(ar.position.x, ar.end.y + 12), "▲ 사용 중 [X]", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1.0, 0.82, 0.3))
+	draw_string(font, Vector2(ar.position.x, ar.end.y + 12), "▲ 사용 중 (1/2키)", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1.0, 0.82, 0.3))
 	for s in _slots():
 		var r := _rect(s)
 		var it = equipment.get(s)

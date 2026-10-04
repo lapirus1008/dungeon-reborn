@@ -123,7 +123,7 @@ func _ready() -> void:
 	var howto := RichTextLabel.new()
 	howto.bbcode_enabled = true
 	howto.fit_content = true
-	howto.text = "[color=#e6dccb][b]조작법[/b][/color]\n[color=#9a8e7a][font_size=13]WASD 이동 · Shift 달리기 · Space 점프\n좌클릭 공격 · 우클릭 보조 · Q/E 스킬 · X 무기 세트 교체\nF 상호작용/줍기 · Tab 인벤토리 · M 지도 · G 투척\n1·2·3 소모품 · Esc 메뉴 (게임은 계속 진행)[/font_size][/color]"
+	howto.text = "[color=#e6dccb][b]조작법[/b][/color]\n[color=#9a8e7a][font_size=13]WASD 이동 · Shift 달리기 · Space 점프\n좌클릭 공격 · 우클릭 보조 · Q/E 스킬\n1·2 무기 세트 선택 · 3·4 소모품 칸 (물약·붕대·플라스크)\nF 상호작용/줍기 · Tab 인벤토리 · M 지도 · Esc 메뉴 (게임은 계속 진행)[/font_size][/color]"
 	lv.add_child(howto)
 	body.add_child(left)
 
@@ -579,8 +579,6 @@ func _render_shop() -> void:
 				kind = "%s · %s" % [Data.WEAPON_NAMES.get(b.cat, b.cat), Data.class_names(Data.weapon_classes(b.cat))]
 			"consumable":
 				kind = "소모품"
-			"utility":
-				kind = "투척 도구"
 			"head", "chest", "hands", "legs", "feet":
 				kind = "%s %s" % [Data.ARMOR_TYPES.get(b.get("cat", ""), ""), Data.SLOT_NAMES[b.slot]]
 			_:
@@ -825,7 +823,7 @@ func _render_skills(view: Dictionary) -> void:
 	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top.add_child(sp)
 	if not creating:
-		top.add_child(UI.button("⇄ 무기 세트 교체 (현재 %d)" % int(s.get("wset", 1)), func(): SaveData.op("swap_set"), 12))
+		top.add_child(UI.button("⇄ 사용할 무기 세트 (현재 %d · 던전에서 1/2키)" % int(s.get("wset", 1)), func(): SaveData.op("swap_set"), 12))
 	skill_box.add_child(top)
 	for slot in ["q", "e"]:
 		var row := HBoxContainer.new()

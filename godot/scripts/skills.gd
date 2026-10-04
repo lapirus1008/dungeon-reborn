@@ -275,23 +275,30 @@ static func roar(c) -> bool:
 	return true
 
 
-# 투척 칸 (G): 투척용 단검 / 화염병
-static func throw_utility(c, aim: Dictionary) -> bool:
-	var it = c.equipment.get("util")
-	if it == null or c.cd.get("util", 0.0) > 0.0:
+# 플라스크 던지기 (소모품 칸 3/4): 화염 / 바위 / 번개 / 미믹
+static func throw_flask(c, aim: Dictionary, it: Dictionary, slot: String) -> bool:
+	if c.cd.get("util", 0.0) > 0.0 or c.incapacitated():
 		return false
-	c.cd["util"] = 0.8
+	c.cd["util"] = 0.9
 	var g = c.game
-	match it.base:
-		"fire_flask":
-			var dir: Vector3 = aim.dir
-			dir.y += 0.15
-			g.spawn_projectile(c, "poison", aim.origin, dir.normalized(), 20.0, 45.0, {"gravity": 9.0, "aoe": 3.0, "burn": 3, "dtype": "fire", "fire_aoe": true})
-		_:
-			g.spawn_projectile(c, "knife", aim.origin, aim.dir, 45.0, 30.0, {"gravity": 3.0})
+	var b: Dictionary = Data.base_of(it)
+	var dir: Vector3 = aim.dir
+	dir.y += 0.15
+	var ex := {"gravity": 9.0}
+	match b.throw:
+		"fire":
+			ex.merge({"aoe": 3.0, "burn": 3, "dtype": "fire", "fire_aoe": true, "color": Color(1.0, 0.45, 0.12)})
+		"rock":
+			ex.merge({"aoe": 2.5, "dtype": "phys", "stun": 1.5, "color": Color(0.6, 0.55, 0.45)})
+		"lightning":
+			ex.merge({"aoe": 3.5, "dtype": "lightning", "slow": 2.0, "color": Color(0.55, 0.75, 1.0)})
+		"mimic":
+			ex.merge({"summon_mimic": true})
+	g.spawn_projectile(c, "flask", aim.origin, dir.normalized(), 20.0, float(b.get("dmg", 0)) * c.stats.get("dmg_mul", 1.0), ex)
+	g.sfx("swing", c.pos)
 	it.count = int(it.get("count", 1)) - 1
 	if it.count <= 0:
-		c.equipment.util = null
+		c.equipment[slot] = null
 	g.inv_changed(c)
 	return true
 

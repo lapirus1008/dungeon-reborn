@@ -661,7 +661,7 @@ const PROJ_COLORS := {
 	"bolt": Color(0.48, 0.42, 1.0), "firebolt": Color(1.0, 0.45, 0.12), "pyroblast": Color(1.0, 0.4, 0.08),
 	"icebolt": Color(0.6, 0.9, 1.0), "thorn": Color(0.45, 0.95, 0.35), "poison": Color(0.4, 0.95, 0.2),
 	"grasp": Color(0.35, 0.95, 0.55), "blade": Color(0.55, 0.75, 1.0), "fireball": Color(1.0, 0.42, 0.1),
-	"holy": Color(1.0, 0.9, 0.5), "spit": Color(0.6, 0.9, 0.2), "magic_orb": Color(0.9, 0.3, 0.9),
+	"holy": Color(1.0, 0.9, 0.5), "spit": Color(0.6, 0.9, 0.2), "magic_orb": Color(0.9, 0.3, 0.9), "flask": Color(0.85, 0.9, 0.8),
 }
 
 
@@ -750,9 +750,13 @@ func _homing_target(p: Dictionary):
 
 func _projectile_impact(p: Dictionary, pp: Vector3, hit) -> void:
 	var owner = p.owner
+	if p.get("summon_mimic", false):
+		spawn_mimic_ally(owner, pp)
+		return
 	if p.get("aoe", 0.0) > 0.0:
 		var kind := "fire" if p.get("fire_aoe", false) or p.kind != "poison" else "poison"
-		explode(pp, p.aoe, p.dmg, owner, kind, {"root": p.get("root", 0.0), "dot": p.get("dot", 0.0), "burn": p.get("burn", 0), "dtype": p.get("dtype", "fire")})
+		explode(pp, p.aoe, p.dmg, owner, kind, {"root": p.get("root", 0.0), "dot": p.get("dot", 0.0), "burn": p.get("burn", 0), "dtype": p.get("dtype", "fire"),
+			"stun": p.get("stun", 0.0), "slow": p.get("slow", 0.0), "color": p.get("color", null)})
 		return
 	if hit == null:
 		spark(pp, PROJ_COLORS.get(p.kind, Color(0.55, 0.48, 1.0)))
@@ -881,12 +885,18 @@ func explode(p: Vector3, rad: float, dmg: float, owner, kind: String, extra: Dic
 			a.add_root(extra.root)
 		if extra.get("dot", 0.0) > 0.0:
 			a.add_dot(extra.dot, 4.0, owner)
+		if extra.get("stun", 0.0) > 0.0:
+			a.add_stun(extra.stun)
+		if extra.get("slow", 0.0) > 0.0:
+			a.add_slow(extra.slow, 0.5)
 	var color := Color(1.0, 0.42, 0.1)
 	match kind:
 		"slam":
 			color = Color(0.6, 0.23, 1.0)
 		"poison":
 			color = Color(0.35, 0.9, 0.2)
+	if extra.get("color") is Color:
+		color = extra.color
 	explode_fx(p if kind != "slam" else Vector3(p.x, 0.2, p.z), rad, color)
 	sfx("fire" if kind != "poison" else "magic", p)
 	if kind != "poison":
@@ -1183,6 +1193,24 @@ func end_zone(owner, kind: String) -> void:
 
 
 # ------------------------------------------------------------------ 직업 스킬 연동
+# 미믹 플라스크: 던진 자리에 15초 동안 내 편 미믹
+func spawn_mimic_ally(owner, p: Vector3) -> void:
+	if owner == null:
+		return
+	var pos := dungeon.resolve_circle(Vector3(p.x, 0, p.z), 0.5)
+	var room = dungeon.room_at(pos.x, pos.z)
+	var m := Monster.new(self, "mimic", pos, room if room != null else dungeon.rooms[0], 1.0)
+	m.faction = owner.faction
+	m.summoned = true
+	m.life = 15.0
+	m.hidden = false
+	m.stealth = 0.0
+	m.name = "%s의 미믹" % owner.name
+	add_actor(m)
+	spawn_ring_burst(pos + Vector3(0, 0.3, 0), Color(1.0, 0.8, 0.3), 2.0)
+	sfx("growl", pos)
+
+
 func spawn_summon(owner, p: Vector3) -> void:
 	var s := Summon.new(self, owner, p, 98.37 * owner.dmg_mul())
 	add_actor(s)
@@ -1414,6 +1442,9 @@ func on_death(actor, src) -> void:
 				notify(h, "killfeed", ["%s ➜ %s" % [sname if src != h else "당신", actor.display_name() if actor != h else "당신"], src == h or actor == h])
 	sfx("death", actor.pos)
 	actor.windup = 0.0
+	var summoned: bool = actor.kind == "monster" and actor.summoned
+	if summoned:
+		return
 	if actor.kind in ["player", "bot"] or (actor.kind == "monster" and actor.def.get("ai", "") != "harmless"):
 		spawn_soul_orb(actor.pos)
 	_kill_hooks(actor, src)
@@ -2285,7 +2316,7 @@ func net_inv(id: int, op: String, args: Array) -> void:
 # 스냅샷 한 줄 (float 10개): id, x, y, z, yaw, hp, flags, move, windup_k, attack
 const ACT_STRIDE := 10
 const PROJ_STRIDE := 10
-const PROJ_KINDS := ["arrow", "knife", "blade", "bolt", "firebolt", "pyroblast", "icebolt", "thorn", "poison", "grasp", "fireball", "holy", "spit", "magic_orb"]
+const PROJ_KINDS := ["arrow", "knife", "blade", "bolt", "firebolt", "pyroblast", "icebolt", "thorn", "poison", "grasp", "fireball", "holy", "spit", "magic_orb", "flask"]
 
 
 func _pack_actor(out: PackedFloat32Array, a) -> void:

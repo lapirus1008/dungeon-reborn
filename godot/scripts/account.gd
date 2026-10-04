@@ -10,7 +10,7 @@ const MAX_CHARS := 8
 
 # 상인 목록 (가격은 서버가 이 표로 검증)
 const SHOP := [
-	["health_potion", 30], ["bandage", 12], ["mana_potion", 30], ["throwing_knife", 8], ["fire_flask", 20],
+	["health_potion", 30], ["bandage", 12], ["mana_potion", 30], ["fire_flask", 24], ["rock_flask", 24], ["lightning_flask", 30], ["mimic_flask", 40],
 	["old_sword", 30], ["old_longsword", 40], ["old_dagger", 25], ["old_mace", 30], ["old_staff", 35], ["old_shield", 30], ["old_crossbow", 40],
 	["old_plate_chest", 30], ["old_leather_chest", 25], ["old_cloth_chest", 20],
 ]
@@ -34,7 +34,7 @@ static func new_character(name: String, cls: String) -> Dictionary:
 	var off: String = Data.STARTER_OFFHAND.get(cls, "")
 	if off != "":
 		eq.w1o = Data.make_item(off)
-	# 두 번째 무기 세트 (X로 교체): 파이터 양손검(소용돌이), 프리스트 지팡이(신의 계시/치료)
+	# 두 번째 무기 세트 (2키): 파이터 양손검(소용돌이), 프리스트 지팡이(신의 계시/치료)
 	var second: String = {"fighter": "old_longsword", "priest": "old_staff"}.get(cls, "")
 	if second != "":
 		eq.w2 = Data.make_item(second)
@@ -48,18 +48,18 @@ static func new_character(name: String, cls: String) -> Dictionary:
 	var band := Data.make_item("bandage")
 	band.count = 2
 	eq.q2 = band
+	var bag := []
 	if Data.CLASSES[cls].res == "mana":
-		eq.q3 = Data.make_item("mana_potion")
-	var knives := Data.make_item("throwing_knife")
-	knives.count = 3
-	eq.util = knives
+		bag.append(Data.make_item("mana_potion"))
+	bag.append(Data.make_item("fire_flask"))
+	Inv.repack(bag, Inv.bag_size(cls))
 	# 소드마스터: 검 슬롯에 영검으로 쓸 검
 	if cls == "swordmaster":
 		eq.sw1 = Data.make_item("old_sword")
 		eq.sw2 = Data.make_item("old_sword")
 	return {
 		"id": "c%d_%d" % [Time.get_unix_time_from_system(), randi() % 100000],
-		"name": name, "cls": cls, "equipment": eq, "bag": [], "skills": default_skills(cls), "wset": 1,
+		"name": name, "cls": cls, "equipment": eq, "bag": bag, "skills": default_skills(cls), "wset": 1,
 		"stats": {"raids": 0, "extracts": 0, "deaths": 0},
 	}
 

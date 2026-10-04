@@ -134,7 +134,7 @@ static func item_tip(item: Dictionary, extra := "") -> String:
 		"consumable":
 			kind = "소모품"
 		"utility":
-			kind = "투척"
+			kind = "소모품"
 		"treasure":
 			kind = "보물"
 		_:
@@ -189,8 +189,10 @@ static func item_tip(item: Dictionary, extra := "") -> String:
 		t += "[color=#8fd0ff]체력 %d 회복[/color]\n" % b.heal
 	if b.has("mana"):
 		t += "[color=#8fd0ff]마나 %d 회복[/color]\n" % b.mana
-	if b.slot == "utility":
-		t += "[color=#8fd0ff]G 키로 던지기 (피해 %d)[/color]\n" % b.get("dmg", 0)
+	if b.has("throw"):
+		t += "[color=#8fd0ff]%s[/color]\n[font_size=12][color=#9a8e7a]소모품 칸(3/4키)에 넣고 눌러 조준 지점에 던집니다%s[/color][/font_size]\n" % [b.get("desc", ""), (" · 피해 %d" % b.dmg) if b.get("dmg", 0) > 0 else ""]
+	elif b.slot == "consumable":
+		t += "[font_size=12][color=#9a8e7a]소모품 칸(3/4키)에 넣고 눌러 사용합니다[/color][/font_size]\n"
 	if b.slot == "weapon":
 		var cl: Array = Data.weapon_classes(b.cat)
 		var ok: bool = tip_cls == "" or tip_cls in cl

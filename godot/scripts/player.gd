@@ -96,7 +96,7 @@ func swap_weapon_set() -> void:
 	if panther and Skills.wcat(self) == "":
 		Skills.set_panther(self, false)
 	recalc()
-	game.notify(self, "toast", ["무기 세트 %d" % wset])
+	game.notify(self, "toast", ["무기 세트 %d (%d키)" % [wset, wset]])
 	game.inv_changed(self)
 	game.on_weapon_changed(self)
 
@@ -182,26 +182,14 @@ func update(dt: float) -> void:
 	var act := can_act and not locked and channel_t <= 0.0
 	_combat(dt, act)
 
-	# 소모품 칸 1/2/3 (비어 있으면 가방에서 같은 종류)
-	if not locked and can_act and cd.potion <= 0.0:
-		for i in 3:
-			if inp.just_pressed("potion%d" % (i + 1)):
-				var it = equipment.get("q%d" % (i + 1))
-				if it == null:
-					game.notify(self, "toast", ["소모품 칸 %d이 비어 있습니다" % (i + 1)])
-				else:
-					var b: Dictionary = Data.base_of(it)
-					if b.has("heal") and hp >= max_hp:
-						game.notify(self, "toast", ["체력이 가득 찼습니다"])
-					elif b.has("mana") and (res_type() != "mana" or res >= res_max()):
-						game.notify(self, "toast", ["마나가 가득 찼거나 쓸 수 없습니다"])
-					else:
-						use_consumable(it.id)
-	# 무기 세트 교체 / 투척
-	if can_act and not locked and inp.just_pressed("swap_weapon"):
-		swap_weapon_set()
-	if can_act and not locked and inp.just_pressed("throw"):
-		Skills.throw_utility(self, aim())
+	# 1/2: 무기 세트 바로 선택 · 3/4: 소모품 칸 사용 (물약·붕대는 마시고, 플라스크는 던짐)
+	if can_act and not locked:
+		for k in [1, 2]:
+			if inp.just_pressed("weapon%d" % k) and wset != k:
+				swap_weapon_set()
+		for k in [3, 4]:
+			if inp.just_pressed("use%d" % k):
+				use_slot("q%d" % (k - 2), k)
 
 	# 원격 플레이어: 클라이언트가 보낸 위치를 검증 후 채택 (넉백/돌진 중에는 서버 위치 유지)
 	if inp.remote and has_net:
@@ -389,6 +377,25 @@ func _combat(dt: float, act: bool) -> void:
 			Skills.melee_strike(self, swing.prof)
 		if swing.t >= swing.prof.dur:
 			swing = null
+
+
+func use_slot(slot: String, key: int) -> void:
+	var it = equipment.get(slot)
+	if it == null:
+		game.notify(self, "toast", ["소모품 칸 %d이 비어 있습니다" % key])
+		return
+	var b: Dictionary = Data.base_of(it)
+	if b.has("throw"):
+		Skills.throw_flask(self, aim(), it, slot)
+		return
+	if cd.potion > 0.0:
+		return
+	if b.has("heal") and hp >= max_hp:
+		game.notify(self, "toast", ["체력이 가득 찼습니다"])
+	elif b.has("mana") and (res_type() != "mana" or res >= res_max()):
+		game.notify(self, "toast", ["마나가 가득 찼거나 쓸 수 없습니다"])
+	else:
+		use_consumable(it.id)
 
 
 func use_consumable(id: String) -> void:

@@ -88,8 +88,7 @@ func _setup_input() -> void:
 		"move_forward": [KEY_W], "move_back": [KEY_S], "move_left": [KEY_A], "move_right": [KEY_D],
 		"sprint": [KEY_SHIFT], "jump": [KEY_SPACE], "skill_q": [KEY_Q], "skill_e": [KEY_E],
 		"interact": [KEY_F], "inventory": [KEY_TAB, KEY_I], "map": [KEY_M],
-		"potion1": [KEY_1], "potion2": [KEY_2], "potion3": [KEY_3], "menu": [KEY_ESCAPE],
-		"throw": [KEY_G], "swap_weapon": [KEY_X],
+		"weapon1": [KEY_1], "weapon2": [KEY_2], "use3": [KEY_3], "use4": [KEY_4], "menu": [KEY_ESCAPE],
 	}
 	for action in keys:
 		if not InputMap.has_action(action):
@@ -708,6 +707,29 @@ func _autotest() -> void:
 	Input.action_release("sprint")
 	Input.action_release("move_forward")
 	out.append("스태미나 12초 연속 달리기: 달리기/걷기 전환 %d회 (짧은 반복이면 수십 회), 최저 %.0f" % [toggles, min_st])
+	# 키 1/2: 무기 세트 선택 · 3/4: 소모품 칸 (물약 마시기, 플라스크 던지기)
+	pl.swing = null
+	var press := func(action: String) -> void:
+		Input.action_press(action)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		Input.action_release(action)
+		await get_tree().process_frame
+	await press.call("weapon2")
+	var w2_ok: bool = pl.wset == 2
+	await press.call("weapon1")
+	var w1_ok: bool = pl.wset == 1
+	var flask := Data.make_item("rock_flask")
+	flask.count = 2
+	pl.equipment.q2 = flask
+	var np: int = game.projectiles.size()
+	await press.call("use4")
+	var thrown: bool = pl.equipment.q2 != null and pl.equipment.q2.count == 1 and np >= 0
+	pl.hp = pl.max_hp * 0.5
+	pl.cd.potion = 0.0
+	var pots: int = pl.equipment.q1.count
+	await press.call("use3")
+	out.append("키 1/2 무기 세트 (%s/%s), 4키 바위 플라스크 던지기 %s, 3키 물약 %d→%d" % ["O" if w2_ok else "X", "O" if w1_ok else "X", "O" if thrown else "X", pots, pl.equipment.q1.count if pl.equipment.q1 != null else 0])
 	game.abandon()
 	while results.visible == false:
 		await get_tree().process_frame
@@ -1009,7 +1031,7 @@ func _inv_checks() -> Array:
 	var r3 := Account.apply(d, "move", ["stash", helm.id, "bag", 2, 0, false])
 	var ls := Data.make_item("traveler_longsword")
 	Inv.add_auto(d.stash, Inv.STASH, ls)
-	var r4 := Account.apply(d, "move", ["stash", ls.id, "bag", 4, 0, true]) # 1x4 를 눕혀서 4x1
+	var r4 := Account.apply(d, "move", ["stash", ls.id, "bag", 2, 2, true]) # 1x4 를 눕혀서 4x1
 	ok.call("4칸 투구 배치 + 회전(1x4→4x1)", r3.ok and r4.ok and Data.item_size(ls) == Vector2i(4, 1))
 	# 우클릭 장착: 기존 상의(낡은 판금 상의)는 가방으로
 	var r5 := Account.apply(d, "quick", ["bag", chest.id])
@@ -1055,6 +1077,11 @@ func _inv_checks() -> Array:
 	d.equipment.necklace = amulet
 	var st1 := Data.compute_stats("fighter", d.equipment)
 	ok.call("능력치 옵션 → 패시브 해금 (%s → %s)" % [st0.passives, st1.passives], st1.passives.size() > st0.passives.size())
+	# 소모품 칸: 플라스크도 3/4 칸에 들어감, 예전 투척 칸 아이템은 보관함으로
+	var fl := Data.make_item("lightning_flask")
+	Inv.add_auto(d.bag, Inv.bag_size(d.cls), fl)
+	var rq := Account.apply(d, "move", ["bag", fl.id, "equip", -1, -1, false, "q2"])
+	ok.call("플라스크를 소모품 칸(4키)에", rq.ok and d.equipment.q2.base == "lightning_flask")
 	# 무기 세트 교체
 	Account.apply(d, "swap_set", [])
 	ok.call("무기 세트 교체 (세트 2: 양손검)", int(d.wset) == 2 and Data.weapon_cat(d.equipment, 2) == "longsword")
@@ -1062,7 +1089,7 @@ func _inv_checks() -> Array:
 	# 캐릭터: 직업별로 만들기 / 스킬 선택 / 선택 전환
 	var first: String = d.active
 	var rc := Account.apply(d, "create_char", ["불꽃", "pyromancer"])
-	ok.call("캐릭터 생성 (화염술사, 가방 %s)" % Inv.bag_size("pyromancer"), rc.ok and d.cls == "pyromancer" and d.equipment.w1 != null and d.bag.is_empty())
+	ok.call("캐릭터 생성 (화염술사, 가방 %s / 데스나이트 %s)" % [Inv.bag_size("pyromancer"), Inv.bag_size("deathknight")], rc.ok and d.cls == "pyromancer" and d.equipment.w1 != null and d.bag.size() == 2)
 	var rs := Account.apply(d, "set_skill", ["e", Data.CLASSES.pyromancer.e[-1]])
 	var bad := Account.apply(d, "set_skill", ["q", "fighter_whirlwind"])
 	ok.call("Q/E 스킬 선택 (다른 직업 스킬 거부)", rs.ok and d.skills.e == Data.CLASSES.pyromancer.e[-1] and not bad.ok)
@@ -1076,8 +1103,15 @@ func _inv_checks() -> Array:
 	var n := Account.normalize(old)
 	ok.call("예전 세이브 변환", n.characters.size() == 1 and n.equipment.w1 != null and n.equipment.necklace != null and n.stash.size() >= 2)
 	# 상자 격자
-	var pk := Inv.pack_container(Data.roll_loot(8, 3.0))
-	ok.call("상자 자동 배치 (%dx%d)" % [pk.gw, pk.gh], pk.items.size() == 8)
+	var loot := Data.roll_loot(8, 3.0)
+	var loot_n0 := 0
+	for it in loot:
+		loot_n0 += int(it.get("count", 1))
+	var pk := Inv.pack_container(loot)
+	var loot_n1 := 0
+	for it in pk.items:
+		loot_n1 += int(it.get("count", 1))
+	ok.call("상자 자동 배치 (%dx%d, 같은 소모품은 겹침)" % [pk.gw, pk.gh], loot_n1 == loot_n0)
 	return out
 
 

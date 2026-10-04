@@ -141,7 +141,7 @@ func leave() -> void:
 
 
 func _on_connected() -> void:
-	_set_status("접속 완료 - 호스트가 레이드를 시작하길 기다리는 중")
+	_set_status("접속 완료 - 던전 입장 → 맵 선택으로 대기방에 들어가세요")
 	hello.rpc_id(1, my_name, SaveData.data.cls, VERSION, pin)
 
 

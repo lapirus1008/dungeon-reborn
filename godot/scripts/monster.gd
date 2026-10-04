@@ -30,6 +30,8 @@ var guard := 0 # 방패: 막을 수 있는 남은 횟수
 var guard_cd := 0.0
 var blast: Array = [] # 악마의 눈 마법진 [위치, 남은 시간]
 var bob := 0.0
+var summoned := false # 미믹 플라스크로 불러낸 내 편 미믹 (전리품 없음)
+var life := -1.0
 
 
 func _init(g, t: String, p: Vector3, room: Dictionary, depth_mul := 1.0) -> void:
@@ -151,6 +153,13 @@ func update(dt: float) -> void:
 	tick_common(dt)
 	if not alive:
 		return
+	if life > 0.0:
+		life -= dt
+		if life <= 0.0:
+			alive = false
+			hp = 0.0
+			game.on_death(self, null)
+			return
 	_tick_blasts(dt)
 	# 멀리 있으면 휴면
 	if game.nearest_adventurer_dist(pos) > 50.0:

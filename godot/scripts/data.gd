@@ -261,16 +261,16 @@ const PASSIVES := {
 }
 
 # ------------------------------------------------------------------ 장비 칸 (던전본 인벤토리 배치)
-# w1/w1o: 무기 세트 1 (주무기/보조), w2/w2o: 세트 2, util: 투척 칸, q1~q3: 소모품 칸, sw1~sw4: 소드마스터 검 슬롯
+# w1/w1o: 무기 세트 1 (주무기/보조, 1키), w2/w2o: 세트 2 (2키), q1/q2: 소모품 칸 (3키/4키), sw1~sw4: 소드마스터 검 슬롯
 const GEAR_SLOTS := ["w1", "w1o", "w2", "w2o", "head", "chest", "necklace", "ring1", "legs", "ring2", "hands", "feet"]
-const UTIL_SLOTS := ["util", "q1", "q2", "q3"]
+const UTIL_SLOTS := ["q1", "q2"]
 const SWORD_SLOTS := ["sw1", "sw2", "sw3", "sw4"]
 const ALL_SLOTS := GEAR_SLOTS + UTIL_SLOTS + SWORD_SLOTS
 const SLOT_NAMES := {
 	"w1": "세트 1", "w1o": "세트 1 보조", "w2": "세트 2", "w2o": "세트 2 보조",
 	"head": "머리", "chest": "상의", "hands": "장갑", "legs": "하의", "feet": "신발",
 	"necklace": "목걸이", "ring1": "반지", "ring2": "반지", "ring": "반지",
-	"util": "투척", "q1": "소모품", "q2": "소모품", "q3": "소모품",
+	"q1": "소모품 3", "q2": "소모품 4",
 	"sw1": "검 슬롯", "sw2": "검 슬롯", "sw3": "검 슬롯", "sw4": "검 슬롯",
 }
 const WEAPON_NAMES := {
@@ -342,6 +342,7 @@ const STARTER_ARMOR := {
 # 이전 버전 세이브 변환용
 const LEGACY_CLASS := {"ranger": "rogue", "mage": "pyromancer"}
 const LEGACY_ITEM := {
+	"throwing_knife": "fire_flask",
 	"short_bow": "old_dagger", "hunting_bow": "steel_dagger", "long_bow": "exquisite_dagger", "elven_bow": "finely_blade",
 	"rusty_sword": "old_sword", "arming_sword": "traveler_sword", "war_axe": "soldier_sword", "zweihander": "soldier_longsword",
 	"training_longsword": "old_sword", "katana": "finely_sword", "rusty_dagger": "old_dagger", "twin_daggers": "steel_dagger",
@@ -540,8 +541,15 @@ func _build_items() -> void:
 	_add("health_potion", {"name": "체력 물약", "slot": "consumable", "heal": 60, "value": 15, "icon": "🧪", "size": [1, 1], "rarity": 1, "stack": 10})
 	_add("bandage", {"name": "붕대", "slot": "consumable", "heal": 30, "value": 6, "icon": "🩹", "size": [1, 1], "rarity": 0, "stack": 10})
 	_add("mana_potion", {"name": "마나 물약", "slot": "consumable", "mana": 50, "value": 15, "icon": "🔵", "size": [1, 1], "rarity": 1, "stack": 10})
-	_add("throwing_knife", {"name": "투척용 단검", "slot": "utility", "dmg": 30, "value": 4, "icon": "🔪", "size": [1, 2], "rarity": 0, "stack": 5})
-	_add("fire_flask", {"name": "화염병", "slot": "utility", "dmg": 45, "value": 10, "icon": "🍾", "size": [1, 1], "rarity": 1, "stack": 3})
+	# 플라스크: 3/4 키로 조준 지점에 던짐
+	_add("fire_flask", {"name": "화염 플라스크", "slot": "consumable", "throw": "fire", "dmg": 45, "value": 12, "icon": "🔥", "size": [1, 1], "rarity": 1, "stack": 5,
+		"desc": "깨지면 불길이 번져 범위 화염 피해를 주고 불태웁니다."})
+	_add("rock_flask", {"name": "바위 플라스크", "slot": "consumable", "throw": "rock", "dmg": 30, "value": 12, "icon": "🪨", "size": [1, 1], "rarity": 1, "stack": 5,
+		"desc": "깨지면 돌조각이 튀어 범위 피해를 주고 1.5초 기절시킵니다."})
+	_add("lightning_flask", {"name": "번개 플라스크", "slot": "consumable", "throw": "lightning", "dmg": 55, "value": 15, "icon": "⚡", "size": [1, 1], "rarity": 2, "stack": 5,
+		"desc": "깨지면 번개가 터져 넓은 범위 번개 피해를 주고 2초 둔화시킵니다."})
+	_add("mimic_flask", {"name": "미믹 플라스크", "slot": "consumable", "throw": "mimic", "dmg": 0, "value": 20, "icon": "📦", "size": [1, 1], "rarity": 2, "stack": 3,
+		"desc": "깨진 자리에 15초 동안 내 편 미믹이 나타나 주변 적을 물어뜯습니다."})
 	_add("gold_coins", {"name": "금화", "slot": "treasure", "value": 1, "icon": "🪙", "size": [1, 1], "rarity": 0, "stack": 999})
 	_add("silver_goblet", {"name": "은 술잔", "slot": "treasure", "value": 35, "icon": "🏆", "size": [1, 2], "rarity": 1})
 	_add("ruby", {"name": "루비", "slot": "treasure", "value": 60, "icon": "🔴", "size": [1, 1], "rarity": 2})
@@ -684,9 +692,7 @@ func gear_slots_for(item: Dictionary, cls := "") -> Array:
 		"ring":
 			return ["ring1", "ring2"]
 		"consumable":
-			return ["q1", "q2", "q3"]
-		"utility":
-			return ["util"]
+			return ["q1", "q2"]
 		"head", "chest", "hands", "legs", "feet", "necklace":
 			return [b.slot]
 	return []
@@ -863,7 +869,7 @@ func roll_loot(count: int, luck: float = 0.0) -> Array:
 				pool = _gear_by_rarity(1)
 			items.append(make_item(pool.pick_random()))
 		elif r < 0.65:
-			var c = ["health_potion", "health_potion", "bandage", "mana_potion", "throwing_knife", "fire_flask"].pick_random()
+			var c = ["health_potion", "health_potion", "bandage", "bandage", "mana_potion", "fire_flask", "rock_flask", "lightning_flask", "mimic_flask"].pick_random()
 			var it := make_item(c)
 			it.count = randi_range(1, 2)
 			items.append(it)
