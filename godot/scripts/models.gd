@@ -534,6 +534,29 @@ static func fixture(kind: String) -> Node3D:
 	return g
 
 
+# 1인칭: 손에 든 소모품 (물약/붕대/플라스크)
+static func held_item_view(base_id: String) -> Node3D:
+	var root := Node3D.new()
+	var r := Node3D.new() # 오른손 (ViewAnim이 움직임)
+	root.add_child(r)
+	var it := ground_item(base_id, 0)
+	for c in it.get_children():
+		if c.name != "Shape":
+			c.queue_free()
+	it.scale = Vector3.ONE * 0.38
+	it.position = Vector3(-0.02, 0.0, 0.0)
+	it.rotation = Vector3(0.3, -0.4, 0)
+	r.add_child(it)
+	var hand := box(Vector3(0.09, 0.09, 0.26), mat(Color(0.85, 0.66, 0.51)))
+	hand.position = Vector3(0.0, -0.06, 0.16)
+	r.add_child(hand)
+	var l := Node3D.new()
+	root.add_child(l)
+	root.set_meta("R", r)
+	root.set_meta("L", l)
+	return root
+
+
 static func fixture_spent(node: Node3D) -> void:
 	var glow := node.get_node_or_null("Glow")
 	if glow != null:

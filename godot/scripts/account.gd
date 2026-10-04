@@ -44,14 +44,14 @@ static func new_character(name: String, cls: String) -> Dictionary:
 	eq.feet = Data.make_item("old_%s_feet" % at)
 	var pot := Data.make_item("health_potion")
 	pot.count = 2
-	eq.q1 = pot
+	eq.c3a = pot
 	var band := Data.make_item("bandage")
 	band.count = 2
-	eq.q2 = band
+	eq.c4a = band
 	var bag := []
 	if Data.CLASSES[cls].res == "mana":
 		bag.append(Data.make_item("mana_potion"))
-	bag.append(Data.make_item("fire_flask"))
+	eq.c3b = Data.make_item("fire_flask")
 	Inv.repack(bag, Inv.bag_size(cls))
 	# 소드마스터: 검 슬롯에 영검으로 쓸 검
 	if cls == "swordmaster":
@@ -145,7 +145,7 @@ static func _fix_item(it: Dictionary) -> void:
 
 
 # 예전 무기/장신구 칸 이름 -> 새 칸
-const LEGACY_SLOTS := {"weapon": "w1", "trinket": "ring1"}
+const LEGACY_SLOTS := {"weapon": "w1", "trinket": "ring1", "q1": "c3a", "q2": "c4a", "q3": "c3b", "util": "c4b"}
 
 
 static func _norm_char(c: Dictionary) -> Dictionary:

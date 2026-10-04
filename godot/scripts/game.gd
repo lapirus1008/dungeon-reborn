@@ -1307,7 +1307,10 @@ func _rebuild_view_model() -> void:
 		return
 	if view_model != null and is_instance_valid(view_model):
 		view_model.queue_free()
-	view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment, player.wset), player.panther)
+	if player.held != "" and player.equipment.get(Data.BELT[player.held][0]) != null:
+		view_model = Models.held_item_view(player.equipment[Data.BELT[player.held][0]].base)
+	else:
+		view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment, player.wset), player.panther)
 	camera.add_child(view_model)
 
 

@@ -213,7 +213,7 @@ func _ready() -> void:
 
 	skills_row = HBoxContainer.new()
 	skills_row.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	skills_row.position = Vector2(-256, -80)
+	skills_row.position = Vector2(-284, -80)
 	skills_row.add_theme_constant_override("separation", 6)
 	root.add_child(skills_row)
 
@@ -275,7 +275,7 @@ func _build_inventory() -> void:
 	inv_bag.on_op = _inv_op
 	inv_bag.drop_outside = true
 	v.add_child(inv_bag)
-	var hint := UI.label("드래그 이동 (R 회전) · 우클릭: 장착/해제/물약 사용 · Shift+클릭: 바닥에 버리기 (상자 열림: 상자로) · 1/2: 무기 세트 · 3/4: 소모품", 12, UI.MUTED)
+	var hint := UI.label("드래그 이동 (R 회전) · 우클릭: 장착/해제/물약 사용 · Shift+클릭: 바닥에 버리기 (상자 열림: 상자로) · 1/2: 무기 세트 · 3/4: 소모품 꺼내기(다시 누르면 다음 것) → 좌클릭 사용", 12, UI.MUTED)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(560, 0)
 	v.add_child(hint)
@@ -388,7 +388,7 @@ func start(g) -> void:
 	var cls: Dictionary = Data.CLASSES[g.player.cls]
 	UI.clear(skills_row)
 	skill_boxes.clear()
-	for k in ["rmb", "q", "e", "w1", "w2", "q1", "q2"]:
+	for k in ["rmb", "q", "e", "w1", "w2", "b3", "b4"]:
 		var box := PanelContainer.new()
 		var sb := StyleBoxFlat.new()
 		sb.bg_color = Color(0.04, 0.03, 0.02, 0.85)
@@ -397,11 +397,11 @@ func start(g) -> void:
 		sb.set_corner_radius_all(4)
 		sb.set_content_margin_all(4)
 		box.add_theme_stylebox_override("panel", sb)
-		var small: bool = k.length() == 2
+		var small: bool = k.begins_with("w")
 		box.custom_minimum_size = Vector2(56 if small else 84, 58)
 		var v := VBoxContainer.new()
 		v.add_theme_constant_override("separation", 0)
-		var key_text: String = {"rmb": "우클릭", "q": "Q", "e": "E", "w1": "1 무기", "w2": "2 무기", "q1": "3", "q2": "4"}[k]
+		var key_text: String = {"rmb": "우클릭", "q": "Q", "e": "E", "w1": "1 무기", "w2": "2 무기", "b3": "3 소모품", "b4": "4 소모품"}[k]
 		v.add_child(_centered(UI.label(key_text, 11, UI.GOLD)))
 		var nm := _centered(UI.label("", 13 if not small else 15))
 		nm.clip_text = true
@@ -693,20 +693,26 @@ func update_hud(dt: float) -> void:
 		var st2: StyleBoxFlat = sbx.style
 		st2.border_color = Color("#ffd060") if p.wset == n else Color("#5a4a32")
 		st2.set_border_width_all(2 if p.wset == n else 1)
-	# 3/4: 소모품 칸 (플라스크는 던지기 재사용 대기, 물약은 마시기 대기)
-	for k in ["q1", "q2"]:
-		var sbx: Dictionary = skill_boxes[k]
-		var it = p.equipment.get(k)
+	# 3/4: 소모품 벨트 (첫 번째 = 꺼낼 것, 작은 아이콘 = 로테이션 순서), 손에 들면 금색
+	for k in ["3", "4"]:
+		var sbx: Dictionary = skill_boxes["b" + k]
+		var items: Array = p.belt_items(k)
 		var txt := "-"
 		var throw := false
-		if it != null:
-			txt = Data.base_of(it).icon + (" %d" % int(it.get("count", 1)))
-			throw = Data.base_of(it).has("throw")
+		if items.size():
+			var first: Dictionary = items[0]
+			txt = Data.base_of(first).icon + str(int(first.get("count", 1)))
+			for j in range(1, items.size()):
+				txt += " " + Data.base_of(items[j]).icon
+			throw = Data.base_of(first).has("throw")
 		if sbx.name.text != txt:
 			sbx.name.text = txt
 		var c2: float = p.cd.util if throw else p.cd.potion
 		(sbx.cd as ProgressBar).value = clampf(c2, 0.0, 1.0)
-		sbx.name.modulate = Color(0.5, 0.5, 0.5) if it == null or c2 > 0.0 else Color.WHITE
+		sbx.name.modulate = Color(0.5, 0.5, 0.5) if items.is_empty() or c2 > 0.0 else Color.WHITE
+		var st3: StyleBoxFlat = sbx.style
+		st3.border_color = Color("#ffd060") if p.held == k else Color("#5a4a32")
+		st3.set_border_width_all(2 if p.held == k else 1)
 
 	var t = g.aimed_actor()
 	if t != null:

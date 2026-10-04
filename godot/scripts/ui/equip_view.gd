@@ -1,5 +1,5 @@
 # 장비창 (던전본 배치)
-#  세트1(주/보조) · 머리 · 세트2(주/보조) / 투척 · 상의 · 목걸이 · 소모품 1~3
+#  세트1(주/보조, 1키) · 머리 · 세트2(주/보조, 2키) / 상의 · 목걸이 / 소모품 벨트 3번·4번 (각 3칸)
 #  반지 · 하의 · 반지 / 장갑(왼쪽 아래) · 신발(오른쪽 아래) / 검 슬롯 4칸(소드마스터)
 # 드래그로 장착/교체 · 우클릭: 해제 · Shift+클릭: 버리기(던전) / 보관함으로
 class_name EquipView
@@ -11,7 +11,8 @@ const LAYOUT := {
 	"head": Rect2i(3, 0, 2, 2),
 	"w2": Rect2i(6, 0, 1, 3), "w2o": Rect2i(7, 0, 1, 3),
 	"chest": Rect2i(3, 2, 2, 3), "necklace": Rect2i(5, 2, 1, 1),
-	"q1": Rect2i(6, 4, 2, 1), "q2": Rect2i(6, 5, 2, 1),
+	"c3a": Rect2i(5, 6, 1, 1), "c3b": Rect2i(6, 6, 1, 1), "c3c": Rect2i(7, 6, 1, 1),
+	"c4a": Rect2i(5, 7, 1, 1), "c4b": Rect2i(6, 7, 1, 1), "c4c": Rect2i(7, 7, 1, 1),
 	"ring1": Rect2i(2, 5, 1, 1), "legs": Rect2i(3, 5, 2, 3), "ring2": Rect2i(5, 5, 1, 1),
 	"hands": Rect2i(0, 8, 2, 2), "feet": Rect2i(6, 8, 2, 2),
 	"sw1": Rect2i(2, 10, 1, 1), "sw2": Rect2i(3, 10, 1, 1), "sw3": Rect2i(4, 10, 1, 1), "sw4": Rect2i(5, 10, 1, 1),
@@ -100,6 +101,8 @@ func _short_name(s: String, r: Rect2) -> String:
 	if r.size.x < cell * 1.2 and r.size.y > cell * 1.5:
 		return "\n".join(n.replace(" ", "").split(""))
 	if r.size.x < cell * 1.2:
+		if s.begins_with("c"):
+			return n
 		return {"sw": "검"}.get(s.left(2), n.left(2))
 	return n
 

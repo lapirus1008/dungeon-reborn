@@ -43,6 +43,7 @@ var killer_name := ""
 var char_id := ""
 var hold_q := -1.0 # 누르고 있는 Q/E (화염 폭발, 치료)
 var hold_e := -1.0
+var held := "" # 손에 든 소모품 벨트 ("3"/"4"), 비어 있으면 무기
 var puppet = null # 호스트 화면에 원격 플레이어를 그리는 NetActor
 var ch: Array = [] # 이번 프레임 진행 바 [문구, 비율] (원격 전송용)
 
@@ -182,14 +183,16 @@ func update(dt: float) -> void:
 	var act := can_act and not locked and channel_t <= 0.0
 	_combat(dt, act)
 
-	# 1/2: 무기 세트 바로 선택 · 3/4: 소모품 칸 사용 (물약·붕대는 마시고, 플라스크는 던짐)
+	# 1/2: 무기 세트 바로 선택 · 3/4: 소모품 벨트 꺼내기 (한 번 더 누르면 다음 소모품으로 로테이션), 좌클릭으로 사용
 	if can_act and not locked:
 		for k in [1, 2]:
-			if inp.just_pressed("weapon%d" % k) and wset != k:
-				swap_weapon_set()
-		for k in [3, 4]:
-			if inp.just_pressed("use%d" % k):
-				use_slot("q%d" % (k - 2), k)
+			if inp.just_pressed("weapon%d" % k):
+				set_held("")
+				if wset != k:
+					swap_weapon_set()
+		for k in ["3", "4"]:
+			if inp.just_pressed("use" + k):
+				pick_belt(k)
 
 	# 원격 플레이어: 클라이언트가 보낸 위치를 검증 후 채택 (넉백/돌진 중에는 서버 위치 유지)
 	if inp.remote and has_net:
@@ -333,8 +336,17 @@ func _combat(dt: float, act: bool) -> void:
 			cd.rmb = 0.8
 			_start_swing(Skills.melee_profile(self, true), true)
 
+	# 소모품을 들고 있으면: 좌클릭 = 사용, 우클릭 = 내려놓기
+	if held != "":
+		blocking = false
+		if equipment.get(Data.BELT[held][0]) == null:
+			set_held("")
+		elif act and inp.just_pressed("attack"):
+			use_held()
+		elif rmb_pressed:
+			set_held("")
 	# 좌클릭
-	if lmb_held and free and not blocking and cd.lmb <= 0.0:
+	elif lmb_held and free and not blocking and cd.lmb <= 0.0:
 		if melee:
 			var prof := Skills.melee_profile(self)
 			if stamina >= prof.stamina:
@@ -377,6 +389,61 @@ func _combat(dt: float, act: bool) -> void:
 			Skills.melee_strike(self, swing.prof)
 		if swing.t >= swing.prof.dur:
 			swing = null
+
+
+# 벨트의 아이템 (앞에서부터, 빈 칸 제외)
+func belt_items(k: String) -> Array:
+	var out := []
+	for s in Data.BELT[k]:
+		if equipment.get(s) != null:
+			out.append(equipment[s])
+	return out
+
+
+# 빈 칸을 뒤로 모음 (shift = 1이면 한 칸 로테이션: 두 번째가 첫 번째로)
+func _arrange_belt(k: String, shift := 0) -> void:
+	var items := belt_items(k)
+	if shift > 0 and items.size() > 1:
+		items.append(items.pop_front())
+	var slots: Array = Data.BELT[k]
+	for i in slots.size():
+		equipment[slots[i]] = items[i] if i < items.size() else null
+
+
+func set_held(k: String) -> void:
+	if held == k:
+		return
+	held = k
+	game.on_weapon_changed(self)
+
+
+func pick_belt(k: String) -> void:
+	if belt_items(k).is_empty():
+		game.notify(self, "toast", ["소모품 %s번 벨트가 비어 있습니다" % k])
+		return
+	if held == k:
+		_arrange_belt(k, 1)
+		game.on_weapon_changed(self)
+	else:
+		_arrange_belt(k)
+		set_held(k)
+	var it: Dictionary = equipment[Data.BELT[k][0]]
+	game.notify(self, "toast", ["%s %s (좌클릭: 사용)" % [Data.base_of(it).icon, Data.base_of(it).name]])
+	game.inv_changed(self)
+
+
+# 손에 든 소모품 사용 (좌클릭). 다 쓰면 다음 소모품, 벨트가 비면 무기로
+func use_held() -> void:
+	var k := held
+	var slot: String = Data.BELT[k][0]
+	use_slot(slot, int(k))
+	if equipment.get(slot) == null:
+		_arrange_belt(k)
+		if belt_items(k).is_empty():
+			set_held("")
+		else:
+			game.on_weapon_changed(self)
+		game.inv_changed(self)
 
 
 func use_slot(slot: String, key: int) -> void:
@@ -485,7 +552,7 @@ func net_state() -> Dictionary:
 		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion, cd.util],
 		"chg": charges, "hold": [hold_q, hold_e],
 		"s": [stun, slow, root, stealth, frozen, parry, immune, dr, spin_t, channel_t, charge_t, cast],
-		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther,
+		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held,
 		"k": [kills, pvp_kills], "ch": ch,
 	}
 
@@ -536,6 +603,9 @@ func apply_net_state(d: Dictionary) -> void:
 	slow_mul = d.sm2
 	dots.resize(int(d.dot))
 	blocking = d.bl
+	if held != d.get("hd", ""):
+		held = d.get("hd", "")
+		game._rebuild_view_model()
 	if panther != d.pa:
 		panther = d.pa
 		game.on_shapeshift(self)

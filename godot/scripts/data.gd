@@ -261,16 +261,17 @@ const PASSIVES := {
 }
 
 # ------------------------------------------------------------------ 장비 칸 (던전본 인벤토리 배치)
-# w1/w1o: 무기 세트 1 (주무기/보조, 1키), w2/w2o: 세트 2 (2키), q1/q2: 소모품 칸 (3키/4키), sw1~sw4: 소드마스터 검 슬롯
+# w1/w1o: 무기 세트 1 (주무기/보조, 1키), w2/w2o: 세트 2 (2키), c3a~c3c / c4a~c4c: 소모품 벨트 (3키/4키, 각 3칸 로테이션), sw1~sw4: 소드마스터 검 슬롯
 const GEAR_SLOTS := ["w1", "w1o", "w2", "w2o", "head", "chest", "necklace", "ring1", "legs", "ring2", "hands", "feet"]
-const UTIL_SLOTS := ["q1", "q2"]
+const BELT := {"3": ["c3a", "c3b", "c3c"], "4": ["c4a", "c4b", "c4c"]}
+const UTIL_SLOTS := ["c3a", "c3b", "c3c", "c4a", "c4b", "c4c"]
 const SWORD_SLOTS := ["sw1", "sw2", "sw3", "sw4"]
 const ALL_SLOTS := GEAR_SLOTS + UTIL_SLOTS + SWORD_SLOTS
 const SLOT_NAMES := {
 	"w1": "세트 1", "w1o": "세트 1 보조", "w2": "세트 2", "w2o": "세트 2 보조",
 	"head": "머리", "chest": "상의", "hands": "장갑", "legs": "하의", "feet": "신발",
 	"necklace": "목걸이", "ring1": "반지", "ring2": "반지", "ring": "반지",
-	"q1": "소모품 3", "q2": "소모품 4",
+	"c3a": "3-1", "c3b": "3-2", "c3c": "3-3", "c4a": "4-1", "c4b": "4-2", "c4c": "4-3",
 	"sw1": "검 슬롯", "sw2": "검 슬롯", "sw3": "검 슬롯", "sw4": "검 슬롯",
 }
 const WEAPON_NAMES := {
@@ -692,7 +693,7 @@ func gear_slots_for(item: Dictionary, cls := "") -> Array:
 		"ring":
 			return ["ring1", "ring2"]
 		"consumable":
-			return ["q1", "q2"]
+			return UTIL_SLOTS
 		"head", "chest", "hands", "legs", "feet", "necklace":
 			return [b.slot]
 	return []
