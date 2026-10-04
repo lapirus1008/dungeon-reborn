@@ -619,6 +619,9 @@ func _test_char(cls: String) -> void:
 	Account.select(d, c.id)
 
 
+const PSI_WAIT := 1.25 # 검 2자루 소환 시간 (0.55초씩)
+
+
 func _autotest() -> void:
 	print("[autotest] 시작")
 	var out := []
@@ -763,6 +766,72 @@ func _autotest() -> void:
 		await get_tree().process_frame
 	_on_results_continue()
 	await get_tree().process_frame
+	# 전투 감각: 로그 3페이즈 콤보 · 뒤잡기 내려찍기 · 소드마스터 심령의 검 차지/취소
+	for cls2 in ["rogue", "swordmaster"]:
+		_test_char(cls2)
+		start_raid()
+		game.force_act = true
+		await get_tree().process_frame
+		var q := game.player
+		q.invuln = 999.0
+		var mon = null
+		for a3 in game.actors:
+			if a3.kind == "monster" and not a3.def.boss and a3.def.get("ai", "") in ["melee", "shield", "fleeing"]:
+				mon = a3
+				break
+		if cls2 == "rogue" and mon != null:
+			mon.petrified = 999.0 # 고정된 상태 (패턴/어그로가 다른 곳)
+			mon.invuln = 999.0
+			mon.yaw = 0.0
+			# 몬스터 등 뒤 (몬스터는 -Z를 봄 → 뒤는 +Z)
+			q.pos = game.dungeon.resolve_circle(mon.pos + Vector3(0, 0, 1.6), q.radius)
+			q.yaw = Actor.yaw_to(mon.pos.x - q.pos.x, mon.pos.z - q.pos.z)
+			q.draw_t = 0.0
+			q.cd.lmb = 0.0
+			Input.action_press("attack")
+			await get_tree().process_frame
+			await get_tree().process_frame
+			Input.action_release("attack")
+			var back_ok: bool = q.swing != null and q.swing.prof.get("backstab", false)
+			await _wait(1.2)
+			# 정면: 콤보 9타 (우좌우 / 우좌우좌우 / X)
+			mon.yaw = Actor.yaw_to(q.pos.x - mon.pos.x, q.pos.z - mon.pos.z)
+			var sides := []
+			Input.action_press("attack")
+			var guard := 0.0
+			while sides.size() < 9 and guard < 8.0:
+				await get_tree().process_frame
+				guard += get_process_delta_time()
+				if q.swing != null and (sides.is_empty() or q.swing.t < 0.02 and sides.size() < 9 and q.swing.get("counted", false) == false):
+					q.swing["counted"] = true
+					sides.append(int(q.swing.side))
+			Input.action_release("attack")
+			out.append("로그: 뒤잡기 양손 내려찍기 %s, 콤보 순서 %s" % ["O" if back_ok else "X", sides])
+		elif cls2 == "swordmaster":
+			var n_sw := Skills.sword_count(q)
+			Skills._use(q, "q", q.aim(), 1.0)
+			await _wait(PSI_WAIT)
+			var charged: int = q.psi_n
+			var np2: int = game.projectiles.filter(func(pr): return pr.kind == "blade").size()
+			Input.action_press("attack")
+			await get_tree().process_frame
+			await get_tree().process_frame
+			Input.action_release("attack")
+			var fired: int = game.projectiles.filter(func(pr): return pr.kind == "blade").size() - np2
+			var cd_after: float = q.cd.q
+			q.cd.q = 0.0
+			Skills._use(q, "q", q.aim(), 1.0)
+			await _wait(0.7)
+			Input.action_press("secondary")
+			await get_tree().process_frame
+			await get_tree().process_frame
+			Input.action_release("secondary")
+			out.append("소드마스터: 검 %d자루 중 %d자루 소환 → 좌클릭 %d자루 발사 (재사용 %.0f초), 우클릭 취소 %s (재사용 없음 %s)" % [n_sw, charged, fired, cd_after, "O" if not q.psi_on else "X", "O" if q.cd.q <= 0.0 else "X"])
+		game.abandon()
+		while results.visible == false:
+			await get_tree().process_frame
+		_on_results_continue()
+		await get_tree().process_frame
 	# 긴 시뮬레이션: 8직업 봇/몬스터 상호작용
 	start_raid()
 	await get_tree().process_frame

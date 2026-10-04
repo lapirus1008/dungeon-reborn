@@ -589,6 +589,15 @@ static func fixture_spent(node: Node3D) -> void:
 		glow.visible = false
 
 
+# 시체/전리품 위치: 안에 든 가장 높은 등급 색의 빛기둥
+static func loot_beam(rarity: int) -> Node3D:
+	var g := ground_item("gold_coins", rarity)
+	var shape := g.get_node_or_null("Shape")
+	if shape != null:
+		shape.queue_free()
+	return g
+
+
 static func portal(kind: String) -> Node3D:
 	var color := Color(0.29, 0.72, 1.0) if kind == "exit" else Color(1.0, 0.23, 0.16)
 	var g := Node3D.new()

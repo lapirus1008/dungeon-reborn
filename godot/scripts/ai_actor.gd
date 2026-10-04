@@ -104,7 +104,8 @@ func sense(rng: float):
 		var d := Vector2(a.pos.x - pos.x, a.pos.z - pos.z).length()
 		if d >= bd:
 			continue
-		if a.stealth > 0.0 and d > 3.0:
+		# 은신: 몬스터는 전혀 알아채지 못함, 모험가(AI)는 아주 가까이서만
+		if a.stealth > 0.0 and (kind == "monster" or d > 3.0):
 			continue
 		if not game.dungeon.los(pos.x, pos.z, a.pos.x, a.pos.z):
 			continue
@@ -145,18 +146,26 @@ func animate(dt: float) -> void:
 		_flashing = flash
 		for m in r.meshes:
 			(m as GeometryInstance3D).material_overlay = game.flash_mat if flash else null
-	var tr := 0.75 if stealth > 0.0 else 0.0
-	if r.node.get_meta("tr", -1.0) != tr:
+	# 은신: 완전히 투명하지 않고 아지랑이처럼 흐물거림 (자세히 보면 보임)
+	var tr := 0.0
+	if stealth > 0.0:
+		tr = 0.78 + sin(game.time * 7.0 + nid) * 0.07 + sin(game.time * 13.0) * 0.04
+	if absf(r.node.get_meta("tr", -1.0) - tr) > 0.01:
 		r.node.set_meta("tr", tr)
 		for m in r.meshes:
 			(m as GeometryInstance3D).transparency = tr
+	if not r.node.has_meta("base_scale"):
+		r.node.set_meta("base_scale", r.node.scale)
+	var bs: Vector3 = r.node.get_meta("base_scale")
+	if stealth > 0.0 and kind != "monster":
+		r.node.scale = bs * Vector3(1.0 + sin(game.time * 9.0) * 0.03, 1.0 + sin(game.time * 6.0 + 1.0) * 0.02, 1.0)
+	elif r.node.scale != bs:
+		r.node.scale = bs
 
 
 # 은신 중인 적은 플레이어와 가까울 때만 희미하게 보인다
 func _stealth_visible() -> bool:
-	if stealth <= 0.0:
-		return true
-	return game.player != null and game.player.pos.distance_to(pos) < 4.0
+	return true
 
 
 func update_hp_bar(cam_pos: Vector3) -> void:

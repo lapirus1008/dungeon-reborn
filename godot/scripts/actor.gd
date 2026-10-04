@@ -81,6 +81,11 @@ var burn := 0 # 연소 중첩 (2초마다 1중첩 제거, 10 화염 피해)
 var burn_t := 0.0
 var burn_src = null
 var petrified := 0.0 # 석화: 행동 불가, 피해 무효, 공격받으면 해제
+var psi_on := false # 소드마스터 심령의 검 소환 중
+var psi_n := 0
+var psi_t := 0.0
+var psi_aim: Dictionary = {}
+var draw_t := 0.0 # 무기를 꺼내는 중 (공격 불가)
 var curse_t := 0.0 # 서리의 저주
 var curse_src = null
 var curse_dps := 0.0
@@ -252,6 +257,7 @@ func take_damage(amount: float, src, info: Dictionary = {}) -> float:
 		petrified = 0.0
 		stun = 0.0
 		hit_flash = 0.15
+		game.on_damage(self, 0.0, src, false, {"petrify_break": true})
 		return 0.0
 	var from = info.get("from", src.pos if src != null else null)
 	# 패링: 모든 피해 무효, 가까운 근접 공격자는 기절
@@ -376,7 +382,7 @@ func tick_common(dt: float) -> void:
 	if frozen > 0.0:
 		frozen -= dt
 	combat_t += dt
-	for k in ["petrified", "warcry_t", "dragon_cd", "vuln_t"]:
+	for k in ["petrified", "warcry_t", "dragon_cd", "vuln_t", "draw_t"]:
 		var v2: float = get(k)
 		if v2 > 0.0:
 			set(k, v2 - dt)

@@ -180,6 +180,7 @@ func update(dt: float) -> void:
 	Skills.tick_channel(self, dt)
 	Skills.tick_spin(self, dt)
 	Skills.tick_soul_storm(self, dt)
+	Skills.tick_psionic(self, dt)
 	Skills.tick_barrier(self, dt)
 	if incapacitated():
 		windup = 0.0

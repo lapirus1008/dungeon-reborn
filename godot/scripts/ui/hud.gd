@@ -627,11 +627,11 @@ func killfeed(text: String, mine := false, info := false) -> void:
 
 
 # 월드 공간 데미지 숫자 (Label3D)
-func damage_number(p: Vector3, amount: float, color: Color, prefix := "") -> void:
+func damage_number(p: Vector3, amount: float, color: Color, prefix := "", crit := false) -> void:
 	var l := Label3D.new()
-	l.text = prefix + str(roundi(amount))
+	l.text = prefix + str(roundi(amount)) + ("!" if crit else "")
 	l.font = UI.font
-	l.font_size = 40
+	l.font_size = 60 if crit else 40
 	l.pixel_size = 0.004
 	l.modulate = color
 	l.outline_size = 12
@@ -647,10 +647,13 @@ func damage_number(p: Vector3, amount: float, color: Color, prefix := "") -> voi
 	tw.chain().tween_callback(l.queue_free)
 
 
-func hit_marker(kill: bool) -> void:
-	hitmarker.modulate = Color(1, 0.25, 0.2, 1) if kill else Color(1, 1, 1, 1)
+# 조준선 X 표시: 맞혔을 때 잠깐 (치명타는 주황색으로 크게, 처치는 빨강)
+func hit_marker(kill: bool, crit := false) -> void:
+	hitmarker.modulate = Color(1, 0.25, 0.2, 1) if kill else (Color(1.0, 0.6, 0.15, 1) if crit else Color(1, 1, 1, 1))
+	hitmarker.scale = Vector2.ONE * (1.35 if crit or kill else 1.0)
+	hitmarker.pivot_offset = hitmarker.size * 0.5
 	var tw := hitmarker.create_tween()
-	tw.tween_property(hitmarker, "modulate:a", 0.0, 0.25)
+	tw.tween_property(hitmarker, "modulate:a", 0.0, 0.3 if crit else 0.22)
 
 
 func shake(v: float) -> void:
@@ -658,9 +661,9 @@ func shake(v: float) -> void:
 		game.player.shake = maxf(game.player.shake, v)
 
 
-func swing(side: float, bash: bool, dur: float) -> void:
+func swing(side: float, bash: bool, dur: float, hit_at := -1.0) -> void:
 	if game.player != null:
-		game.player.client_swing(side, bash, dur)
+		game.player.client_swing(side, bash, dur, hit_at)
 
 
 func sfx(n: String) -> void:

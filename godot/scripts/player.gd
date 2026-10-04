@@ -43,6 +43,10 @@ var killer_name := ""
 var char_id := ""
 var hold_q := -1.0 # 누르고 있는 Q/E (화염 폭발, 치료)
 var hold_e := -1.0
+var psi_lmb := true
+var psi_rmb := true
+var combo_i := 0 # 로그 단검 콤보 단계
+var combo_t := 0.0
 var held := "" # 손에 든 것: 소모품 칸("c3"/"c4"/"c5") 또는 "torch", 비어 있으면 무기
 var torch_t := 0.0 # 불붙은 횃불 남은 시간
 var puppet = null # 호스트 화면에 원격 플레이어를 그리는 NetActor
@@ -98,6 +102,7 @@ func swap_weapon_set() -> void:
 	if panther and Skills.wcat(self) == "":
 		Skills.set_panther(self, false)
 	recalc()
+	draw_weapon()
 	game.notify(self, "toast", ["무기 세트 %d (%d키)" % [wset, wset]])
 	game.inv_changed(self)
 	game.on_weapon_changed(self)
@@ -166,6 +171,9 @@ func update(dt: float) -> void:
 	Skills.tick_spin(self, dt)
 	Skills.tick_soul_storm(self, dt)
 	Skills.tick_barrier(self, dt)
+	Skills.tick_psionic(self, dt)
+	if combo_t > 0.0:
+		combo_t -= dt
 	if cast > 0.0:
 		cast -= dt
 
@@ -212,7 +220,7 @@ func update_client(dt: float) -> void:
 	for k in cd:
 		if cd[k] > 0.0:
 			cd[k] -= dt
-	for k in ["stun", "root", "slow", "parry", "immune", "frozen", "stealth", "shield_t", "channel_t", "spin_t", "hit_flash"]:
+	for k in ["stun", "root", "slow", "parry", "immune", "frozen", "stealth", "shield_t", "channel_t", "spin_t", "hit_flash", "draw_t"]:
 		var v: float = get(k)
 		if v > 0.0:
 			set(k, maxf(0.0, v - dt))
@@ -287,12 +295,12 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 
 
 func _start_swing(prof: Dictionary, bash := false) -> void:
-	swing_side = -swing_side
+	swing_side = prof.side if prof.has("side") else -swing_side
 	swing = {"t": 0.0, "prof": prof, "done": false, "side": swing_side, "bash": bash}
 	cd.lmb = prof.cd / stats.get("act_mul", 1.0)
 	game.sfx("swing", pos)
 	if inp.remote:
-		game.notify(self, "swing", [swing_side, bash, prof.dur])
+		game.notify(self, "swing", [swing_side, bash, prof.dur, prof.hit_at])
 
 
 func _combat(dt: float, act: bool) -> void:
@@ -305,7 +313,7 @@ func _combat(dt: float, act: bool) -> void:
 	# 우클릭: 방패/무기 방어, 패링, 단검 투척, 지팡이 치기, 표범 포효
 	blocking = false
 	if Skills.uses_block(self):
-		blocking = rmb_held and stamina > 0.0 and free
+		blocking = rmb_held and free and draw_t <= 0.0 and not psi_on
 	elif rmb_pressed:
 		if cls == "swordmaster":
 			Skills.start_parry(self)
@@ -317,6 +325,11 @@ func _combat(dt: float, act: bool) -> void:
 			cd.rmb = 0.8
 			_start_swing(Skills.melee_profile(self, true), true)
 
+	# 좌클릭을 새로 누른 순간 (심령의 검: 누른 채로 소환을 시작했으면 한 번 떼야 발사)
+	var lmb_edge := lmb_held and not psi_lmb
+	psi_lmb = lmb_held
+	var rmb_edge := rmb_held and not psi_rmb
+	psi_rmb = rmb_held
 	# 소모품을 들고 있으면: 좌클릭 = 사용, 우클릭 = 내려놓기
 	if held == "torch":
 		blocking = false
@@ -337,11 +350,33 @@ func _combat(dt: float, act: bool) -> void:
 		elif rmb_pressed:
 			set_held("")
 	# 좌클릭
-	elif lmb_held and free and not blocking and cd.lmb <= 0.0:
+	elif psi_on:
+		# 심령의 검 소환 중: 좌클릭 = 소환된 만큼 발사, 우클릭 = 취소 (재사용 대기 없음)
+		blocking = false
+		if lmb_edge and psi_n > 0:
+			if Skills.fire_psionic(self, aim()):
+				cast = 0.3
+		elif rmb_pressed or rmb_edge:
+			Skills.cancel_psionic(self)
+			game.notify(self, "toast", ["심령의 검 취소"])
+	elif lmb_held and free and not blocking and cd.lmb <= 0.0 and draw_t <= 0.0:
 		if melee:
-			var prof := Skills.melee_profile(self)
-			if stamina >= prof.stamina:
-				_start_swing(prof)
+			var prof: Dictionary
+			if cls == "rogue" and not panther and Skills.wcat(self) == "dagger":
+				var bt = Skills.backstab_target(self)
+				if bt != null:
+					# 뒤를 잡으면 양손 내려찍기 (패시브처럼 자동)
+					prof = Skills.backstab_profile(self)
+					combo_i = 0
+				else:
+					if combo_t <= 0.0:
+						combo_i = 0
+					prof = Skills.rogue_combo_profile(self, combo_i)
+					combo_i = (combo_i + 1) % Skills.ROGUE_COMBO.size()
+					combo_t = 1.0
+			else:
+				prof = Skills.melee_profile(self)
+			_start_swing(prof)
 		elif Skills.fire_basic(self, aim()):
 			cast = 0.2
 
@@ -386,7 +421,23 @@ func set_held(k: String) -> void:
 	if held == k:
 		return
 	held = k
+	if k == "":
+		draw_weapon()
+	else:
+		draw_t = 0.3
+		game.sfx("draw_soft", pos, 0.05)
 	game.on_weapon_changed(self)
+
+
+# 무기 꺼내기: 잠깐 공격할 수 없고 무기에 맞는 소리 (칼 뽑는 소리 / 무거운 나무)
+func draw_weapon() -> void:
+	var cat := Skills.wcat(self)
+	if cat == "":
+		draw_t = 0.25
+		return
+	draw_t = 0.6 if cat in Data.TWO_HANDED else 0.45
+	var snd := "draw_wood" if cat in ["crossbow", "staff", "orb"] else ("draw_blade" if cat in ["sword", "longsword", "dagger"] else "draw_soft")
+	game.sfx(snd, pos, 0.05)
 
 
 # 3/4/5: 그 칸의 소모품을 손에 듦 (다시 누르면 무기로)
@@ -530,9 +581,9 @@ func update_camera(cam: Camera3D, vm: Node3D, bubble: MeshInstance3D, dt: float)
 
 
 # ------------------------------------------------------------------ 멀티플레이 동기화
-func client_swing(side: float, bash: bool, dur: float) -> void:
+func client_swing(side: float, bash: bool, dur: float, hit_at := -1.0) -> void:
 	swing_side = side
-	swing = {"t": 0.0, "prof": {"dur": dur, "hit_at": 99.0}, "done": true, "side": side, "bash": bash}
+	swing = {"t": 0.0, "prof": {"dur": dur, "hit_at": hit_at if hit_at >= 0.0 else dur * 0.4, "view_only": true}, "done": true, "side": side, "bash": bash}
 
 
 # 서버 -> 해당 클라이언트: 본인 상태 (초당 20회)
@@ -544,7 +595,7 @@ func net_state() -> Dictionary:
 		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion, cd.util],
 		"chg": charges, "hold": [hold_q, hold_e],
 		"s": [stun, slow, root, stealth, frozen, parry, immune, dr, spin_t, channel_t, charge_t, cast],
-		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t,
+		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "dw": draw_t,
 		"k": [kills, pvp_kills], "ch": ch,
 	}
 
@@ -596,6 +647,10 @@ func apply_net_state(d: Dictionary) -> void:
 	dots.resize(int(d.dot))
 	blocking = d.bl
 	torch_t = d.get("tt", 0.0)
+	var psi: int = int(d.get("psi", -1))
+	psi_on = psi >= 0
+	psi_n = maxi(0, psi)
+	draw_t = maxf(draw_t, float(d.get("dw", 0.0)) - 0.05)
 	if held != d.get("hd", ""):
 		held = d.get("hd", "")
 		game._rebuild_view_model()

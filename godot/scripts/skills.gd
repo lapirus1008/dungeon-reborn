@@ -66,20 +66,23 @@ static func uses_block(c) -> bool:
 static func melee_profile(c, bash := false) -> Dictionary:
 	var spd: float = c.stats.get("act_mul", 1.0)
 	var p := {}
+	# hit_at: 휘두르기 시작부터 칼날이 닿는 순간까지 (예비 동작이 있어 바로 맞지 않음)
 	if bash:
-		p = {"dmg": 14.0, "range": 2.6, "arc": 1.3, "cd": 0.8, "stamina": 8.0, "knock": 10.0, "hit_at": 0.14, "dur": 0.36}
+		p = {"dmg": 14.0, "range": 2.6, "arc": 1.3, "cd": 0.9, "knock": 10.0, "hit_at": 0.24, "dur": 0.48}
 	elif c.panther:
-		p = {"dmg": 22.0, "range": 2.6, "arc": 1.4, "cd": 0.34, "stamina": 4.0, "knock": 2.0, "hit_at": 0.1, "dur": 0.28, "claw": true}
+		p = {"dmg": 22.0, "range": 2.6, "arc": 1.4, "cd": 0.4, "knock": 2.0, "hit_at": 0.16, "dur": 0.34, "claw": true}
 	else:
 		match wcat(c):
 			"longsword":
-				p = {"dmg": 46.0, "range": 3.4, "arc": 1.6, "cd": 0.75, "stamina": 12.0, "knock": 6.0, "hit_at": 0.26, "dur": 0.6}
+				p = {"dmg": 46.0, "range": 3.4, "arc": 1.6, "cd": 0.95, "knock": 6.0, "hit_at": 0.42, "dur": 0.85}
 			"dagger":
-				p = {"dmg": 21.0, "range": 2.5, "arc": 1.2, "cd": 0.3, "stamina": 5.0, "knock": 1.0, "hit_at": 0.1, "dur": 0.26}
+				p = {"dmg": 21.0, "range": 2.5, "arc": 1.2, "cd": 0.34, "knock": 1.0, "hit_at": 0.16, "dur": 0.32}
 			"mace":
-				p = {"dmg": 33.0, "range": 2.8, "arc": 1.3, "cd": 0.55, "stamina": 8.0, "knock": 4.0, "hit_at": 0.18, "dur": 0.45}
+				p = {"dmg": 33.0, "range": 2.8, "arc": 1.3, "cd": 0.7, "knock": 4.0, "hit_at": 0.3, "dur": 0.6}
+			"":
+				p = {"dmg": 12.0, "range": 2.2, "arc": 1.2, "cd": 0.55, "knock": 2.0, "hit_at": 0.18, "dur": 0.36}
 			_:
-				p = {"dmg": 31.0, "range": 3.0, "arc": 1.6, "cd": 0.45, "stamina": 8.0, "knock": 4.0, "hit_at": 0.16, "dur": 0.4}
+				p = {"dmg": 31.0, "range": 3.0, "arc": 1.6, "cd": 0.55, "knock": 4.0, "hit_at": 0.26, "dur": 0.52}
 		if c.cls == "deathknight":
 			p.dmg *= 1.1
 	p.cd /= spd
@@ -209,13 +212,9 @@ static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 		if not g.dungeon.los(c.pos.x, c.pos.z, a.pos.x, a.pos.z):
 			continue
 		var dmg: float = prof.dmg * c.dmg_mul() * mult
-		if c.cls == "rogue":
-			var facing_away := absf(angle_difference(a.yaw, Actor.yaw_to(-dx, -dz))) > 2.0
-			if facing_away:
-				dmg *= 1.6
 		var nd := maxf(d, 0.001)
 		var k: float = prof.knock
-		var dealt: float = g.hit(c, a, dmg, {"knock": Vector3(dx / nd * k, 0, dz / nd * k), "from": c.pos, "melee": true, "weapon": true, "dtype": c.stats.get("dtype", "phys")})
+		var dealt: float = g.hit(c, a, dmg, {"knock": Vector3(dx / nd * k, 0, dz / nd * k), "from": c.pos, "melee": true, "weapon": true, "dtype": c.stats.get("dtype", "phys"), "backstab": prof.get("backstab", false)})
 		total += dealt
 		hits += 1
 		hit_list.append(a)
@@ -227,6 +226,53 @@ static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 		if prof.get("claw", false):
 			gain(c, 20.0)
 	return total
+
+
+# 로그 단검 콤보: 1페이즈 우·좌·우 / 2페이즈 우·좌·우·좌·우 / 3페이즈 양손 X자 베기
+const ROGUE_COMBO := [
+	{"side": 1.0}, {"side": -1.0}, {"side": 1.0, "end": true},
+	{"side": 1.0}, {"side": -1.0}, {"side": 1.0}, {"side": -1.0}, {"side": 1.0, "end": true},
+	{"side": 0.0, "x": true, "end": true},
+]
+
+
+static func rogue_combo_profile(c, i: int) -> Dictionary:
+	var st: Dictionary = ROGUE_COMBO[i % ROGUE_COMBO.size()]
+	var spd: float = c.stats.get("act_mul", 1.0)
+	var p := {"dmg": 15.0, "range": 2.5, "arc": 1.1, "cd": 0.22, "knock": 0.5, "hit_at": 0.11, "dur": 0.22}
+	if st.get("x", false):
+		p = {"dmg": 42.0, "range": 2.7, "arc": 1.9, "cd": 0.9, "knock": 5.0, "hit_at": 0.24, "dur": 0.55, "xslash": true}
+	elif st.get("end", false):
+		p.cd = 0.5 # 페이즈 사이 짧은 숨 고르기
+	p.cd /= spd
+	p["side"] = st.side
+	return p
+
+
+# 뒤를 잡은 대상 (로그 기습 내려찍기): 대상이 등을 보이고 있으면 (몬스터는 나를 노리지 않거나 묶여 있을 때 등이 보임)
+static func backstab_target(c):
+	var best = null
+	var bd := 3.0
+	for a in c.game.actors:
+		if not a.alive or a.extracted or a == c or not c.game.hostile(c, a):
+			continue
+		var dx: float = a.pos.x - c.pos.x
+		var dz: float = a.pos.z - c.pos.z
+		var d := sqrt(dx * dx + dz * dz)
+		if d > 2.6 + a.radius or d >= bd:
+			continue
+		if absf(angle_difference(c.yaw, Actor.yaw_to(dx, dz))) > 0.6:
+			continue
+		# 대상이 보는 방향과 대상→나 방향이 110도 이상 벌어지면 등 뒤
+		if absf(angle_difference(a.yaw, Actor.yaw_to(-dx, -dz))) < 1.9:
+			continue
+		best = a
+		bd = d
+	return best
+
+
+static func backstab_profile(c) -> Dictionary:
+	return {"dmg": 21.0 * 3.2, "range": 2.6, "arc": 0.9, "cd": 1.0 / c.stats.get("act_mul", 1.0), "knock": 3.0, "hit_at": 0.3, "dur": 0.62, "backstab": true, "side": 2.0}
 
 
 # ------------------------------------------------------------------ 기본 원거리 / 우클릭
@@ -385,10 +431,14 @@ static func _use(c, slot: String, aim: Dictionary, charge: float) -> bool:
 		"cryo_ice_barrier":
 			ok = _ice_barrier(c)
 		"sm_psionic":
-			var n := sword_count(c)
-			ok = _psionic(c, aim, n)
-			if ok:
-				custom_cd = _psionic_cd(c, n)
+			# 검 슬롯의 검을 한 자루씩 소환 (좌클릭: 소환된 만큼 발사 · 우클릭: 취소)
+			if c.psi_on:
+				return false
+			c.psi_on = true
+			c.psi_n = 0
+			c.psi_t = 0.0
+			c.psi_aim = aim
+			return true
 		"sm_blade_dance":
 			ok = _blade_dance(c)
 		"druid_primal":
@@ -779,6 +829,44 @@ static func tick_barrier(c, dt: float) -> void:
 
 
 # ---- 소드마스터
+const PSI_STEP := 0.55 # 검 한 자루 소환 시간
+
+
+static func tick_psionic(c, dt: float) -> void:
+	if not c.psi_on:
+		return
+	var mx := sword_count(c)
+	if mx <= 0 or c.incapacitated():
+		cancel_psionic(c)
+		return
+	if c.psi_n < mx:
+		c.psi_t += dt
+		if c.psi_t >= PSI_STEP:
+			c.psi_t = 0.0
+			c.psi_n += 1
+			c.game.sfx("magic", c.pos, 0.1)
+	elif not (c is Player):
+		# AI: 다 모으면 바로 발사
+		fire_psionic(c, c.psi_aim)
+
+
+static func fire_psionic(c, aim: Dictionary) -> bool:
+	if not c.psi_on or c.psi_n <= 0:
+		return false
+	var n: int = c.psi_n
+	_psionic(c, aim, n)
+	c.cd.q = _psionic_cd(c, n)
+	c.psi_on = false
+	c.psi_n = 0
+	return true
+
+
+static func cancel_psionic(c) -> void:
+	c.psi_on = false
+	c.psi_n = 0
+	c.psi_t = 0.0
+
+
 static func _psionic_cd(c, n: int) -> float:
 	var base: float = [6.0, 6.0, 10.0, 15.0, 20.0][clampi(n, 0, 4)]
 	if has_fx(c, "blade_storm"):

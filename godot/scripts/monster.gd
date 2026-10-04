@@ -226,7 +226,7 @@ func _sense() -> void:
 			_reveal()
 		elif randf() < 0.5:
 			game.sfx("growl", pos)
-	if target != null and (not target.alive or target.extracted or (target.stealth > 0.0 and target.pos.distance_to(pos) > 3.0)):
+	if target != null and (not target.alive or target.extracted or target.stealth > 0.0):
 		target = null
 
 

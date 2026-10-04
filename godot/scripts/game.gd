@@ -1429,10 +1429,15 @@ func update_effects(dt: float) -> void:
 
 
 func on_damage(target, dmg: float, src, blocked: bool, info: Dictionary) -> void:
-	if is_human(src) and target != src and dmg > 0.0:
-		var col := Color(0.6, 0.67, 0.67) if blocked else (Color(1.0, 0.82, 0.23) if info.get("headshot", false) else Color.WHITE)
-		notify(src, "damage_number", [target.center(), dmg, col])
-		notify(src, "hit_marker", [target.hp <= 0.0])
+	if is_human(src) and target != src and info.get("petrify_break", false):
+		# 석화 해제: 그 공격은 0
+		notify(src, "damage_number", [target.center(), 0.0, Color(0.7, 0.7, 0.7), "", false])
+		notify(src, "hit_marker", [false, false])
+	elif is_human(src) and target != src and dmg > 0.0:
+		var crit: bool = info.get("crit", false) or info.get("backstab", false)
+		var col := Color(0.6, 0.67, 0.67) if blocked else (Color(1.0, 0.55, 0.12) if crit else Color.WHITE)
+		notify(src, "damage_number", [target.center(), dmg, col, "", crit and not blocked])
+		notify(src, "hit_marker", [target.hp <= 0.0, crit])
 	if is_human(target) and dmg > 0.0:
 		notify(target, "hurt", [dmg / target.max_hp])
 		notify(target, "sfx", ["hurt"])
@@ -1453,8 +1458,9 @@ func on_death(actor, src) -> void:
 	var summoned: bool = actor.kind == "monster" and actor.summoned
 	if summoned:
 		return
-	if actor.kind in ["player", "bot"] or (actor.kind == "monster" and actor.def.get("ai", "") != "harmless"):
-		spawn_soul_orb(actor.pos)
+	# 영혼 에너지 직업: 처치하면 영혼 에너지 (오브 없이 바로)
+	if src != null and src.is_hero() and src.res_type() == "soul" and actor.kind != "summon":
+		Skills.gain(src, 15.0)
 	_kill_hooks(actor, src)
 	if actor.kind == "monster":
 		if is_human(src):
@@ -1464,9 +1470,9 @@ func on_death(actor, src) -> void:
 		if is_boss:
 			boss_dead = true
 			notify_all("announce", ["%s 처치!" % actor.name, "보스의 전리품이 떨어졌습니다"])
-			drop_items(actor.pos, Data.roll_loot(5, luck))
-		elif randf() < 0.4:
-			drop_items(actor.pos, Data.roll_loot(randi_range(1, 2), luck))
+			drop_monster_corpse(actor, Data.roll_loot(5, luck))
+		elif randf() < 0.45 and actor.def.get("ai", "") != "harmless":
+			drop_monster_corpse(actor, Data.roll_loot(randi_range(1, 2), luck))
 	elif actor.kind == "bot":
 		if is_human(src):
 			src.pvp_kills += 1
@@ -1573,13 +1579,50 @@ func pickup_item(p, o: Dictionary) -> void:
 	inv_changed(p)
 
 
-func _add_bag_node(id: int, pp: Vector3, color: Color, nm: String) -> Dictionary:
-	var node := Models.loot_bag(color)
+# rar >= 0: 시체 (자루 없이 안에 든 가장 높은 등급 색의 빛기둥만)
+func _add_bag_node(id: int, pp: Vector3, color: Color, nm: String, rar := -1) -> Dictionary:
+	var node := Models.loot_beam(rar) if rar >= 0 else Models.loot_bag(color)
 	node.position = pp
 	world.add_child(node)
-	var b := {"id": id, "pos": pp, "node": node, "items": [], "name": nm, "kind": "bag", "n": 0}
+	var b := {"id": id, "pos": pp, "node": node, "items": [], "name": nm, "kind": "bag", "n": 0, "rar": rar}
 	loot_bags.append(b)
 	return b
+
+
+static func top_rarity(items: Array) -> int:
+	var r := 0
+	for it in items:
+		if it != null:
+			r = maxi(r, int(it.get("rarity", 0)))
+	return r
+
+
+# 몬스터 시체: 그 자리에서 직접 파밍 (바닥에 아이템을 뿌리지 않음)
+func drop_monster_corpse(actor, items: Array) -> void:
+	if items.is_empty():
+		return
+	var pp := Vector3(actor.pos.x, 0, actor.pos.z)
+	bag_seq += 1
+	var rar := top_rarity(items)
+	var b := _add_bag_node(bag_seq, pp, Color.WHITE, actor.name + "의 시체", rar)
+	var pk := Inv.pack_container(items)
+	b.items = pk.items
+	b.gw = pk.gw
+	b.gh = pk.gh
+	b.n = b.items.size()
+	_bc("bag_add", [bag_seq, pp, Color.WHITE, b.name, b.n, rar])
+
+
+func _set_bag_rarity(b: Dictionary, rar: int) -> void:
+	if b.rar < 0 or b.rar == rar:
+		return
+	b.rar = rar
+	var pos: Vector3 = b.pos
+	if is_instance_valid(b.node):
+		b.node.queue_free()
+	b.node = Models.loot_beam(rar)
+	b.node.position = pos
+	world.add_child(b.node)
 
 
 func refresh_bag(bag: Dictionary) -> void:
@@ -1594,7 +1637,10 @@ func refresh_bag(bag: Dictionary) -> void:
 				close_container_for(p)
 		_bc("bag_del", [bag.id])
 	else:
-		_bc("bag_n", [bag.id, bag.n if bag.kind == "corpse" else bag.items.size()])
+		bag.n = bag.n if bag.kind == "corpse" else bag.items.size()
+		var rar := top_rarity(bag.items + (bag.equipment.values() if bag.kind == "corpse" else []))
+		_set_bag_rarity(bag, rar)
+		_bc("bag_n", [bag.id, bag.n, rar])
 
 
 func open_chest(chest: Dictionary, _by) -> void:
@@ -1638,7 +1684,7 @@ func drop_corpse(a, nm: String, color: Color) -> void:
 		return
 	var pp := Vector3(a.pos.x, 0, a.pos.z)
 	bag_seq += 1
-	var b := _add_bag_node(bag_seq, pp, color, nm)
+	var b := _add_bag_node(bag_seq, pp, color, nm, top_rarity(bag + eq.values()))
 	b.kind = "corpse"
 	b.equipment = eq
 	b.cls = a.cls
@@ -1647,7 +1693,7 @@ func drop_corpse(a, nm: String, color: Color) -> void:
 	b.gw = gs.x
 	b.gh = gs.y
 	b.n = _corpse_count(b)
-	_bc("bag_add", [bag_seq, pp, color, nm, b.n])
+	_bc("bag_add", [bag_seq, pp, color, nm, b.n, b.rar])
 
 
 func _corpse_count(o: Dictionary) -> int:
@@ -2150,6 +2196,7 @@ func _process(delta: float) -> void:
 	update_portals(dt)
 	_update_revive_wait(dt)
 	_update_view(dt)
+	_update_psi_visuals()
 
 	# 죽은 몬스터/봇 정리 (시체는 잠시 남김)
 	var keep := []
@@ -2231,6 +2278,42 @@ func _draw_actors(dt: float) -> void:
 			v.update_hp_bar(cam_pos)
 		else:
 			v.node.position = a.pos
+
+
+# 소드마스터 심령의 검: 소환된 검이 머리 위에 떠 있음 (1인칭은 화면 앞쪽 위)
+var psi_nodes := {}
+
+
+func _update_psi_visuals() -> void:
+	var list: Array = players if is_auth() else ([player] if player != null else [])
+	for p in list:
+		var n: int = p.psi_n if p.psi_on and p.alive else 0
+		var arr: Array = psi_nodes.get(p, [])
+		while arr.size() < n:
+			var w := Models.weapon("sword")
+			w.scale = Vector3.ONE * 0.45
+			for m in w.find_children("*", "GeometryInstance3D", true, false):
+				(m as GeometryInstance3D).material_overlay = Models.glow_mat(Color(0.4, 0.6, 1.0, 0.5), 1.5)
+				(m as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			world.add_child(w)
+			arr.append(w)
+			spawn_ring_burst(p.pos + Vector3(0, 2.0, 0), Color(0.4, 0.6, 1.0), 0.6)
+		while arr.size() > n:
+			var w: Node3D = arr.pop_back()
+			w.queue_free()
+		psi_nodes[p] = arr
+		for i in arr.size():
+			var off := (i - (arr.size() - 1) / 2.0) * 0.32
+			var w: Node3D = arr[i]
+			if p == player and camera != null:
+				var bt := camera.global_transform.basis
+				w.global_position = camera.global_position + bt * Vector3(off, 0.42 + sin(time * 4.0 + i) * 0.02, -1.1)
+				w.global_rotation = camera.global_rotation + Vector3(-0.2, 0, 0)
+			else:
+				var f := Actor.fwd(p.yaw)
+				var r := Vector3(cos(p.yaw), 0, -sin(p.yaw))
+				w.global_position = p.pos + Vector3(0, 2.1 + sin(time * 4.0 + i) * 0.05, 0) + r * off * 1.4 + f * 0.2
+				w.rotation = Vector3(0, p.yaw, 0)
 
 
 func _update_view(dt: float) -> void:
@@ -2537,6 +2620,7 @@ func _process_client(dt: float) -> void:
 		b.node.rotation.y += dt
 	_animate_portals(dt)
 	_update_view(dt)
+	_update_psi_visuals()
 	if result != null and end_timer >= 0.0:
 		end_timer -= dt
 		if end_timer <= 0.0:
@@ -2679,7 +2763,7 @@ func net_event(n: String, args: Array) -> void:
 				c.opened = true
 				_chest_lid(c)
 		"bag_add":
-			var b := _add_bag_node(args[0], args[1], args[2], args[3])
+			var b := _add_bag_node(args[0], args[1], args[2], args[3], args[5] if args.size() > 5 else -1)
 			b.n = args[4]
 		"fix_used":
 			_fixture_used(int(args[0]))
@@ -2689,6 +2773,8 @@ func net_event(n: String, args: Array) -> void:
 			var b = _find_by_id(loot_bags, args[0])
 			if b != null:
 				b.n = args[1]
+				if args.size() > 2:
+					_set_bag_rarity(b, int(args[2]))
 		"bag_del":
 			var b = _find_by_id(loot_bags, args[0])
 			if b != null:
