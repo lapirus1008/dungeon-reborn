@@ -1,0 +1,11 @@
+Textures from Poly Haven (https://polyhaven.com), CC0 1.0 Universal (public domain).
+wall: https://polyhaven.com/a/castle_brick_07
+floor: https://polyhaven.com/a/cobblestone_floor_04
+ceiling: https://polyhaven.com/a/dark_wooden_planks
+grass: https://polyhaven.com/a/forest_floor
+gravel: https://polyhaven.com/a/cobblestone_04
+marble: https://polyhaven.com/a/marble_tiles
+roof: https://polyhaven.com/a/grey_roof_tiles_02
+bark: https://polyhaven.com/a/bark_brown_02
+wood: https://polyhaven.com/a/medieval_wood
+rock: https://polyhaven.com/a/rock_wall_08

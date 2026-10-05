@@ -722,6 +722,7 @@ func _flask_checks(pl, out: Array) -> void:
 	pl.invuln = 0.0
 	pl.take_damage(1.0, mon, {})
 	var hit_end: bool = not pl.mimic_form
+	pl.invuln = 999.0 # 우클릭 해제 확인 중 다른 몬스터에게 맞아 풀리지 않게
 	pl.cd.flask = 0.0
 	pl.start_drink("c5")
 	await _wait(1.1)

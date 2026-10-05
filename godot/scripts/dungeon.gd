@@ -586,6 +586,21 @@ func _mat(tex: Array, uv_scale := Vector3.ONE, tint := Color.WHITE) -> StandardM
 	return m
 
 
+# 사진 재질(assets/textures/<자리>/)이 있으면 그 재질, 없으면 fallback
+func _pbr_or(slot: String, fallback: StandardMaterial3D, uv := Vector3.ONE, tint := Color.WHITE) -> StandardMaterial3D:
+	var t := Textures.pbr(slot)
+	if t.is_empty():
+		return fallback
+	return _mat(t, uv, tint)
+
+
+# 벽 상자(BoxMesh는 3x2 아틀라스 UV) 위 사진 벽돌이 실제 크기로 보이도록 (약 2.5m에 한 번)
+func _wall_uv(h: float) -> Vector3:
+	if Textures.pbr("wall").is_empty():
+		return Vector3(3.0, 2.0 * h / T, 1.0)
+	return Vector3(3.0 * T / 2.5, 2.0 * h / 2.5, 1.0)
+
+
 func _multimesh(mesh: Mesh, xforms: Array) -> MultiMeshInstance3D:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -607,8 +622,8 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 	var wall_tex := Textures.pick("wall", Textures.stone_wall(deep))
 	var floor_tex := Textures.pick("floor", Textures.floor_tiles(deep))
 	var wall_mat := _mat(wall_tex)
-	var floor_mat := _mat(floor_tex)
-	var ceil_mat := _mat(wall_tex, Vector3.ONE, Color(0.45, 0.42, 0.4))
+	var floor_mat := _mat(floor_tex, Vector3.ONE * (2.0 if Textures.pbr("floor").size() else 1.0))
+	var ceil_mat := _pbr_or("ceiling", _mat(wall_tex, Vector3.ONE, Color(0.45, 0.42, 0.4)), Vector3(1.5, 1.5, 1), Color(0.6, 0.55, 0.5))
 
 	var floors := []
 	var out_floors := [] # 숲 (풀)
@@ -702,8 +717,9 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 				gm.roughness = 0.35
 			pm.material = gm
 			root.add_child(_multimesh(pm, pair[0]))
-	var cplane: Mesh = tm.call("ceiling")
-	if cplane == null:
+	var has_pbr_ceil := Textures.pbr("ceiling").size() > 0
+	var cplane: Mesh = tm.call("ceiling") if not has_pbr_ceil else null
+	if cplane == null and not has_pbr_ceil:
 		cplane = AssetRegistry.mesh("dungeon", "ceiling")
 	if cplane == null:
 		cplane = PlaneMesh.new()
@@ -713,7 +729,7 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 	# 야외가 있는 지도: 달빛이 실내로 새지 않도록 천장이 그림자를 드리움
 	ceil_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if has_outdoor else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	# 테마 천장은 바닥 타일을 뒤집어 쓰므로 어둡게
-	if th.has("ceiling") and cplane.get_surface_count() > 0:
+	if th.has("ceiling") and not has_pbr_ceil and cplane.get_surface_count() > 0:
 		var cm = cplane.surface_get_material(0)
 		if cm is StandardMaterial3D:
 			var dark: StandardMaterial3D = cm.duplicate()
@@ -724,7 +740,7 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 	if cath_ceils.size():
 		var cc := PlaneMesh.new()
 		cc.size = Vector2(T, T)
-		cc.material = _mat(Textures.stone_wall(false), Vector3(1, 1, 1), Color(0.5, 0.46, 0.42))
+		cc.material = _pbr_or("ceiling", _mat(Textures.stone_wall(false), Vector3(1, 1, 1), Color(0.5, 0.46, 0.42)), Vector3(1.5, 1.5, 1), Color(0.55, 0.5, 0.45))
 		var cci := _multimesh(cc, cath_ceils)
 		cci.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 		root.add_child(cci)
@@ -734,14 +750,14 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		box.size = Vector3(T, WALL_H, T)
 		box.material = wall_mat
 		# 벽 텍스처가 세로로 늘어나지 않도록 UV 비율 조정
-		wall_mat.uv1_scale = Vector3(3.0, 2.0 * WALL_H / T, 1.0)
+		wall_mat.uv1_scale = _wall_uv(WALL_H)
 	if walls.size():
 		root.add_child(_multimesh(box, walls))
 	# 높은 벽 (성벽 12m, 본성 16m, 성당 10m, 작은 건물 바깥 7m)
 	for h in walls_by_h:
 		var tb := BoxMesh.new()
 		tb.size = Vector3(T, h, T)
-		var tmat := _mat(wall_tex, Vector3(3.0, 2.0 * h / T, 1.0))
+		var tmat := _mat(wall_tex, _wall_uv(h))
 		tb.material = tmat
 		root.add_child(_multimesh(tb, walls_by_h[h]))
 	if merlons.size():
@@ -862,7 +878,7 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		rk.height = 1.1
 		rk.radial_segments = 7
 		rk.rings = 4
-		rk.material = _mat(wall_tex, Vector3(0.6, 0.6, 1), Color(0.75, 0.75, 0.72))
+		rk.material = _pbr_or("rock", _mat(wall_tex, Vector3(0.6, 0.6, 1), Color(0.75, 0.75, 0.72)), Vector3(2, 1, 1))
 		root.add_child(_multimesh(rk, rock_x))
 	if log_x.size():
 		var lg := CylinderMesh.new()
@@ -870,9 +886,10 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		lg.bottom_radius = 0.34
 		lg.height = 2.6
 		lg.radial_segments = 8
-		var lm := StandardMaterial3D.new()
-		lm.albedo_texture = Textures.wood()
-		lm.albedo_color = Color(0.7, 0.6, 0.5)
+		var lm0 := StandardMaterial3D.new()
+		lm0.albedo_texture = Textures.wood()
+		lm0.albedo_color = Color(0.7, 0.6, 0.5)
+		var lm := _pbr_or("bark", lm0, Vector3(2, 1, 1))
 		lg.material = lm
 		root.add_child(_multimesh(lg, log_x))
 	if bone_x.size():
@@ -972,9 +989,10 @@ func _wall_h(x: int, z: int) -> float:
 func _build_outdoor(tree_x: Array, bush_x: Array, wall_tex: Array) -> void:
 	var stone := _mat(wall_tex, Vector3(2, 2, 1))
 	# 나무 3종: 전나무 / 활엽수 / 마른 나무
-	var bark := StandardMaterial3D.new()
-	bark.albedo_texture = Textures.wood()
-	bark.albedo_color = Color(0.45, 0.36, 0.3)
+	var bark0 := StandardMaterial3D.new()
+	bark0.albedo_texture = Textures.wood()
+	bark0.albedo_color = Color(0.45, 0.36, 0.3)
+	var bark := _pbr_or("bark", bark0, Vector3(2, 2, 1))
 	var pine := StandardMaterial3D.new()
 	pine.albedo_color = Color(0.09, 0.17, 0.1)
 	pine.roughness = 0.9
@@ -1115,9 +1133,10 @@ func _build_outdoor(tree_x: Array, bush_x: Array, wall_tex: Array) -> void:
 				lmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			root.add_child(lmi)
 	# 성 탑: 원통 + 뾰족 지붕
-	var slate := StandardMaterial3D.new()
-	slate.albedo_color = Color(0.2, 0.22, 0.28)
-	slate.roughness = 0.6
+	var slate0 := StandardMaterial3D.new()
+	slate0.albedo_color = Color(0.2, 0.22, 0.28)
+	slate0.roughness = 0.6
+	var slate := _pbr_or("roof", slate0, Vector3(6, 4, 1), Color(0.75, 0.78, 0.85))
 	for tw in decor.get("towers", []):
 		var c := center(int(tw[0]), int(tw[1]))
 		var r := float(tw[2])
@@ -1127,7 +1146,7 @@ func _build_outdoor(tree_x: Array, bush_x: Array, wall_tex: Array) -> void:
 		cyl.bottom_radius = r * 1.06
 		cyl.height = h
 		cyl.radial_segments = 16
-		cyl.material = _mat(wall_tex, Vector3(6, h / 3.0, 1))
+		cyl.material = _mat(wall_tex, Vector3(TAU * r / 2.5, h / 2.5, 1) if Textures.pbr("wall").size() else Vector3(6, h / 3.0, 1))
 		var mi := MeshInstance3D.new()
 		mi.mesh = cyl
 		mi.position = c + Vector3(0, h / 2.0, 0)
@@ -1219,7 +1238,7 @@ func _build_outdoor(tree_x: Array, bush_x: Array, wall_tex: Array) -> void:
 		pew.size = Vector3(4.0, 0.9, 0.7)
 		var pmat := StandardMaterial3D.new()
 		pmat.albedo_texture = Textures.wood()
-		pew.material = pmat
+		pew.material = _pbr_or("wood", pmat, Vector3(3, 2, 1))
 		var pews := []
 		var zs := (int(tr[3]) + 1) * T + 1.5 if tr.size() == 4 else (z0 + 3) * T
 		var zz: float = zs
