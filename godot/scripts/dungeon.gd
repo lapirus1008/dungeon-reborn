@@ -906,6 +906,8 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		var skull := SphereMesh.new()
 		skull.radius = 0.2
 		skull.height = 0.36
+		skull.radial_segments = 10
+		skull.rings = 6
 		skull.material = bone_mat
 		root.add_child(_multimesh(skull, skull_x))
 
@@ -961,6 +963,40 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		fmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		flame_mm = fmi.multimesh
 		root.add_child(fmi)
+	_chunkify()
+
+
+# 성능: 지도 전체를 한 덩어리로 그리면 화면 밖·먼 곳까지 매 프레임 그리게 됨.
+# 32m 구역마다 나눠서 화면 밖 구역은 건너뛰고(절두체 컬링), 멀리 있는 구역은 그리지 않음(안개 너머)
+const CHUNK := 32.0
+const VIEW_RANGE := 85.0
+
+
+func _chunkify() -> void:
+	for mi in root.get_children():
+		if not (mi is MultiMeshInstance3D):
+			continue
+		var mm: MultiMesh = mi.multimesh
+		if mm == null or mm == flame_mm or mm.instance_count < 24:
+			continue
+		var groups := {}
+		for i in mm.instance_count:
+			var xf := mm.get_instance_transform(i)
+			var key := Vector2i(floori(xf.origin.x / CHUNK), floori(xf.origin.z / CHUNK))
+			if not groups.has(key):
+				groups[key] = []
+			groups[key].append(xf)
+		if groups.size() <= 1:
+			continue
+		for key in groups:
+			var part := _multimesh(mm.mesh, groups[key])
+			part.cast_shadow = mi.cast_shadow
+			part.material_override = mi.material_override
+			part.visibility_range_end = VIEW_RANGE
+			part.visibility_range_end_margin = 10.0
+			part.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
+			root.add_child(part)
+		mi.queue_free()
 
 
 func _in_rect(r: Array, x: int, z: int) -> bool:
@@ -1302,20 +1338,18 @@ func dispose() -> void:
 var dyn_blocks: Array = [] # 돌기둥 등 일시적인 원형 장애물 [[pos, radius], ...]
 
 
-func _blocks_near(pos: Vector3) -> Array:
-	if static_blocks.is_empty():
-		return dyn_blocks
-	var out := dyn_blocks.duplicate()
-	for b in static_blocks:
-		var bp: Vector3 = b[0]
-		if absf(bp.x - pos.x) < 8.0 and absf(bp.z - pos.z) < 8.0:
-			out.append(b)
-	return out
-
-
 func resolve_circle(pos: Vector3, r: float) -> Vector3:
-	for b in _blocks_near(pos):
+	pos = _push_blocks(pos, r, dyn_blocks)
+	if static_blocks.size():
+		pos = _push_blocks(pos, r, static_blocks)
+	return _resolve_tiles(pos, r)
+
+
+func _push_blocks(pos: Vector3, r: float, blocks: Array) -> Vector3:
+	for b in blocks:
 		var bp: Vector3 = b[0]
+		if absf(bp.x - pos.x) > 8.0 or absf(bp.z - pos.z) > 8.0:
+			continue
 		var bdx := pos.x - bp.x
 		var bdz := pos.z - bp.z
 		var bd := sqrt(bdx * bdx + bdz * bdz)
@@ -1327,6 +1361,10 @@ func resolve_circle(pos: Vector3, r: float) -> Vector3:
 				bd = 1.0
 			pos.x = bp.x + bdx / bd * mn
 			pos.z = bp.z + bdz / bd * mn
+	return pos
+
+
+func _resolve_tiles(pos: Vector3, r: float) -> Vector3:
 	var tx := to_tile(pos.x)
 	var tz := to_tile(pos.z)
 	for dz in range(-1, 2):

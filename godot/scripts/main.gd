@@ -71,6 +71,8 @@ func _ready() -> void:
 		_mptest.call_deferred(args[args.find("--mptest") + 1])
 	elif args.has("--lobbyshots"):
 		_lobbyshots.call_deferred(args[args.find("--lobbyshots") + 1])
+	elif args.has("--perfprobe"):
+		_perfprobe.call_deferred(args[args.find("--perfprobe") + 1])
 	elif args.has("--mapshots"):
 		_mapshots.call_deferred(args[args.find("--mapshots") + 1])
 	elif args.has("--invshots"):
@@ -127,6 +129,8 @@ func apply_quality(q: String) -> void:
 		game.quality = q
 		if game.player_light:
 			game.player_light.shadow_enabled = q != "low"
+		if game.moon != null and is_instance_valid(game.moon):
+			game.moon.shadow_enabled = q != "low"
 		if game.env:
 			game.env.environment.glow_enabled = q != "low"
 			game.env.environment.ssao_enabled = q == "high"
@@ -1605,6 +1609,68 @@ func _lobbyshots(dir: String) -> void:
 
 
 # 인벤토리 화면 스크린샷 (godot -- --invshots <폴더>)
+# 성능 측정: 지도별로 그려지는 물체 수·드로우콜·삼각형·CPU 처리 시간
+func _perf_line(tag: String) -> String:
+	await _wait(0.6)
+	var fr := 0
+	var t0 := Time.get_ticks_usec()
+	var proc := 0.0
+	while fr < 20:
+		await get_tree().process_frame
+		proc += Performance.get_monitor(Performance.TIME_PROCESS)
+		fr += 1
+	var dt := (Time.get_ticks_usec() - t0) / 1000.0 / fr
+	return "%s | 물체 %d · 드로우콜 %d · 삼각형 %dK · 프레임 %.1fms (스크립트 %.1fms)" % [tag,
+		Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
+		Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME) / 1000, dt, proc / fr * 1000.0]
+
+
+func _perfprobe(map: String) -> void:
+	await _wait(0.5)
+	_test_char("fighter")
+	start_raid(map)
+	game.force_act = true
+	await _wait(1.5)
+	var p = game.player
+	p.invuln = 9999.0
+	var out := []
+	out.append(await _perf_line("기본"))
+	# 지형 메시별 전체 삼각형 수 (상위 8개)
+	var tri := {}
+	for m in game.dungeon.root.find_children("*", "MultiMeshInstance3D", true, false):
+		var mesh: Mesh = m.multimesh.mesh
+		var n := 0
+		for si in mesh.get_surface_count():
+			var arr := mesh.surface_get_arrays(si)
+			n += (arr[Mesh.ARRAY_INDEX].size() if arr[Mesh.ARRAY_INDEX] != null else arr[Mesh.ARRAY_VERTEX].size()) / 3
+		var k := "%s(%d)" % [mesh.get_class() if mesh.resource_path == "" else mesh.resource_path.get_file(), n]
+		tri[k] = tri.get(k, 0) + n * m.multimesh.instance_count
+	var keys := tri.keys()
+	keys.sort_custom(func(a, b): return tri[a] > tri[b])
+	for k in keys.slice(0, 8):
+		out.append("  %s 전체 %dK" % [k, tri[k] / 1000])
+	if game.moon != null:
+		game.moon.shadow_enabled = false
+		out.append(await _perf_line("달빛 그림자 끔"))
+		game.moon.shadow_enabled = true
+	var mms := game.dungeon.root.find_children("*", "MultiMeshInstance3D", true, false)
+	for m in mms:
+		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	out.append(await _perf_line("지형 그림자 끔"))
+	for m in mms:
+		m.visible = false
+	out.append(await _perf_line("지형(멀티메시) 숨김"))
+	for m in mms:
+		m.visible = true
+	for a in game.actors:
+		if a.kind != "player":
+			a.stun = 9999.0
+	out.append(await _perf_line("몬스터 정지"))
+	for l in out:
+		print("[perf] ", map, " ", l)
+	get_tree().quit()
+
+
 # 성 지도 둘러보기 스크린샷: 숲 길 · 성 정문 · 안뜰과 본성 · 큰 홀 · 성당 바깥 · 성당 안
 func _mapshots(dir: String) -> void:
 	await _wait(0.5)

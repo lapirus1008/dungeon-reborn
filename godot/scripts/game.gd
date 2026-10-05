@@ -398,8 +398,8 @@ func _outdoor_env() -> void:
 	moon.light_color = Color(0.62, 0.7, 0.95)
 	moon.light_energy = 0.45
 	moon.rotation = Vector3(deg_to_rad(-38.0), deg_to_rad(35.0), 0.0)
-	moon.shadow_enabled = true
-	moon.directional_shadow_max_distance = 70.0
+	moon.shadow_enabled = quality != "low" # 낮음: 달빛 그림자 끔 (가장 큰 부하)
+	moon.directional_shadow_max_distance = 45.0
 	moon.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
 	moon.shadow_bias = 0.05
 	world.add_child(moon)
