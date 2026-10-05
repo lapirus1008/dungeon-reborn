@@ -68,6 +68,13 @@ var fps_label: Label
 var hurt_v := 0.0
 var sens_slider: HSlider
 var quality_opt: OptionButton
+const FPS_MODES := [
+	["adaptive", "적응형 VSync (권장: 주사율까지, 느려져도 30으로 안 떨어짐)"],
+	["vsync", "VSync 켜기 (찢어짐 없음, 느리면 절반으로 떨어짐)"],
+	["144", "VSync 끄기 · 최대 144"],
+	["60", "VSync 끄기 · 최대 60"],
+	["unlimited", "VSync 끄기 · 제한 없음"],
+]
 
 
 func _ready() -> void:
@@ -440,6 +447,17 @@ func _build_menu() -> void:
 	quality_opt.item_selected.connect(func(i): setting_changed.emit("quality", ["low", "mid", "high"][i]))
 	qh.add_child(quality_opt)
 	v.add_child(qh)
+	# 화면 동기화 / 프레임 제한
+	var fh := HBoxContainer.new()
+	fh.add_child(UI.label("프레임", 14, UI.MUTED))
+	var fps_opt := OptionButton.new()
+	for t in FPS_MODES:
+		fps_opt.add_item(t[1])
+	fps_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	fps_opt.selected = maxi(0, FPS_MODES.map(func(t): return t[0]).find(SaveData.setting("fps", "adaptive")))
+	fps_opt.item_selected.connect(func(i): setting_changed.emit("fps", FPS_MODES[i][0]))
+	fh.add_child(fps_opt)
+	v.add_child(fh)
 	v.add_child(UI.button("레이드 포기 (소지품 상실)", func(): menu_abandon.emit(), 13))
 	c.add_child(p)
 	menu.visible = false

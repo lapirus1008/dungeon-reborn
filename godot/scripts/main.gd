@@ -65,12 +65,15 @@ func _ready() -> void:
 		_run_dedicated(args)
 		return
 	apply_quality(SaveData.setting("quality", "mid"))
+	apply_fps(SaveData.setting("fps", "adaptive"))
 	_build_results()
 	open_lobby()
 	if args.has("--mptest"):
 		_mptest.call_deferred(args[args.find("--mptest") + 1])
 	elif args.has("--lobbyshots"):
 		_lobbyshots.call_deferred(args[args.find("--lobbyshots") + 1])
+	elif args.has("--cpuprobe"):
+		_cpuprobe.call_deferred(args[args.find("--cpuprobe") + 1])
 	elif args.has("--perfprobe"):
 		_perfprobe.call_deferred(args[args.find("--perfprobe") + 1])
 	elif args.has("--mapshots"):
@@ -110,6 +113,23 @@ func _setup_input() -> void:
 
 
 # 그래픽 품질: 3D 해상도 배율(FSR), MSAA, 그림자, 글로우, SSAO
+# 화면 동기화: 기본은 적응형 (주사율까지 올라가고, 한 프레임이 늦어도 30fps로 뚝 떨어지지 않음)
+func apply_fps(mode: String) -> void:
+	match mode:
+		"vsync":
+			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
+			Engine.max_fps = 0
+		"144", "60":
+			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+			Engine.max_fps = int(mode)
+		"unlimited":
+			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+			Engine.max_fps = 0
+		_:
+			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ADAPTIVE)
+			Engine.max_fps = 0
+
+
 func apply_quality(q: String) -> void:
 	var vp := get_viewport()
 	match q:
@@ -303,6 +323,8 @@ func _on_setting(key: String, value) -> void:
 		game.sensitivity = 0.0022 * float(value)
 	elif key == "quality":
 		apply_quality(value)
+	elif key == "fps":
+		apply_fps(value)
 
 
 func _open_menu() -> void:
@@ -1623,6 +1645,34 @@ func _perf_line(tag: String) -> String:
 	return "%s | 물체 %d · 드로우콜 %d · 삼각형 %dK · 프레임 %.1fms (스크립트 %.1fms)" % [tag,
 		Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
 		Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME) / 1000, dt, proc / fr * 1000.0]
+
+
+# CPU 측정 (헤드리스 = 그리기 없음): 게임 로직만의 한 프레임 비용과 항목별 시간
+func _cpuprobe(map: String) -> void:
+	await _wait(0.3)
+	_test_char("fighter")
+	start_raid(map)
+	game.force_act = true
+	await _wait(1.0)
+	game.player.invuln = 9999.0
+	game.prof = {}
+	var n := 0
+	var t0 := Time.get_ticks_usec()
+	var worst := 0.0
+	var last := t0
+	while n < 300:
+		await get_tree().process_frame
+		var now := Time.get_ticks_usec()
+		worst = maxf(worst, (now - last) / 1000.0)
+		last = now
+		n += 1
+	var avg := (Time.get_ticks_usec() - t0) / 1000.0 / n
+	print("[cpu] %s 액터 %d · 평균 %.2fms (%.0f fps 상한) · 최악 %.1fms" % [map, game.actors.size(), avg, 1000.0 / avg, worst])
+	var keys: Array = game.prof.keys()
+	keys.sort_custom(func(a, b): return game.prof[a] > game.prof[b])
+	for k in keys:
+		print("[cpu]   %s %.2fms/프레임" % [k, game.prof[k] / 1000.0 / n])
+	get_tree().quit()
 
 
 func _perfprobe(map: String) -> void:

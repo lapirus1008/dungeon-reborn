@@ -69,6 +69,9 @@ var slow := 0.0
 var slow_mul := 0.6
 var root := 0.0
 var stealth := 0.0
+var lod_t := 0.0 # 원거리 갱신 줄이기 (game.gd)
+var lod_far := false
+var lod_acc := 0.0
 var mimic_form := false # 미믹 플라스크: 상자로 변신 (아주 느림, 피격/우클릭 시 해제)
 var frozen := 0.0 # 서리 장벽 (무적, 행동 불가)
 var parry := 0.0
@@ -419,17 +422,23 @@ func heal_now(amount: float) -> void:
 
 
 func tick_common(dt: float) -> void:
-	for k in ["stun", "slow", "root", "invuln", "hit_flash", "parry", "immune"]:
-		var v: float = get(k)
-		if v > 0.0:
-			set(k, v - dt)
+	# 이름으로 get/set 하면 느려서 직접 갱신 (액터 수백 개가 매 프레임 부름)
+	if stun > 0.0: stun -= dt
+	if slow > 0.0: slow -= dt
+	if root > 0.0: root -= dt
+	if invuln > 0.0: invuln -= dt
+	if hit_flash > 0.0: hit_flash -= dt
+	if parry > 0.0: parry -= dt
+	if immune > 0.0: immune -= dt
 	if frozen > 0.0:
 		frozen -= dt
 	combat_t += dt
-	for k in ["petrified", "warcry_t", "dragon_cd", "vuln_t", "draw_t", "counter_t"]:
-		var v2: float = get(k)
-		if v2 > 0.0:
-			set(k, v2 - dt)
+	if petrified > 0.0: petrified -= dt
+	if warcry_t > 0.0: warcry_t -= dt
+	if dragon_cd > 0.0: dragon_cd -= dt
+	if vuln_t > 0.0: vuln_t -= dt
+	if draw_t > 0.0: draw_t -= dt
+	if counter_t > 0.0: counter_t -= dt
 	for k in dr_list.keys():
 		dr_list[k][1] -= dt
 		if dr_list[k][1] <= 0.0:

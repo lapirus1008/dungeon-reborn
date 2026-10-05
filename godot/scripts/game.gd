@@ -2370,6 +2370,25 @@ func _interact_for(p, dt: float) -> void:
 
 
 # ------------------------------------------------------------------ 메인 루프
+# CPU 측정용 (--cpuprobe): 항목별 누적 마이크로초
+var prof = null
+var lod_frame := 0
+
+
+func _far_from_players(p: Vector3, r: float) -> bool:
+	for pl in players:
+		if not pl.done and absf(pl.pos.x - p.x) < r and absf(pl.pos.z - p.z) < r:
+			return false
+	return true
+
+
+func _pt(k: String, t: int) -> int:
+	var now := Time.get_ticks_usec()
+	if prof != null:
+		prof[k] = prof.get(k, 0) + now - t
+	return now
+
+
 func _process(delta: float) -> void:
 	if not running:
 		return
@@ -2394,29 +2413,51 @@ func _process(delta: float) -> void:
 				p.alive = false
 				finish_player(p, false, "무너지는 던전")
 
+	var _t := Time.get_ticks_usec()
 	for p in players:
 		if not p.extracted:
 			p.update(dt)
+	_t = _pt("플레이어", _t)
 	update_interact(dt)
+	_t = _pt("상호작용", _t)
+	# 플레이어에게서 45m 넘게 떨어진 몬스터·봇은 4프레임에 한 번만 (모아 둔 시간으로) 갱신
+	lod_frame += 1
 	for a in actors:
 		if a.kind != "player":
-			a.update(dt)
-			a.last_vel = (a.pos - a.last_pos) / dt
+			var udt := dt
+			a.lod_t -= dt
+			if a.lod_t <= 0.0:
+				a.lod_t = 0.5
+				a.lod_far = _far_from_players(a.pos, 45.0)
+			if a.lod_far and a.alive:
+				a.lod_acc += dt
+				if (lod_frame + a.nid) % 4 != 0:
+					continue
+				udt = minf(a.lod_acc, 0.2)
+				a.lod_acc = 0.0
+			a.update(udt)
+			a.last_vel = (a.pos - a.last_pos) / udt
 			a.last_vel.y = 0.0
 			a.last_pos = a.pos
+	_t = _pt("몬스터·봇 AI", _t)
 	separate()
+	_t = _pt("밀어내기", _t)
 	_draw_actors(dt)
+	_t = _pt("액터 그리기/애니", _t)
 	update_projectiles(dt)
 	update_zones(dt)
 	_sync_blocks()
+	_t = _pt("투사체·구역", _t)
 	update_effects(dt)
 	update_soul_orbs(dt)
 	for b in loot_bags:
 		b.node.rotation.y += dt
 	update_portals(dt)
 	_update_revive_wait(dt)
+	_t = _pt("효과·포탈", _t)
 	_update_view(dt)
 	_update_psi_visuals()
+	_t = _pt("화면(HUD·미니맵·탐험)", _t)
 
 	# 죽은 몬스터/봇 정리 (시체는 잠시 남김)
 	var keep := []
@@ -2672,21 +2713,52 @@ func throw_arc(c) -> Array:
 	return out
 
 
+# 서로 겹친 액터 밀어내기: 3m 격자로 가까운 액터끼리만 비교 (전부 비교하면 액터 수의 제곱)
+const SEP_CELL := 3.0
+
+
 func separate() -> void:
-	for i in actors.size():
-		var a = actors[i]
+	var grid := {}
+	for a in actors:
 		if not a.alive or a.extracted:
 			continue
-		for j in range(i + 1, actors.size()):
-			var b = actors[j]
-			if not b.alive or b.extracted:
-				continue
+		var key := Vector2i(floori(a.pos.x / SEP_CELL), floori(a.pos.z / SEP_CELL))
+		if grid.has(key):
+			grid[key].append(a)
+		else:
+			grid[key] = [a]
+	var moved := {}
+	for key in grid:
+		var cell: Array = grid[key]
+		for dz in range(0, 2):
+			for dx in range(-1, 2):
+				if dz == 0 and dx < 0:
+					continue # 이웃 칸 쌍은 한 번만
+				var other = cell if (dx == 0 and dz == 0) else grid.get(key + Vector2i(dx, dz))
+				if other == null:
+					continue
+				for i in cell.size():
+					var a = cell[i]
+					var j0 := i + 1 if other == cell else 0
+					for j in range(j0, other.size()):
+						var b = other[j]
+						if _sep_pair(a, b):
+							moved[a] = true
+							moved[b] = true
+	# 밀려난 액터만 벽 밖으로 (이동한 액터는 이미 move()에서 처리됨)
+	for a in moved:
+		a.pos = dungeon.resolve_circle(a.pos, a.radius)
+
+
+func _sep_pair(a, b) -> bool:
+	if true:
+		if true:
 			var dx: float = b.pos.x - a.pos.x
 			var dz: float = b.pos.z - a.pos.z
 			var mn: float = a.radius + b.radius
 			var d2 := dx * dx + dz * dz
 			if d2 >= mn * mn or d2 < 1e-6:
-				continue
+				return false
 			var d := sqrt(d2)
 			var push := (mn - d) / 2.0
 			var nx := dx / d
@@ -2695,9 +2767,8 @@ func separate() -> void:
 			a.pos.z -= nz * push
 			b.pos.x += nx * push
 			b.pos.z += nz * push
-	for a in actors:
-		if a.alive:
-			a.pos = dungeon.resolve_circle(a.pos, a.radius)
+			return true
+	return false
 
 
 func update_explored() -> void:

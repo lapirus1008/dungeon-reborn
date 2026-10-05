@@ -149,6 +149,10 @@ func animate(dt: float) -> void:
 		r.parts.arm_r.rotation.x = lerpf(r.parts.arm_r.rotation.x, -open, minf(1.0, dt * 10.0))
 
 
+var wake_t := 0.0
+var asleep := false
+
+
 func update(dt: float) -> void:
 	tick_common(dt)
 	if not alive:
@@ -161,8 +165,12 @@ func update(dt: float) -> void:
 			game.on_death(self, null)
 			return
 	_tick_blasts(dt)
-	# 멀리 있으면 휴면
-	if game.nearest_adventurer_dist(pos) > 50.0:
+	# 멀리 있으면 휴면 (가까운 모험가 거리는 0.4초마다만 확인)
+	wake_t -= dt
+	if wake_t <= 0.0:
+		wake_t = 0.4
+		asleep = game.nearest_adventurer_dist(pos) > 50.0
+	if asleep:
 		move_amt = 0.0
 		return
 	if atk_cd > 0.0:
