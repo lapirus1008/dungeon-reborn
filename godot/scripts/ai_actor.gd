@@ -107,6 +107,9 @@ func sense(rng: float):
 		# 은신: 몬스터는 전혀 알아채지 못함, 모험가(AI)는 아주 가까이서만
 		if a.stealth > 0.0 and (kind == "monster" or d > 3.0):
 			continue
+		# 미믹 플라스크로 상자가 된 모험가: 몬스터는 알아채지 못함
+		if a.mimic_form and kind == "monster":
+			continue
 		if not game.dungeon.los(pos.x, pos.z, a.pos.x, a.pos.z):
 			continue
 		var ang := absf(angle_difference(yaw, yaw_to(a.pos.x - pos.x, a.pos.z - pos.z)))
@@ -122,9 +125,10 @@ func animate(dt: float) -> void:
 	var other: CharacterRig = rig if r == alt_rig else alt_rig
 	if other != null and other.node.visible:
 		other.node.visible = false
-	r.node.visible = visible and _stealth_visible()
+	r.node.visible = visible and _stealth_visible() and not mimic_form
 	r.node.position = pos
 	r.node.rotation.y = yaw
+	_update_mimic_box()
 	if not alive:
 		death_t += dt
 	var st := {
@@ -163,6 +167,22 @@ func animate(dt: float) -> void:
 		r.node.scale = bs
 
 
+# 미믹 플라스크: 모험가 대신 상자가 보임
+var mimic_box: Node3D
+
+
+func _update_mimic_box() -> void:
+	if mimic_form and visible and alive:
+		if mimic_box == null:
+			mimic_box = Models.chest(1)
+			game.world.add_child(mimic_box)
+		mimic_box.position = pos
+		mimic_box.rotation.y = yaw
+	elif mimic_box != null:
+		mimic_box.queue_free()
+		mimic_box = null
+
+
 # 은신 중인 적은 플레이어와 가까울 때만 희미하게 보인다
 func _stealth_visible() -> bool:
 	return true
@@ -184,9 +204,14 @@ func set_visible(v: bool) -> void:
 		active_rig().set_active(v)
 	if not v:
 		hp_bar.visible = false
+		if mimic_box != null:
+			mimic_box.queue_free()
+			mimic_box = null
 
 
 func remove_from_world() -> void:
+	if mimic_box != null and is_instance_valid(mimic_box):
+		mimic_box.queue_free()
 	if node and is_instance_valid(node):
 		node.queue_free()
 	if alt_rig != null and is_instance_valid(alt_rig.node):

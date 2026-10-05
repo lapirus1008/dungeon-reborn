@@ -223,6 +223,14 @@ static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 		total += dealt
 		hits += 1
 		hit_list.append(a)
+	# 대지 플라스크 돌기둥도 근접 공격으로 부술 수 있음
+	for z in g.zones:
+		if z.kind == "stone_pillar":
+			var pdx: float = z.pos.x - c.pos.x
+			var pdz: float = z.pos.z - c.pos.z
+			var pd := sqrt(pdx * pdx + pdz * pdz)
+			if pd <= prof.range + z.radius and (pd < 0.6 or absf(angle_difference(c.yaw, Actor.yaw_to(pdx, pdz))) <= prof.arc / 2.0):
+				g.hit_pillar(z, prof.dmg * c.dmg_mul() * mult)
 	if hits:
 		g.sfx("hit", c.pos)
 		if c.cls == "deathknight":
@@ -236,7 +244,7 @@ static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 # 로그 단검 콤보: 1페이즈 우·좌·우 / 2페이즈 우·좌·우·좌·우 / 3페이즈 양손 X자 베기
 const ROGUE_COMBO := [
 	{"side": 1.0}, {"side": -1.0}, {"side": 1.0, "end": true},
-	{"side": 1.0}, {"side": -1.0}, {"side": 1.0}, {"side": -1.0}, {"side": 1.0, "end": true},
+	{"side": 1.0, "p2": true}, {"side": -1.0, "p2": true}, {"side": 1.0, "p2": true}, {"side": -1.0, "p2": true}, {"side": 1.0, "end": true, "p2": true},
 	{"side": 0.0, "x": true, "end": true},
 ]
 
@@ -247,7 +255,12 @@ static func rogue_combo_profile(c, i: int) -> Dictionary:
 	var p := {"dmg": 15.0, "range": 2.5, "arc": 1.1, "cd": 0.22, "knock": 0.5, "hit_at": 0.11, "dur": 0.22}
 	if st.get("x", false):
 		p = {"dmg": 42.0, "range": 2.7, "arc": 1.9, "cd": 0.9, "knock": 5.0, "hit_at": 0.24, "dur": 0.55, "xslash": true}
-	elif st.get("end", false):
+	elif st.get("p2", false):
+		# 2페이즈: 5타를 1페이즈 3타와 같은 시간 안에 (한 타 0.22 x 3/5)
+		p.dur = 0.132
+		p.cd = 0.132
+		p.hit_at = 0.066
+	if st.get("end", false) and not st.get("x", false):
 		p.cd = 0.5 # 페이즈 사이 짧은 숨 고르기
 	p.cd /= spd
 	p["side"] = st.side
@@ -425,26 +438,39 @@ static func roar(c) -> bool:
 	return true
 
 
-# 플라스크 던지기 (소모품 칸 3/4): 화염 / 바위 / 번개 / 미믹
-static func throw_flask(c, aim: Dictionary, it: Dictionary, slot: String) -> bool:
-	if c.cd.get("util", 0.0) > 0.0 or c.incapacitated():
-		return false
-	c.cd["util"] = 0.9
-	var g = c.game
-	var b: Dictionary = Data.base_of(it)
+# 플라스크 (체력 물약 제외) 공유 재사용 대기
+const FLASK_CD := 20.0
+const FLASK_SPEED := 20.0
+const FLASK_GRAVITY := 9.0
+
+
+# 던지는 출발점과 속도 (포물선 미리보기와 실제 투사체가 같은 계산을 씀)
+static func flask_launch(c, aim: Dictionary) -> Dictionary:
 	var dir: Vector3 = aim.dir
 	dir.y += 0.15
-	var ex := {"gravity": 9.0}
+	return {"origin": aim.origin, "vel": dir.normalized() * FLASK_SPEED}
+
+
+# 투척 플라스크 (소모품 칸 3/4/5): 화염(지면) / 대지(돌기둥) / 전기(번개+둔화)
+static func throw_flask(c, aim: Dictionary, it: Dictionary, slot: String) -> bool:
+	if c.cd.get("flask", 0.0) > 0.0:
+		c.game.notify(c, "toast", ["플라스크 재사용 대기 %d초" % ceili(c.cd.flask)])
+		return false
+	if c.incapacitated():
+		return false
+	c.cd["flask"] = FLASK_CD
+	var g = c.game
+	var b: Dictionary = Data.base_of(it)
+	var ex := {"gravity": FLASK_GRAVITY, "flask": b.throw}
 	match b.throw:
 		"fire":
-			ex.merge({"aoe": 3.0, "burn": 3, "dtype": "fire", "fire_aoe": true, "color": Color(1.0, 0.45, 0.12)})
+			ex["color"] = Color(1.0, 0.45, 0.12)
 		"rock":
-			ex.merge({"aoe": 2.5, "dtype": "phys", "stun": 1.5, "color": Color(0.6, 0.55, 0.45)})
+			ex["color"] = Color(0.6, 0.55, 0.45)
 		"lightning":
-			ex.merge({"aoe": 3.5, "dtype": "lightning", "slow": 2.0, "color": Color(0.55, 0.75, 1.0)})
-		"mimic":
-			ex.merge({"summon_mimic": true})
-	g.spawn_projectile(c, "flask", aim.origin, dir.normalized(), 20.0, float(b.get("dmg", 0)) * c.stats.get("dmg_mul", 1.0), ex)
+			ex["color"] = Color(0.55, 0.75, 1.0)
+	var L := flask_launch(c, aim)
+	g.spawn_projectile(c, "flask", L.origin, L.vel.normalized(), FLASK_SPEED, float(b.get("dmg", 0)) * c.stats.get("dmg_mul", 1.0), ex)
 	g.sfx("swing", c.pos)
 	it.count = int(it.get("count", 1)) - 1
 	if it.count <= 0:

@@ -641,6 +641,13 @@ func melee_hit(attacker, dmg: float, rng: float, arc: float, opts: Dictionary = 
 			info["stun"] = opts.stun
 		hit(attacker, a, dmg, info)
 		hits += 1
+	for z in zones:
+		if z.kind == "stone_pillar":
+			var pdx: float = z.pos.x - attacker.pos.x
+			var pdz: float = z.pos.z - attacker.pos.z
+			var pd := sqrt(pdx * pdx + pdz * pdz)
+			if pd <= rng + z.radius and (pd < 0.6 or absf(angle_difference(attacker.yaw, Actor.yaw_to(pdx, pdz))) <= arc / 2.0):
+				hit_pillar(z, dmg)
 	if hits:
 		sfx("hit", attacker.pos)
 	return hits
@@ -753,8 +760,8 @@ func _homing_target(p: Dictionary):
 
 func _projectile_impact(p: Dictionary, pp: Vector3, hit) -> void:
 	var owner = p.owner
-	if p.get("summon_mimic", false):
-		spawn_mimic_ally(owner, pp)
+	if p.has("flask"):
+		_flask_impact(p, pp, hit)
 		return
 	if p.get("aoe", 0.0) > 0.0:
 		var kind := "fire" if p.get("fire_aoe", false) or p.kind != "poison" else "poison"
@@ -828,6 +835,13 @@ func update_projectiles(dt: float) -> void:
 			vel.y -= p.gravity * sdt
 			p.pos += vel * sdt
 			var pp: Vector3 = p.pos
+			var pil = pillar_at(pp, p.radius)
+			if pil != null:
+				done = true
+				p.vel = vel
+				hit_pillar(pil, p.dmg)
+				_projectile_impact(p, pp - vel.normalized() * 0.2, null)
+				break
 			if dungeon.is_solid(pp.x, pp.z) or pp.y < 0.02 or pp.y > Dungeon.WALL_H - 0.05:
 				done = true
 				p.vel = vel
@@ -878,7 +892,7 @@ func explode(p: Vector3, rad: float, dmg: float, owner, kind: String, extra: Dic
 			continue
 		if d > 1.0 and not dungeon.los(p.x - dx * 0.01, p.z - dz * 0.01, a.pos.x, a.pos.z):
 			continue
-		var f := 1.0 - minf(1.0, d / rad) * 0.5
+		var f := 1.0 if extra.get("flat", false) else 1.0 - minf(1.0, d / rad) * 0.5
 		var nd := maxf(d, 0.001)
 		var kp := 2.0 if kind == "poison" else 8.0
 		hit(owner, a, dmg * f, {"knock": Vector3(dx / nd * kp, 0, dz / nd * kp), "from": p, "stun": 0.4 if kind == "slam" else 0.0, "dtype": extra.get("dtype", "fire" if kind == "fire" else "phys"), "ranged": true})
@@ -891,7 +905,8 @@ func explode(p: Vector3, rad: float, dmg: float, owner, kind: String, extra: Dic
 		if extra.get("stun", 0.0) > 0.0:
 			a.add_stun(extra.stun)
 		if extra.get("slow", 0.0) > 0.0:
-			a.add_slow(extra.slow, 0.5)
+			a.add_slow(extra.slow, extra.get("slow_mul", 0.5))
+	damage_pillars(p, rad, dmg)
 	var color := Color(1.0, 0.42, 0.1)
 	match kind:
 		"slam":
@@ -1116,6 +1131,61 @@ func _zone_node(z: Dictionary) -> Node3D:
 			parts.mesh = pm
 			parts.position.y = 0.6
 			node.add_child(parts)
+		"fire_ground":
+			var disc := MeshInstance3D.new()
+			var cm := CylinderMesh.new()
+			cm.top_radius = z.radius
+			cm.bottom_radius = z.radius
+			cm.height = 0.04
+			cm.radial_segments = 32
+			disc.mesh = cm
+			var fm := StandardMaterial3D.new()
+			fm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			fm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			fm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+			fm.albedo_color = Color(0.9, 0.3, 0.05, 0.35)
+			disc.material_override = fm
+			disc.position.y = 0.04
+			node.add_child(disc)
+			var parts := CPUParticles3D.new()
+			parts.amount = 90
+			parts.lifetime = 0.7
+			parts.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+			parts.emission_sphere_radius = z.radius * 0.9
+			parts.scale_amount_min = 1.0
+			parts.direction = Vector3.UP
+			parts.spread = 15.0
+			parts.gravity = Vector3(0, 2.5, 0)
+			parts.initial_velocity_min = 0.6
+			parts.initial_velocity_max = 1.6
+			var pm := SphereMesh.new()
+			pm.radius = 0.04
+			pm.height = 0.12
+			pm.radial_segments = 4
+			pm.rings = 2
+			pm.material = Models.glow_mat(Color(1.0, 0.5, 0.1), 1.5)
+			parts.mesh = pm
+			parts.position.y = 0.1
+			parts.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+			parts.emission_box_extents = Vector3(z.radius * 0.7, 0.02, z.radius * 0.7)
+			node.add_child(parts)
+			var l := OmniLight3D.new()
+			l.light_color = Color(1.0, 0.5, 0.15)
+			l.light_energy = 1.6
+			l.omni_range = z.radius * 2.5
+			l.position.y = 1.0
+			node.add_child(l)
+		"stone_pillar":
+			var col := MeshInstance3D.new()
+			var cm := CylinderMesh.new()
+			cm.top_radius = z.radius * 0.85
+			cm.bottom_radius = z.radius
+			cm.height = PILLAR_H
+			cm.radial_segments = 8
+			col.mesh = cm
+			col.material_override = Models.mat(Color(0.42, 0.38, 0.32))
+			col.position.y = PILLAR_H / 2.0
+			node.add_child(col)
 		"fire_eye":
 			var pivot := Node3D.new()
 			pivot.name = "Pivot"
@@ -1178,6 +1248,8 @@ func update_zones(dt: float) -> void:
 
 
 func _zone_tick(z: Dictionary) -> void:
+	if z.kind == "stone_pillar":
+		return
 	var owner = z.owner
 	if z.kind == "lightning":
 		explode_fx(z.pos + Vector3(0, 0.3, 0), z.radius, Color(0.55, 0.75, 1.0))
@@ -1208,6 +1280,9 @@ func _zone_tick(z: Dictionary) -> void:
 			a.add_slow(z.slow, z.get("slow_mul", 0.5))
 		if z.get("burn", 0) > 0:
 			a.add_burn(int(z.burn), owner)
+		if z.get("hot", false):
+			# 화염 플라스크: 뜨거운 지면을 밟으면 2.5초 동안 0.5초마다 16 (초당 32)
+			a.add_dot_keyed("fire_ground", 32.0, 2.5, owner)
 		if z.get("blizzard", false):
 			a.set_meta("blizz_owner", owner)
 			a.set_meta("blizz_t", time + 0.8)
@@ -1222,6 +1297,83 @@ func end_zone(owner, kind: String) -> void:
 	for z in zones:
 		if z.owner == owner and z.kind == kind:
 			z.t = 0.0
+
+
+# ------------------------------------------------------------------ 플라스크
+const PILLAR_H := 2.6
+const PILLAR_HP := 120.0
+
+
+func _flask_impact(p: Dictionary, pp: Vector3, hit) -> void:
+	var owner = p.owner
+	var back: Vector3 = p.vel.normalized() * 0.3 if p.vel.length() > 0.01 else Vector3.ZERO
+	var gp := Vector3(pp.x, 0.0, pp.z)
+	if dungeon.is_solid(gp.x, gp.z):
+		gp = Vector3(pp.x - back.x, 0.0, pp.z - back.z)
+	match p.flask:
+		"fire":
+			# 10초 동안 반경 3m의 지면이 불탐
+			add_zone({"pos": gp, "radius": 3.0, "dur": 10.0, "tick": 0.25, "owner": owner, "kind": "fire_ground", "hot": true})
+			explode_fx(gp + Vector3(0, 0.3, 0), 1.2, Color(1.0, 0.45, 0.12))
+			sfx("fire", gp)
+		"rock":
+			# 던진 방향에 가로로 돌기둥 4개 (10초, 피해를 많이 받으면 먼저 무너짐)
+			var d := Vector3(p.vel.x, 0, p.vel.z).normalized()
+			if d.length() < 0.1:
+				d = Vector3.FORWARD
+			var side := Vector3(-d.z, 0, d.x)
+			for k in [-1.5, -0.5, 0.5, 1.5]:
+				var at: Vector3 = gp + side * k * 1.05
+				if dungeon.is_solid(at.x, at.z):
+					continue
+				add_zone({"pos": at, "radius": 0.5, "dur": 10.0, "tick": 99.0, "owner": owner, "kind": "stone_pillar", "hp": PILLAR_HP})
+			explode_fx(gp + Vector3(0, 0.3, 0), 1.6, Color(0.6, 0.55, 0.45))
+			sfx("growl", gp)
+			for h in players:
+				if h.pos.distance_to(gp) < 8.0:
+					notify(h, "shake", [0.25])
+		"lightning":
+			# 적중 시 80 번개 피해 + 범위 내 적 이동 속도 75% 감소 4.5초
+			explode(gp + Vector3(0, 0.3, 0), 3.0, p.dmg, owner, "lightning", {"dtype": "lightning", "slow": 4.5, "slow_mul": 0.25, "flat": true, "color": Color(0.55, 0.75, 1.0)})
+			beam_fx(gp + Vector3(0, 6.0, 0), gp, Color(0.7, 0.85, 1.0), 0.3)
+
+
+func pillar_at(pp: Vector3, r: float):
+	if pp.y > PILLAR_H:
+		return null
+	for z in zones:
+		if z.kind == "stone_pillar" and z.t > 0.0:
+			var dx: float = pp.x - z.pos.x
+			var dz: float = pp.z - z.pos.z
+			if dx * dx + dz * dz < pow(z.radius + r, 2):
+				return z
+	return null
+
+
+func hit_pillar(z: Dictionary, dmg: float) -> void:
+	if dmg <= 0.0 or z.t <= 0.0:
+		return
+	z.hp = float(z.get("hp", PILLAR_HP)) - dmg
+	spark(z.pos + Vector3(0, 1.2, 0), Color(0.6, 0.55, 0.45))
+	if z.hp <= 0.0:
+		z.t = 0.0
+		explode_fx(z.pos + Vector3(0, 1.0, 0), 0.8, Color(0.55, 0.5, 0.42))
+		sfx("hit", z.pos)
+
+
+func damage_pillars(p: Vector3, rad: float, dmg: float) -> void:
+	for z in zones:
+		if z.kind == "stone_pillar" and Vector2(z.pos.x - p.x, z.pos.z - p.z).length() < rad + z.radius:
+			hit_pillar(z, dmg)
+
+
+# 이동을 막는 돌기둥 목록을 지형 충돌에 반영 (서버: zones / 클라이언트: net_zones)
+func _sync_blocks() -> void:
+	var out := []
+	for z in (zones if is_auth() else net_zones.values()):
+		if z.kind == "stone_pillar" and z.get("t", 1.0) > 0.0:
+			out.append([z.pos, z.radius])
+	dungeon.dyn_blocks = out
 
 
 # ------------------------------------------------------------------ 직업 스킬 연동
@@ -1719,6 +1871,9 @@ func drop_corpse(a, nm: String, color: Color) -> void:
 	b.cls = a.cls
 	b.items = bag
 	var gs := Inv.bag_size(a.cls)
+	if not (a is Player):
+		# AI 모험가 가방은 자리 정보 없이 채워지므로 시체가 될 때 격자에 다시 배치 (넘치는 것은 버림)
+		Inv.repack(bag, gs)
 	b.gw = gs.x
 	b.gh = gs.y
 	b.n = _corpse_count(b)
@@ -1874,6 +2029,8 @@ func inv_op(p, op: String, args: Array) -> void:
 
 
 func _use_item(p, it: Dictionary) -> void:
+	if not Data.base_of(it).has("heal"):
+		return
 	if p.hp >= p.max_hp:
 		notify(p, "toast", ["체력이 가득 찼습니다"])
 	elif p.alive and p.cd.potion <= 0.0:
@@ -2218,6 +2375,7 @@ func _process(delta: float) -> void:
 	_draw_actors(dt)
 	update_projectiles(dt)
 	update_zones(dt)
+	_sync_blocks()
 	update_effects(dt)
 	update_soul_orbs(dt)
 	for b in loot_bags:
@@ -2370,6 +2528,7 @@ func _update_view(dt: float) -> void:
 		if show_ring:
 			var am: Dictionary = player.aim()
 			aim_ring.position = aim_point(am.origin, am.dir, 22.0) + Vector3(0, 0.05, 0)
+	_update_throw_arc()
 		# 횃불을 들면 훨씬 밝고 넓게
 	var lit: bool = player.held == "torch"
 	player_light.omni_range = 26.0 if lit else 16.0
@@ -2377,6 +2536,107 @@ func _update_view(dt: float) -> void:
 	dungeon.animate_torches(time, camera.global_position)
 	update_explored()
 	hud.update_hud(dt)
+
+
+# 투척 플라스크를 들고 있으면 날아갈 포물선을 점선으로 미리 보여 줌
+# 벽/바닥/기둥/적에 막히면 거기서 끊고, 터질 자리에 투명한 구체
+var arc_dots: MultiMeshInstance3D
+var arc_end: MeshInstance3D
+const ARC_MAX := 64
+
+
+func _update_throw_arc() -> void:
+	var it = player.equipment.get(player.held) if player.held in ["c3", "c4", "c5"] else null
+	var show: bool = player.alive and it != null and Data.base_of(it).has("throw") and player.drink_t <= 0.0
+	if not show:
+		if arc_dots != null:
+			arc_dots.visible = false
+			arc_end.visible = false
+		return
+	if arc_dots == null:
+		arc_dots = MultiMeshInstance3D.new()
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		var sm := SphereMesh.new()
+		sm.radius = 0.045
+		sm.height = 0.09
+		sm.radial_segments = 6
+		sm.rings = 3
+		var dm := StandardMaterial3D.new()
+		dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		dm.albedo_color = Color(1.0, 0.92, 0.7, 0.7)
+		sm.material = dm
+		mm.mesh = sm
+		mm.instance_count = ARC_MAX
+		arc_dots.multimesh = mm
+		arc_dots.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		world.add_child(arc_dots)
+		arc_end = MeshInstance3D.new()
+		var es := SphereMesh.new()
+		es.radius = 0.45
+		es.height = 0.9
+		arc_end.mesh = es
+		var mt := StandardMaterial3D.new()
+		mt.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mt.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mt.albedo_color = Color(1.0, 0.95, 0.8, 0.22)
+		arc_end.material_override = mt
+		arc_end.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		world.add_child(arc_end)
+	var pts := throw_arc(player)
+	var mm2: MultiMesh = arc_dots.multimesh
+	# 눈앞 1m 안쪽 점은 화면을 가리므로 생략
+	var o: Vector3 = pts[0]
+	var n := 0
+	for i in range(1, pts.size() - 1):
+		if n >= ARC_MAX:
+			break
+		if pts[i].distance_to(o) < 1.0:
+			continue
+		mm2.set_instance_transform(n, Transform3D(Basis(), pts[i]))
+		n += 1
+	mm2.visible_instance_count = n
+	arc_dots.visible = true
+	arc_end.visible = true
+	arc_end.position = pts[pts.size() - 1]
+
+
+# 실제 투사체와 같은 계산으로 궤적을 따라가 처음 막히는 곳까지의 점 목록 (점 간격 약 0.35m)
+func throw_arc(c) -> Array:
+	var L := Skills.flask_launch(c, c.aim())
+	var p: Vector3 = L.origin
+	var v: Vector3 = L.vel
+	var out := [p]
+	var acc := 0.0
+	var sdt := 0.02
+	for i in 200:
+		v.y -= Skills.FLASK_GRAVITY * sdt
+		var np: Vector3 = p + v * sdt
+		acc += np.distance_to(p)
+		p = np
+		var stop := dungeon.is_solid(p.x, p.z) or p.y < 0.02 or p.y > Dungeon.WALL_H - 0.05
+		if not stop and p.y < PILLAR_H:
+			for b in dungeon.dyn_blocks:
+				var bp: Vector3 = b[0]
+				if Vector2(p.x - bp.x, p.z - bp.z).length() < b[1] + 0.15:
+					stop = true
+					break
+		if not stop:
+			for a in actors:
+				if a == c or not a.alive or a.extracted or not hostile(c, a):
+					continue
+				if Vector2(a.pos.x - p.x, a.pos.z - p.z).length() < a.radius + 0.15 and p.y > a.pos.y - 0.1 and p.y < a.pos.y + a.height + 0.1:
+					stop = true
+					break
+		if stop:
+			out.append(p)
+			return out
+		if acc >= 0.35:
+			acc = 0.0
+			out.append(p)
+	out.append(p)
+	return out
 
 
 func separate() -> void:
@@ -2512,6 +2772,8 @@ func _pack_actor(out: PackedFloat32Array, a) -> void:
 		f |= 32
 	if a.hit_flash > 0.0:
 		f |= 64
+	if a.mimic_form:
+		f |= 128
 	var mv: float = a.move_amt
 	var atk: float = a.attack_anim
 	if a is Player:
@@ -2658,6 +2920,7 @@ func _process_client(dt: float) -> void:
 			a.update(dt)
 	_draw_actors(dt)
 	_client_projectiles(dt)
+	_sync_blocks()
 	for id in net_zones:
 		var z: Dictionary = net_zones[id]
 		z.node.position = z.pos

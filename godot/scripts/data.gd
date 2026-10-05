@@ -540,21 +540,25 @@ func _build_items() -> void:
 		var m = [["random"], ["random", "any:3"], ["random", "any:3", "any:2"]][a[3] - 1]
 		_add(a[0], {"name": a[1], "slot": a[2], "cat": a[2], "rarity": a[3], "lvl": a[3] + 1, "icon": a[4], "size": [1, 1], "fixed": [], "mods": m, "value": a[5]})
 	# ---- 소모품 / 투척 / 보물
-	_add("health_potion", {"name": "체력 물약", "slot": "consumable", "heal": 60, "value": 15, "icon": "🧪", "size": [1, 1], "rarity": 1, "stack": 3})
+	_add("health_potion", {"name": "체력 물약", "slot": "consumable", "heal": 60, "drink": "heal", "value": 15, "icon": "🧪", "size": [1, 1], "rarity": 1, "stack": 3,
+		"desc": "좌클릭으로 마시면 마시는 동작이 끝난 뒤 3초에 걸쳐 체력을 회복합니다."})
 	_add("bandage", {"name": "붕대", "slot": "consumable", "heal": 30, "value": 6, "icon": "🩹", "size": [1, 1], "rarity": 0, "stack": 3})
 	_add("bolts", {"name": "석궁 볼트", "slot": "ammo", "value": 1, "icon": "➶", "size": [1, 2], "rarity": 0, "stack": 30,
-		"desc": "석궁에 장전하는 볼트. 장비창 볼트 칸에 넣어 두어야 장전됩니다 (가방으로 내리면 장전이 풀림)."})
+		"desc": "석궁에 장전하는 볼트. 가방에 들고 다니면 R키로 1개씩 석궁에 끼웁니다."})
 	_add("torch", {"name": "횃불", "slot": "torch", "value": 3, "icon": "🕯", "size": [1, 2], "rarity": 0, "stack": 3, "burn": 120.0,
 		"desc": "G키로 불을 붙여 손에 듭니다. 2분 동안 주변을 밝게 비추고, 좌클릭으로 휘두를 수 있습니다."})
-	# 플라스크: 소모품 칸에 넣고 꺼낸 뒤 좌클릭으로 조준 지점에 던짐
-	_add("fire_flask", {"name": "화염 플라스크", "slot": "consumable", "throw": "fire", "dmg": 45, "value": 12, "icon": "🔥", "size": [1, 1], "rarity": 1, "stack": 3,
-		"desc": "깨지면 불길이 번져 범위 화염 피해를 주고 불태웁니다."})
-	_add("rock_flask", {"name": "바위 플라스크", "slot": "consumable", "throw": "rock", "dmg": 30, "value": 12, "icon": "🪨", "size": [1, 1], "rarity": 1, "stack": 3,
-		"desc": "깨지면 돌조각이 튀어 범위 피해를 주고 1.5초 기절시킵니다."})
-	_add("lightning_flask", {"name": "번개 플라스크", "slot": "consumable", "throw": "lightning", "dmg": 55, "value": 15, "icon": "⚡", "size": [1, 1], "rarity": 2, "stack": 3,
-		"desc": "깨지면 번개가 터져 넓은 범위 번개 피해를 주고 2초 둔화시킵니다."})
-	_add("mimic_flask", {"name": "미믹 플라스크", "slot": "consumable", "throw": "mimic", "dmg": 0, "value": 20, "icon": "📦", "size": [1, 1], "rarity": 2, "stack": 3,
-		"desc": "깨진 자리에 15초 동안 내 편 미믹이 나타나 주변 적을 물어뜯습니다."})
+	# 플라스크: 체력 물약을 뺀 모든 플라스크는 20초 재사용 대기를 공유 (FLASK_CD)
+	#  투척: 소모품 칸에서 꺼내 좌클릭으로 던짐 (포물선 미리보기) · 마시기: 좌클릭으로 마신 뒤 효과
+	_add("fire_flask", {"name": "화염 플라스크", "slot": "consumable", "throw": "fire", "dmg": 0, "value": 12, "icon": "🔥", "size": [1, 1], "rarity": 1, "stack": 3,
+		"desc": "10초 동안 반경 3m의 지면을 불태웁니다. 뜨거운 지면을 밟으면 2.5초 동안 0.5초마다 16 피해. (플라스크 공유 재사용 대기 20초)"})
+	_add("rock_flask", {"name": "대지 플라스크", "slot": "consumable", "throw": "rock", "dmg": 0, "value": 12, "icon": "🪨", "size": [1, 1], "rarity": 1, "stack": 3,
+		"desc": "깨진 자리에 돌기둥 4개를 가로로 세워 길을 막습니다. 10초 뒤 사라지며, 피해를 많이 받으면 먼저 무너집니다. (플라스크 공유 재사용 대기 20초)"})
+	_add("lightning_flask", {"name": "전기 플라스크", "slot": "consumable", "throw": "lightning", "dmg": 80, "value": 15, "icon": "⚡", "size": [1, 1], "rarity": 2, "stack": 3,
+		"desc": "적중 시 80 번개 피해, 범위 내 적의 이동 속도를 4.5초 동안 75% 감소. (플라스크 공유 재사용 대기 20초)"})
+	_add("mimic_flask", {"name": "미믹 플라스크", "slot": "consumable", "drink": "mimic", "value": 20, "icon": "📦", "size": [1, 1], "rarity": 2, "stack": 3,
+		"desc": "마시면 상자로 변신합니다. 아주 느리게 움직일 수 있고, 공격받거나 우클릭하면 풀립니다. (플라스크 공유 재사용 대기 20초)"})
+	_add("protection_flask", {"name": "방어 플라스크", "slot": "consumable", "drink": "shield", "shield": 60, "shield_t": 12.0, "value": 18, "icon": "🛡", "size": [1, 1], "rarity": 1, "stack": 3,
+		"desc": "마시면 12초 동안 피해 60을 막는 보호막이 생깁니다. (플라스크 공유 재사용 대기 20초)"})
 	_add("gold_coins", {"name": "금화", "slot": "treasure", "value": 1, "icon": "🪙", "size": [1, 1], "rarity": 0, "stack": 999})
 	_add("silver_goblet", {"name": "은 술잔", "slot": "treasure", "value": 35, "icon": "🏆", "size": [1, 2], "rarity": 1})
 	_add("ruby", {"name": "루비", "slot": "treasure", "value": 60, "icon": "🔴", "size": [1, 1], "rarity": 2})
@@ -881,7 +885,7 @@ func roll_loot(count: int, luck: float = 0.0) -> Array:
 				pool = _gear_by_rarity(1)
 			items.append(make_item(pool.pick_random()))
 		elif r < 0.65:
-			var c = ["health_potion", "health_potion", "bandage", "bandage", "fire_flask", "rock_flask", "lightning_flask", "mimic_flask", "torch"].pick_random()
+			var c = ["health_potion", "health_potion", "bandage", "bandage", "fire_flask", "rock_flask", "lightning_flask", "mimic_flask", "protection_flask", "torch"].pick_random()
 			var it := make_item(c)
 			it.count = randi_range(1, 2)
 			items.append(it)

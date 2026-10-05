@@ -22,6 +22,13 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 		R.rotation = Vector3(-0.4, sin(a) * 1.5, 0.6)
 		R.position = R0 + Vector3(-sin(a) * 0.15, 0.05, 0)
 		return
+	# 마시기: 병을 든 오른손을 입으로 가져가 기울임
+	if p.get("drink_t") != null and p.drink_t > 0.0:
+		var dk: float = 1.0 - clampf(p.drink_t / maxf(0.01, p.drink_max), 0.0, 1.0)
+		var up := clampf(dk / 0.35, 0.0, 1.0) * (1.0 - clampf((dk - 0.85) / 0.15, 0.0, 1.0))
+		R.position += Vector3(-0.22, 0.24, 0.28) * up
+		R.rotation = Vector3(0.9 * up, 0.0, 0.5 * up + 0.4 * clampf((dk - 0.35) / 0.5, 0.0, 1.0) * up)
+		return
 	# 석궁 재장전: 석궁을 아래로 기울이고 왼손으로 볼트를 끼워 당김
 	if p.reload_t > 0.0:
 		var rk: float = 1.0 - clampf(p.reload_t / 1.4, 0.0, 1.0)

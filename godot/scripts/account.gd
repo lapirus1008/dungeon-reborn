@@ -10,7 +10,7 @@ const MAX_CHARS := 8
 
 # 상인 목록 (가격은 서버가 이 표로 검증)
 const SHOP := [
-	["health_potion", 30], ["bandage", 12], ["torch", 6], ["bolts", 30, 30], ["fire_flask", 24], ["rock_flask", 24], ["lightning_flask", 30], ["mimic_flask", 40],
+	["health_potion", 30], ["bandage", 12], ["torch", 6], ["bolts", 30, 30], ["fire_flask", 24], ["rock_flask", 24], ["lightning_flask", 30], ["mimic_flask", 40], ["protection_flask", 36],
 	["old_sword", 30], ["old_longsword", 40], ["old_dagger", 25], ["old_mace", 30], ["old_staff", 35], ["old_shield", 30], ["old_crossbow", 40],
 	["old_plate_chest", 30], ["old_leather_chest", 25], ["old_cloth_chest", 20],
 ]

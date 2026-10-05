@@ -51,6 +51,12 @@ var combo_t := 0.0
 var mana_item = null # 마나가 장전된 지금 무기
 var reload_t := 0.0 # 석궁 재장전 남은 시간
 var reload_key := false
+var drink_t := 0.0 # 마시는 중 (끝나면 효과)
+var drink_max := 1.0
+var drink_slot := ""
+var drink_id := ""
+var mimic_rmb := true
+var swing_log = null # 자동 테스트용: 휘두를 때마다 [방향, 시각]
 var reload_item = null
 var held := "" # 손에 든 것: 소모품 칸("c3"/"c4"/"c5") 또는 "torch", 비어 있으면 무기
 var torch_t := 0.0 # 불붙은 횃불 남은 시간
@@ -248,6 +254,8 @@ func look(rel: Vector2, sens: float) -> void:
 
 
 func eye_height() -> float:
+	if mimic_form:
+		return 0.75
 	return EYE * (0.7 if panther else 1.0)
 
 
@@ -278,6 +286,7 @@ func update(dt: float) -> void:
 	Skills.tick_barrier(self, dt)
 	Skills.tick_psionic(self, dt)
 	_tick_reload(dt)
+	_tick_drink(dt)
 	if combo_t > 0.0:
 		combo_t -= dt
 	if cast > 0.0:
@@ -288,10 +297,18 @@ func update(dt: float) -> void:
 	_movement(dt, locked, can_act)
 
 	var act := can_act and not locked
+	if mimic_form:
+		# 상자로 변신 중: 공격/아이템 불가, 우클릭으로 풀기
+		blocking = false
+		var r_now := act and inp.pressed("secondary")
+		if r_now and not mimic_rmb:
+			end_mimic()
+		mimic_rmb = r_now
+		return
 	_combat(dt, act)
 
 	# 1/2: 무기 세트 선택 · 3/4/5: 소모품 꺼내기(같은 키 = 내려놓기), 좌클릭으로 사용 · G: 횃불
-	if can_act and not locked:
+	if can_act and not locked and drink_t <= 0.0:
 		for k in [1, 2]:
 			if inp.just_pressed("weapon%d" % k):
 				set_held("")
@@ -331,7 +348,7 @@ func update_client(dt: float) -> void:
 	for k in cd:
 		if cd[k] > 0.0:
 			cd[k] -= dt
-	for k in ["stun", "root", "slow", "parry", "immune", "frozen", "stealth", "shield_t", "channel_t", "spin_t", "hit_flash", "draw_t"]:
+	for k in ["stun", "root", "slow", "parry", "immune", "frozen", "stealth", "shield_t", "channel_t", "spin_t", "hit_flash", "draw_t", "drink_t"]:
 		var v: float = get(k)
 		if v > 0.0:
 			set(k, maxf(0.0, v - dt))
@@ -376,6 +393,10 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 		speed *= 1.7
 	if stealth > 0.0:
 		speed *= 1.1
+	if drink_t > 0.0:
+		speed *= 0.5
+	if mimic_form:
+		speed *= 0.18 # 상자: 아주 느리게
 	speed *= speed_factor()
 	if iz < 0.0:
 		speed *= 0.8
@@ -408,6 +429,8 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 func _start_swing(prof: Dictionary, bash := false) -> void:
 	swing_side = prof.side if prof.has("side") else -swing_side
 	swing = {"t": 0.0, "prof": prof, "done": false, "side": swing_side, "bash": bash}
+	if swing_log != null:
+		swing_log.append([swing_side, game.time])
 	cd.lmb = prof.cd / stats.get("act_mul", 1.0)
 	game.sfx("swing", pos)
 	if inp.remote:
@@ -467,7 +490,7 @@ func _combat(dt: float, act: bool) -> void:
 		blocking = false
 		if equipment.get(held) == null:
 			set_held("")
-		elif act and inp.just_pressed("attack"):
+		elif act and inp.just_pressed("attack") and drink_t <= 0.0:
 			use_held()
 		elif rmb_pressed:
 			set_held("")
@@ -592,7 +615,7 @@ func pick_slot(slot: String) -> void:
 func use_held() -> void:
 	var slot := held
 	use_slot(slot, int(slot.right(1)))
-	if equipment.get(slot) == null:
+	if equipment.get(slot) == null and drink_t <= 0.0:
 		set_held("")
 
 
@@ -633,6 +656,9 @@ func use_slot(slot: String, key: int) -> void:
 	if b.has("throw"):
 		Skills.throw_flask(self, aim(), it, slot)
 		return
+	if b.has("drink"):
+		start_drink(slot)
+		return
 	if cd.potion > 0.0:
 		return
 	if not b.has("heal"):
@@ -641,6 +667,76 @@ func use_slot(slot: String, key: int) -> void:
 		game.notify(self, "toast", ["체력이 가득 찼습니다"])
 	else:
 		use_consumable(it.id)
+
+
+const DRINK_TIME := 0.9
+
+
+# 좌클릭으로 마시기 시작 → 마시는 동작이 끝나면 효과 (체력 물약 / 미믹 / 방어 플라스크)
+func start_drink(slot: String) -> bool:
+	var it = equipment.get(slot)
+	if it == null or drink_t > 0.0 or mimic_form:
+		return false
+	var b: Dictionary = Data.base_of(it)
+	if b.drink == "heal":
+		if cd.potion > 0.0:
+			return false
+		if hp >= max_hp:
+			game.notify(self, "toast", ["체력이 가득 찼습니다"])
+			return false
+	elif cd.flask > 0.0:
+		game.notify(self, "toast", ["플라스크 재사용 대기 %d초" % ceili(cd.flask)])
+		return false
+	drink_slot = slot
+	drink_id = it.id
+	drink_max = DRINK_TIME / stats.get("act_mul", 1.0)
+	drink_t = drink_max
+	game.sfx("draw_soft", pos, 0.05)
+	return true
+
+
+func _tick_drink(dt: float) -> void:
+	if drink_t <= 0.0:
+		return
+	var it = equipment.get(drink_slot)
+	if incapacitated() or it == null or it.id != drink_id:
+		drink_t = 0.0
+		return
+	drink_t -= dt
+	game.channel_for(self, "%s 마시는 중..." % Data.base_of(it).name, 1.0 - drink_t / drink_max)
+	if drink_t > 0.0:
+		return
+	drink_t = 0.0
+	var b: Dictionary = Data.base_of(it)
+	it.count = int(it.get("count", 1)) - 1
+	if it.count <= 0:
+		equipment[drink_slot] = null
+	match b.drink:
+		"heal":
+			apply_heal(b.heal * stats.get("heal_mul", 1.0), 3.0)
+			cd.potion = 1.2
+			game.sfx("heal", pos)
+		"shield":
+			give_shield(float(b.get("shield", 60)), float(b.get("shield_t", 12.0)), Color(0.75, 0.6, 0.3))
+			cd.flask = Skills.FLASK_CD
+			game.sfx("magic", pos)
+		"mimic":
+			cd.flask = Skills.FLASK_CD
+			mimic_form = true
+			mimic_rmb = true
+			break_stealth()
+			set_held("")
+			game.sfx("magic", pos)
+			game.notify(self, "toast", ["상자로 변신! (우클릭: 해제)"])
+	game.notify(self, "toast", ["%s 사용" % b.name])
+	game.inv_changed(self)
+	if equipment.get(drink_slot) == null and held == drink_slot:
+		set_held("")
+
+
+func on_mimic_end() -> void:
+	game.sfx("draw_soft", pos)
+	game.notify(self, "toast", ["변신이 풀렸습니다"])
 
 
 func use_consumable(id: String) -> void:
@@ -706,7 +802,7 @@ func update_camera(cam: Camera3D, vm: Node3D, bubble: MeshInstance3D, dt: float)
 		sm.set_shader_parameter("hit", shield_hit_fx)
 
 	# 뷰모델 (은신 중 반투명)
-	vm.visible = frozen <= 0.0
+	vm.visible = frozen <= 0.0 and not mimic_form
 	var tr := 0.65 if stealth > 0.0 else 0.0
 	if vm.get_meta("transparency", -1.0) != tr:
 		vm.set_meta("transparency", tr)
@@ -727,10 +823,10 @@ func net_state() -> Dictionary:
 		"p": pos, "f": forced_t > 0.0 or dash != null, "a": alive,
 		"hp": hp, "mh": max_hp, "he": heal, "sh": shield, "sm": shield_max, "st": shield_t, "sc": shield_color, "shf": shield_hit_fx,
 		"r": res, "sta": stamina, "ex": exhausted,
-		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion, cd.util],
+		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion, cd.util, cd.flask],
 		"chg": charges, "hold": [hold_q, hold_e],
 		"s": [stun, slow, root, stealth, frozen, parry, immune, dr, spin_t, channel_t, charge_t, cast],
-		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "chr": channel_ready, "dw": draw_t, "ld": active_crossbow() != null and active_crossbow().get("loaded", false), "rl": reload_t,
+		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "chr": channel_ready, "dw": draw_t, "ld": active_crossbow() != null and active_crossbow().get("loaded", false), "rl": reload_t, "dk": drink_t, "dkm": drink_max, "mf": mimic_form,
 		"k": [kills, pvp_kills], "ch": ch,
 	}
 
@@ -761,6 +857,8 @@ func apply_net_state(d: Dictionary) -> void:
 	cd.potion = c[4]
 	if c.size() > 5:
 		cd.util = c[5]
+	if c.size() > 6:
+		cd.flask = c[6]
 	charges = int(d.get("chg", charges))
 	var hold: Array = d.get("hold", [-1.0, -1.0])
 	hold_q = hold[0]
@@ -783,6 +881,9 @@ func apply_net_state(d: Dictionary) -> void:
 	blocking = d.bl
 	torch_t = d.get("tt", 0.0)
 	reload_t = d.get("rl", 0.0)
+	drink_t = d.get("dk", 0.0)
+	drink_max = d.get("dkm", 1.0)
+	mimic_form = d.get("mf", false)
 	var cbw = active_crossbow()
 	if cbw != null:
 		cbw["loaded"] = d.get("ld", false)

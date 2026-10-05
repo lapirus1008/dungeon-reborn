@@ -291,7 +291,10 @@ static func _equip(ctx: Dictionary, src: String, it: Dictionary, slot: String) -
 	if slot == "":
 		# 활성 세트 우선, 빈 칸 우선
 		var ws := int(ctx.get("wset", 1))
-		var order := slots.duplicate()
+		# 양손 무기를 든 세트의 보조 칸은 후보에서 제외 (예: 1세트 검/방패 · 2세트 장검 → 방패는 1세트 보조 칸과 교체)
+		var order := slots.filter(func(q): return not (q.length() == 3 and q.ends_with("o") and _is_2h(eq.get(q.left(2)))))
+		if order.is_empty():
+			order = slots.duplicate()
 		order.sort_custom(func(a, b): return (1 if a.begins_with("w%d" % ws) else 0) > (1 if b.begins_with("w%d" % ws) else 0))
 		slot = order[0]
 		for s in order:

@@ -733,6 +733,8 @@ func update_hud(dt: float) -> void:
 		sts.append("은신 집중 %.1f" % p.channel_t)
 	elif p.channel_ready:
 		sts.append("은신 준비 완료")
+	if p.mimic_form:
+		sts.append("📦 상자 변신 중 (우클릭: 해제)")
 	if p.stealth > 0.0:
 		sts.append("👁 은신 %.0f초" % p.stealth)
 	if p.frozen > 0.0:
@@ -806,16 +808,21 @@ func update_hud(dt: float) -> void:
 		var sbx: Dictionary = skill_boxes[k]
 		var it = p.equipment.get(k)
 		var txt := "-"
-		var throw := false
+		var flask := false
 		if it != null:
 			txt = Data.base_of(it).icon + str(int(it.get("count", 1)))
-			throw = Data.base_of(it).has("throw")
+			# 체력 물약을 뺀 플라스크는 20초 공유 재사용 대기
+			flask = Data.base_of(it).has("throw") or (Data.base_of(it).has("drink") and Data.base_of(it).drink != "heal")
 		if k == "torch" and p.torch_t > 0.0:
 			txt = "🔥%d초" % ceili(p.torch_t)
 		if sbx.name.text != txt:
 			sbx.name.text = txt
-		var c2: float = p.cd.util if throw else (p.cd.potion if k != "torch" else 0.0)
-		(sbx.cd as ProgressBar).value = clampf(c2, 0.0, 1.0)
+		var c2: float = p.cd.flask if flask else (p.cd.potion if k != "torch" else 0.0)
+		(sbx.cd as ProgressBar).value = clampf(c2 / Skills.FLASK_CD if flask else c2, 0.0, 1.0)
+		if flask and c2 > 0.0 and it != null:
+			txt = "%s%d초" % [Data.base_of(it).icon, ceili(c2)]
+			if sbx.name.text != txt:
+				sbx.name.text = txt
 		var usable: bool = it != null or (k == "torch" and p.torch_t > 0.0)
 		sbx.name.modulate = Color(0.5, 0.5, 0.5) if not usable or c2 > 0.0 else Color.WHITE
 		var st3: StyleBoxFlat = sbx.style

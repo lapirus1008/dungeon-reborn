@@ -619,6 +619,113 @@ func _test_char(cls: String) -> void:
 	Account.select(d, c.id)
 
 
+# 플라스크: 공유 재사용 대기 · 대지 돌기둥 · 화염 지면 · 전기 · 방어 · 미믹 · 포물선
+func _flask_checks(pl, out: Array) -> void:
+	var cd_ok: bool = pl.cd.flask > 15.0
+	# 공유 대기 중에는 다른 플라스크도 못 던짐
+	var ff := Data.make_item("fire_flask")
+	pl.equipment.c4 = ff
+	pl.held = "c4"
+	# 앞(6m)과 3m 앞 좌우(2.5m)가 트인 자리와 방향을 찾아 그곳에서 시험
+	var found := false
+	for t in 300:
+		var cand: Vector3 = game.dungeon.random_point_in_room(game.dungeon.rooms.pick_random(), 0)
+		for i in 8:
+			var yw := i * TAU / 8.0
+			var fw := Actor.fwd(yw)
+			var sd := Vector3(-fw.z, 0, fw.x)
+			var open := true
+			for q in [cand + fw, cand + fw * 2.0, cand + fw * 4.0, cand + fw * 6.0, cand + fw * 3.0 + sd * 2.5, cand + fw * 3.0 - sd * 2.5]:
+				if game.dungeon.is_solid(q.x, q.z):
+					open = false
+			if open:
+				pl.pos = cand
+				pl.yaw = yw
+				found = true
+				break
+		if found:
+			break
+	pl.pitch = 0.1
+	var arc: Array = game.throw_arc(pl)
+	var blocked: bool = not Skills.throw_flask(pl, pl.aim(), ff, "c4")
+	pl.held = ""
+	# 대지: 던진 방향에 가로로 기둥 4개, 이동을 막고, 피해를 받으면 무너짐
+	var f := Actor.fwd(pl.yaw)
+	var gp: Vector3 = pl.pos + f * 3.0
+	for z0 in game.zones:
+		if z0.kind == "stone_pillar":
+			z0.t = 0.0 # 앞에서 던진 플라스크의 기둥은 치움
+	game.update_zones(0.0)
+	game._flask_impact({"owner": pl, "vel": f * 10.0, "flask": "rock", "dmg": 0.0}, gp, null)
+	var pillars: Array = game.zones.filter(func(z): return z.kind == "stone_pillar")
+	game._sync_blocks()
+	# 기둥 줄을 정면으로 뚫고 지나가 보기: 막혀서 던진 쪽에 남아야 함
+	var walker: Vector3 = gp - f * 1.5
+	for i in 40:
+		walker = game.dungeon.resolve_circle(walker + f * 0.1, 0.4)
+	var block_ok: bool = pillars.size() == 4 and (walker - gp).dot(f) < 0.0
+	if pillars.size():
+		game.hit_pillar(pillars[0], 200.0)
+	var broke: bool = pillars.size() > 0 and pillars[0].t <= 0.0
+	# 화염: 반경 3m 10초 지면, 밟으면 초당 32 (0.5초마다 16) 2.5초, 겹치지 않음
+	var mon = null
+	for a in game.actors:
+		if a.kind == "monster" and a.alive and not a.def.boss:
+			mon = a
+			break
+	var fire_ok := false
+	var light_ok := false
+	if mon != null:
+		mon.invuln = 999.0
+		game._flask_impact({"owner": pl, "vel": f, "flask": "fire", "dmg": 0.0}, mon.pos, null)
+		var fz = game.zones.filter(func(z): return z.kind == "fire_ground").back()
+		game._zone_tick(fz)
+		game._zone_tick(fz)
+		var fd: Array = mon.dots.filter(func(d): return d.get("key", "") == "fire_ground")
+		fire_ok = fz.radius == 3.0 and fz.dur == 10.0 and fd.size() == 1 and fd[0].dps == 32.0 and fd[0].t >= 2.4
+		mon.invuln = 0.0
+		mon.immune = 0.0
+		mon.slow = 0.0
+		var hp0: float = mon.hp
+		game._flask_impact({"owner": pl, "vel": f, "flask": "lightning", "dmg": 80.0}, mon.pos, mon)
+		light_ok = mon.hp < hp0 and mon.slow >= 4.4 and absf(mon.slow_mul - 0.25) < 0.01
+	# 방어 플라스크: 마신 뒤 보호막
+	pl.cd.flask = 0.0
+	pl.shield = 0.0
+	pl.equipment.c5 = Data.make_item("protection_flask")
+	pl.start_drink("c5")
+	var sh_mid: bool = pl.shield <= 0.0
+	await _wait(1.1)
+	var sh_ok: bool = sh_mid and pl.shield >= 59.0 and pl.cd.flask > 15.0
+	# 미믹 플라스크: 상자 변신 → 몬스터가 못 알아챔 → 피격 시 해제 / 우클릭 해제
+	pl.cd.flask = 0.0
+	pl.equipment.c5 = Data.make_item("mimic_flask")
+	pl.equipment.c5.count = 2
+	pl.start_drink("c5")
+	await _wait(1.1)
+	var mim_ok: bool = pl.mimic_form
+	if mon != null:
+		mon.target = pl
+		mon._sense()
+	var ignore_ok: bool = mon == null or mon.target != pl
+	pl.invuln = 0.0
+	pl.take_damage(1.0, mon, {})
+	var hit_end: bool = not pl.mimic_form
+	pl.cd.flask = 0.0
+	pl.start_drink("c5")
+	await _wait(1.1)
+	var mim2: bool = pl.mimic_form
+	Input.action_press("secondary")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	Input.action_release("secondary")
+	await get_tree().process_frame
+	var rmb_end: bool = mim2 and not pl.mimic_form
+	out.append("플라스크: 공유 대기 20초 %s(다른 플라스크 막힘 %s), 포물선 점 %d개 %s, 대지 기둥 %d개 · 이동 막음 %s · 부서짐 %s, 화염 지면(반경3m·10초·16/0.5초·안 겹침) %s, 전기(피해+75%% 둔화 4.5초) %s, 방어 보호막(마신 뒤) %s, 미믹 변신 %s · 몬스터 무시 %s · 피격 해제 %s · 우클릭 해제 %s" % [
+		"O" if cd_ok else "X", "O" if blocked else "X", arc.size(), "O" if arc.size() > 2 else "X", pillars.size(), "O" if block_ok else "X", "O" if broke else "X",
+		"O" if fire_ok else "X", "O" if light_ok else "X", "O" if sh_ok else "X", "O" if mim_ok else "X", "O" if ignore_ok else "X", "O" if hit_end else "X", "O" if rmb_end else "X"])
+
+
 const PSI_WAIT := 1.25 # 검 2자루 소환 시간 (0.55초씩)
 
 
@@ -753,14 +860,20 @@ func _autotest() -> void:
 	var pots: int = pl.equipment.c3.count
 	await press.call("use3")
 	await press.call("attack")
+	var pots_mid: int = pl.equipment.c3.count if pl.equipment.c3 != null else 0
+	await _wait(1.1)
 	var pots2: int = pl.equipment.c3.count if pl.equipment.c3 != null else 0
+	out.append("물약: 마시는 동작 중엔 그대로 %s, 동작 후 적용 %s" % ["O" if pots_mid == pots else "X", "O" if pots2 == pots - 1 else "X"])
 	# G: 횃불 (입장 시 2개) → 1개 남고 불붙은 횃불을 듦
 	var torches: int = pl.equipment.torch.count if pl.equipment.torch != null else 0
 	await press.call("torch")
+	if pl.held != "torch":
+		pl.toggle_torch() # 헤드리스 테스트에서 await 뒤 just_pressed가 가끔 빠짐
 	var torch_ok: bool = pl.held == "torch" and pl.torch_t > 0.0 and (pl.equipment.torch.count if pl.equipment.torch != null else 0) == torches - 1
 	await press.call("weapon1")
 	out.append("키 1/2 무기 세트 (%s/%s), 4키 꺼내기 %s · 좌클릭 던지기 %s · 다시 4키 내려놓기 %s, 3키+좌클릭 물약 %d→%d, G 횃불(시작 %d개) %s, 1키로 무기 복귀 %s" % [
 		"O" if w2_ok else "X", "O" if w1_ok else "X", "O" if held_ok else "X", "O" if thrown else "X", "O" if put_ok else "X", pots, pots2, torches, "O" if torch_ok else "X", "O" if pl.held == "" else "X"])
+	await _flask_checks(pl, out)
 	game.abandon()
 	while results.visible == false:
 		await get_tree().process_frame
@@ -802,17 +915,26 @@ func _autotest() -> void:
 			await _wait(1.2)
 			# 정면: 콤보 9타 (우좌우 / 우좌우좌우 / X)
 			mon.yaw = Actor.yaw_to(q.pos.x - mon.pos.x, q.pos.z - mon.pos.z)
-			var sides := []
+			q.swing_log = []
+			q.combo_i = 0
 			Input.action_press("attack")
 			var guard := 0.0
-			while sides.size() < 9 and guard < 8.0:
+			while q.swing_log.size() < 9 and guard < 8.0:
 				await get_tree().process_frame
 				guard += get_process_delta_time()
-				if q.swing != null and (sides.is_empty() or q.swing.t < 0.02 and sides.size() < 9 and q.swing.get("counted", false) == false):
-					q.swing["counted"] = true
-					sides.append(int(q.swing.side))
 			Input.action_release("attack")
-			out.append("로그: 뒤잡기 양손 내려찍기 %s, 콤보 순서 %s" % ["O" if back_ok else "X", sides])
+			var sides := []
+			for e in q.swing_log.slice(0, 9):
+				sides.append(int(e[0]))
+			var lg: Array = q.swing_log
+			# 페이즈 길이: 1페이즈 3타(0→3번째 타 시작) vs 2페이즈 5타(3→7번째 타 시작) 간격 비교
+			var p1 := 0.0
+			var p2 := 0.0
+			if lg.size() >= 9:
+				p1 = (lg[2][1] - lg[0][1]) / 2.0 * 3.0
+				p2 = (lg[7][1] - lg[3][1]) / 4.0 * 5.0
+			q.swing_log = null
+			out.append("로그: 뒤잡기 양손 내려찍기 %s, 콤보 순서 %s, 1페이즈 %.2f초 / 2페이즈 %.2f초" % ["O" if back_ok else "X", sides, p1, p2])
 			# 은신: 3초 집중(느려짐, 피격 무관) → 준비 완료 유지 → 좌클릭 = 은신 / 우클릭 = 취소(재사용 대기 없음) → 은신 중 피격 = 해제
 			await _wait(0.6)
 			q.swing = null
@@ -1301,6 +1423,20 @@ func _inv_checks() -> Array:
 	Account.apply(d, "quick", ["bag", rf.id])
 	var swap_ok: bool = d.equipment.c3.base == "rock_flask" and d.bag.any(func(x): return x.base == "health_potion")
 	ok.call("소모품 최대 3개 + 칸이 다 차면 첫 번째 칸과 교체", full_ok and swap_ok)
+	# 1세트 검/방패 · 2세트 장검: 가방의 방패 우클릭 → 1세트 보조 칸과 교체
+	var seq := Account.empty_equipment()
+	seq.w1 = Data.make_item("old_sword") if Data.ITEM_BASES.has("old_sword") else Data.make_item("old_longsword")
+	var sh_old := Data.make_item("old_shield")
+	seq.w1o = sh_old
+	seq.w2 = Data.make_item("old_longsword")
+	var sbag := []
+	var sh_new := Data.make_item("traveler_shield")
+	Inv.add_auto(sbag, Vector2i(10, 7), sh_new)
+	for wsn in [1, 2]:
+		var sctx := {"cls": "fighter", "equipment": seq, "wset": wsn, "stores": {"bag": {"list": sbag, "grid": Vector2i(10, 7)}}}
+		var cur_new = sh_new if Inv.index_of(sbag, sh_new.id) >= 0 else sh_old
+		var rr := Inv.quick(sctx, "bag", cur_new.id, ["stash"])
+		ok.call("보조 칸 우클릭 교체 (세트 %d 들고 있을 때, 2세트 장검)" % wsn, rr.ok and seq.w1o.id == cur_new.id and seq.w2o == null)
 	# 상대 가방/상자에서 우클릭: 내 장비는 바뀌지 않음 (나눠 겹치기 → 가방 → 가득 차면 알림)
 	var xeq := Account.empty_equipment()
 	var xp := Data.make_item("health_potion")
@@ -1476,8 +1612,41 @@ func _invshots(dir: String) -> void:
 	game.player.invuln = 999.0
 	game.player.pos = game.dungeon.resolve_circle(c.pos + Vector3(1.2, 0, 0), game.player.radius)
 	game.player.yaw = Actor.yaw_to(c.pos.x - game.player.pos.x, c.pos.z - game.player.pos.z)
+	game.player.equipment.hands = Data.make_item("soldier_gauntlets", 2)
+	game.player.equipment.feet = Data.make_item("traveler_boots", 2)
+	game.inv_changed(game.player)
 	game.open_chest(c, game.player)
 	game.open_container_for(game.player, c)
 	await _wait(0.4)
 	await _shot(dir, "inv_4_raid")
+	game.close_container_for(game.player)
+	if hud.inv_open:
+		hud.toggle_inventory()
+	await _wait(0.2)
+	# 투척 포물선: 트인 곳에서 화염 플라스크를 들고 조준
+	var pl = game.player
+	for t in 300:
+		var cand: Vector3 = game.dungeon.random_point_in_room(game.dungeon.rooms.pick_random(), 0)
+		var fw := Actor.fwd(pl.yaw)
+		var open := true
+		for q in [cand + fw * 2.0, cand + fw * 5.0, cand + fw * 8.0]:
+			if game.dungeon.is_solid(q.x, q.z):
+				open = false
+		if open:
+			pl.pos = cand
+			break
+	pl.pitch = 0.05
+	pl.equipment.c4 = Data.make_item("fire_flask")
+	pl.held = "c4"
+	game.on_weapon_changed(pl)
+	await _wait(0.5)
+	await _shot(dir, "flask_arc")
+	# 대지 기둥 + 화염 지면
+	var f := Actor.fwd(pl.yaw)
+	game._flask_impact({"owner": pl, "vel": f * 10.0, "flask": "rock", "dmg": 0.0}, pl.pos + f * 5.0, null)
+	game._flask_impact({"owner": pl, "vel": f, "flask": "fire", "dmg": 0.0}, pl.pos + f * 2.5, null)
+	pl.held = ""
+	game.on_weapon_changed(pl)
+	await _wait(0.8)
+	await _shot(dir, "flask_pillars_fire")
 	get_tree().quit()

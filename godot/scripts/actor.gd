@@ -35,7 +35,7 @@ var last_pos := Vector3.ZERO
 var cls := ""
 var stats: Dictionary = {}
 var res := 0.0 # 마나/영혼/원시 에너지
-var cd := {"lmb": 0.0, "rmb": 0.0, "q": 0.0, "e": 0.0, "potion": 0.0, "util": 0.0}
+var cd := {"lmb": 0.0, "rmb": 0.0, "q": 0.0, "e": 0.0, "potion": 0.0, "util": 0.0, "flask": 0.0}
 var skills: Dictionary = {} # {"q": 스킬 id, "e": 스킬 id}
 var wset := 1 # 사용 중인 무기 세트
 var channel_kind := "" # 은신 준비 종류 (stealth/veil)
@@ -69,6 +69,7 @@ var slow := 0.0
 var slow_mul := 0.6
 var root := 0.0
 var stealth := 0.0
+var mimic_form := false # 미믹 플라스크: 상자로 변신 (아주 느림, 피격/우클릭 시 해제)
 var frozen := 0.0 # 서리 장벽 (무적, 행동 불가)
 var parry := 0.0
 var block_t := 0.0 # 방어 자세를 잡은 시간 (장검: 막 들자마자 맞으면 패링)
@@ -250,6 +251,28 @@ func on_stealth_end() -> void:
 	pass
 
 
+func end_mimic() -> void:
+	if mimic_form:
+		mimic_form = false
+		on_mimic_end()
+
+
+func on_mimic_end() -> void:
+	pass
+
+
+# 같은 key의 지속 피해는 겹치지 않고 시간만 새로 (화염 플라스크 뜨거운 지면)
+func add_dot_keyed(key: String, dps: float, t: float, src) -> void:
+	if immune > 0.0 or frozen > 0.0:
+		return
+	for d in dots:
+		if d.get("key", "") == key:
+			d.t = maxf(d.t, t)
+			d.src = src
+			return
+	dots.append({"dps": dps, "t": t, "src": src, "key": key})
+
+
 func give_shield(amount: float, t: float, color := Color(0.35, 0.65, 1.0)) -> void:
 	shield = maxf(shield, amount)
 	shield_max = maxf(amount, 1.0)
@@ -262,6 +285,9 @@ func take_damage(amount: float, src, info: Dictionary = {}) -> float:
 	if not alive or invuln > 0.0 or frozen > 0.0:
 		return 0.0
 	combat_t = 0.0
+	# 미믹 변신: 공격받으면 (보호막이 막아도) 풀림
+	if mimic_form and amount > 0.0 and not info.get("dot", false):
+		end_mimic()
 	# 석화: 공격을 받으면 해제되고 그 피해는 무효
 	if petrified > 0.0:
 		petrified = 0.0

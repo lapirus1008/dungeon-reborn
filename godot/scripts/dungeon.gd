@@ -787,7 +787,23 @@ func dispose() -> void:
 
 # ------------------------------------------------------------------ 충돌/시야/경로
 # 원형 충돌체를 벽 밖으로 밀어낸 위치를 반환 (Vector3는 값 타입이므로 반환값 사용)
+var dyn_blocks: Array = [] # 돌기둥 등 일시적인 원형 장애물 [[pos, radius], ...]
+
+
 func resolve_circle(pos: Vector3, r: float) -> Vector3:
+	for b in dyn_blocks:
+		var bp: Vector3 = b[0]
+		var bdx := pos.x - bp.x
+		var bdz := pos.z - bp.z
+		var bd := sqrt(bdx * bdx + bdz * bdz)
+		var mn: float = b[1] + r
+		if bd < mn:
+			if bd < 1e-4:
+				bdx = 1.0
+				bdz = 0.0
+				bd = 1.0
+			pos.x = bp.x + bdx / bd * mn
+			pos.z = bp.z + bdz / bd * mn
 	var tx := to_tile(pos.x)
 	var tz := to_tile(pos.z)
 	for dz in range(-1, 2):
