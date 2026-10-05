@@ -120,3 +120,49 @@ static func wood() -> ImageTexture:
 	var t := ImageTexture.create_from_image(img)
 	_cache["wood"] = t
 	return t
+
+
+# 야외 바닥: 풀(숲) / 자갈(성 안뜰) / 대리석 바둑판(성당)  → [albedo, normal]
+static func ground(kind: String) -> Array:
+	var key := "ground_" + kind
+	if _cache.has(key):
+		return _cache[key]
+	var S := 256
+	var albedo := Image.create(S, S, false, Image.FORMAT_RGB8)
+	var height := Image.create(S, S, false, Image.FORMAT_RGB8)
+	var nz := _noise_img(S, 0.03, 41 + kind.length())
+	var nz2 := _noise_img(S, 0.35, 77 + kind.length())
+	for y in S:
+		for x in S:
+			var a := nz.get_pixel(x, y).r
+			var b := nz2.get_pixel(x, y).r
+			var c: Color
+			var h := 0.5
+			match kind:
+				"grass":
+					# 풀 + 흙 얼룩 + 낙엽
+					var g := Color(0.16, 0.22, 0.09).lerp(Color(0.22, 0.27, 0.11), b)
+					c = g.lerp(Color(0.2, 0.15, 0.09), clampf((0.42 - a) * 3.0, 0.0, 0.8))
+					if b > 0.82:
+						c = c.lerp(Color(0.35, 0.22, 0.08), 0.5)
+					h = 0.4 + b * 0.3
+				"gravel":
+					var k := 0.6 + b * 0.55
+					c = Color(0.34, 0.29, 0.22) * k
+					c = c.lerp(Color(0.18, 0.15, 0.11), clampf((0.45 - a) * 2.5, 0.0, 0.6))
+					h = b
+				_:
+					# 성당: 흑백 대리석 바둑판
+					var cell := ((x / 64) + (y / 64)) % 2
+					var base := Color(0.62, 0.6, 0.56) if cell == 0 else Color(0.16, 0.15, 0.15)
+					var vein := clampf(1.0 - absf(sin((x + a * 120.0) * 0.07)) * 6.0, 0.0, 1.0) * 0.25
+					c = base * (0.88 + b * 0.12) + Color(vein, vein, vein) * (1.0 if cell == 1 else -0.6)
+					h = 0.8 if (x % 64 > 1 and y % 64 > 1) else 0.2
+			albedo.set_pixel(x, y, c)
+			height.set_pixel(x, y, Color(h, h, h))
+	height.bump_map_to_normal_map(3.0 if kind != "marble" else 2.0)
+	albedo.generate_mipmaps()
+	height.generate_mipmaps()
+	var out := [ImageTexture.create_from_image(albedo), ImageTexture.create_from_image(height)]
+	_cache[key] = out
+	return out

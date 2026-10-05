@@ -71,6 +71,8 @@ func _ready() -> void:
 		_mptest.call_deferred(args[args.find("--mptest") + 1])
 	elif args.has("--lobbyshots"):
 		_lobbyshots.call_deferred(args[args.find("--lobbyshots") + 1])
+	elif args.has("--mapshots"):
+		_mapshots.call_deferred(args[args.find("--mapshots") + 1])
 	elif args.has("--invshots"):
 		_invshots.call_deferred(args[args.find("--invshots") + 1])
 	elif args.has("--invtest"):
@@ -683,6 +685,15 @@ func _flask_checks(pl, out: Array) -> void:
 		game._zone_tick(fz)
 		var fd: Array = mon.dots.filter(func(d): return d.get("key", "") == "fire_ground")
 		fire_ok = fz.radius == 3.0 and fz.dur == 10.0 and fd.size() == 1 and fd[0].dps == 32.0 and fd[0].t >= 2.4
+		# 누구든 피해: 던진 사람 자신도
+		var ppos: Vector3 = pl.pos
+		pl.pos = mon.pos
+		pl.immune = 0.0
+		pl.dots.clear()
+		game._zone_tick(fz)
+		fire_ok = fire_ok and pl.dots.any(func(d): return d.get("key", "") == "fire_ground")
+		pl.dots.clear()
+		pl.pos = ppos
 		mon.invuln = 0.0
 		mon.immune = 0.0
 		mon.slow = 0.0
@@ -721,7 +732,7 @@ func _flask_checks(pl, out: Array) -> void:
 	Input.action_release("secondary")
 	await get_tree().process_frame
 	var rmb_end: bool = mim2 and not pl.mimic_form
-	out.append("플라스크: 공유 대기 20초 %s(다른 플라스크 막힘 %s), 포물선 점 %d개 %s, 대지 기둥 %d개 · 이동 막음 %s · 부서짐 %s, 화염 지면(반경3m·10초·16/0.5초·안 겹침) %s, 전기(피해+75%% 둔화 4.5초) %s, 방어 보호막(마신 뒤) %s, 미믹 변신 %s · 몬스터 무시 %s · 피격 해제 %s · 우클릭 해제 %s" % [
+	out.append("플라스크: 공유 대기 20초 %s(다른 플라스크 막힘 %s), 포물선 점 %d개 %s, 대지 기둥 %d개 · 이동 막음 %s · 부서짐 %s, 화염 지면(반경3m·10초·16/0.5초·안 겹침·나도 피해) %s, 전기(피해+75%% 둔화 4.5초) %s, 방어 보호막(마신 뒤) %s, 미믹 변신 %s · 몬스터 무시 %s · 피격 해제 %s · 우클릭 해제 %s" % [
 		"O" if cd_ok else "X", "O" if blocked else "X", arc.size(), "O" if arc.size() > 2 else "X", pillars.size(), "O" if block_ok else "X", "O" if broke else "X",
 		"O" if fire_ok else "X", "O" if light_ok else "X", "O" if sh_ok else "X", "O" if mim_ok else "X", "O" if ignore_ok else "X", "O" if hit_end else "X", "O" if rmb_end else "X"])
 
@@ -1423,6 +1434,25 @@ func _inv_checks() -> Array:
 	Account.apply(d, "quick", ["bag", rf.id])
 	var swap_ok: bool = d.equipment.c3.base == "rock_flask" and d.bag.any(func(x): return x.base == "health_potion")
 	ok.call("소모품 최대 3개 + 칸이 다 차면 첫 번째 칸과 교체", full_ok and swap_ok)
+	# 성 지도: 야외/성당 구역, 나무 충돌, 시작 위치에서 성 큰 홀·성당까지 길이 이어짐
+	var cd := Dungeon.new(1, 1, "clouseau_castle")
+	var sp_ok := true
+	for t in cd.marks.spawns:
+		if cd.tile_solid(t.x, t.y):
+			sp_ok = false
+	var tree_t := Vector2i(-1, -1)
+	for i in cd.W * cd.H:
+		if cd.grid[i] == Dungeon.TREE:
+			tree_t = Vector2i(i % cd.W, i / cd.W)
+			break
+	var tc := cd.center(tree_t.x, tree_t.y)
+	var pushed := cd.resolve_circle(tc + Vector3(0.2, 0, 0), 0.4)
+	var hall := cd.center(56, 31)
+	var cath_in := cd.center(16, 58)
+	var s0 := cd.center(cd.marks.spawns[0].x, cd.marks.spawns[0].y)
+	var reach: bool = cd.path(s0, hall).size() > 0 and cd.path(s0, cath_in).size() > 0
+	ok.call("성 지도 (야외 %s, 성당 %s, 시작 위치 %s, 나무 충돌 %s, 큰 홀·성당까지 길 %s)" % [cd.has_outdoor, cd.area_at(16, 58) == Dungeon.A_CATH, sp_ok, pushed.distance_to(tc) > 1.0, reach],
+		cd.has_outdoor and cd.area_at(16, 58) == Dungeon.A_CATH and sp_ok and pushed.distance_to(tc) > 1.0 and reach)
 	# 1세트 검/방패 · 2세트 장검: 가방의 방패 우클릭 → 1세트 보조 칸과 교체
 	var seq := Account.empty_equipment()
 	seq.w1 = Data.make_item("old_sword") if Data.ITEM_BASES.has("old_sword") else Data.make_item("old_longsword")
@@ -1574,6 +1604,40 @@ func _lobbyshots(dir: String) -> void:
 
 
 # 인벤토리 화면 스크린샷 (godot -- --invshots <폴더>)
+# 성 지도 둘러보기 스크린샷: 숲 길 · 성 정문 · 안뜰과 본성 · 큰 홀 · 성당 바깥 · 성당 안
+func _mapshots(dir: String) -> void:
+	await _wait(0.5)
+	_test_char("fighter")
+	SaveData.data.equipment.w1 = null
+	start_raid("clouseau_castle")
+	game.force_act = true
+	await _wait(1.5)
+	var p = game.player
+	p.invuln = 9999.0
+	for a in game.actors:
+		if a.kind != "player":
+			a.stun = 9999.0
+	var views := [
+		["map_forest", Vector2(22, 20), Vector2(22, 30), 0.05],
+		["map_castle_gate", Vector2(24, 31), Vector2(34, 30.5), 0.22],
+		["map_courtyard", Vector2(38, 31), Vector2(48, 31), 0.25],
+		["map_great_hall", Vector2(50, 31), Vector2(64, 31), 0.08],
+		["map_cathedral_out", Vector2(16, 71), Vector2(16, 60), 0.3],
+		["map_cathedral_in", Vector2(16, 64), Vector2(16, 44), 0.12],
+	]
+	for v in views:
+		var at: Vector3 = game.dungeon.center(int(v[1].x), int(v[1].y))
+		at.x = (v[1].x + 0.5) * Dungeon.T
+		at.z = (v[1].y + 0.5) * Dungeon.T
+		var to := Vector3((v[2].x + 0.5) * Dungeon.T, 0, (v[2].y + 0.5) * Dungeon.T)
+		p.pos = game.dungeon.resolve_circle(at, p.radius)
+		p.yaw = Actor.yaw_to(to.x - p.pos.x, to.z - p.pos.z)
+		p.pitch = v[3]
+		await _wait(0.6)
+		await _shot(dir, v[0])
+	get_tree().quit()
+
+
 func _invshots(dir: String) -> void:
 	await _wait(0.5)
 	var d: Dictionary = SaveData.data

@@ -9,6 +9,11 @@ const EMPTY := 0
 const ROOM := 1
 const CORR := 2
 const PILLAR := 3
+const TREE := 4 # 야외 나무 (지나갈 수 없음)
+# 구역 (area): 실내 / 야외(숲·안뜰, 천장 없음) / 성당(높은 천장)
+const A_IN := 0
+const A_OUT := 1
+const A_CATH := 2
 
 var depth := 1
 var W := 46
@@ -23,6 +28,11 @@ var flame_mm: MultiMesh
 var rng := RandomNumberGenerator.new() # 멀티플레이: 같은 시드면 모든 접속자에게 같은 던전
 var seed_value := 0
 var map_id := ""
+var area := PackedByteArray()
+var decor: Dictionary = {} # 지도 장식: 탑, 본성/성당 범위, 벽 높이
+var has_outdoor := false
+var wild := PackedByteArray() # 지도 가장자리와 이어진 바위/숲 (벽 대신 나무로 그림)
+var static_blocks: Array = [] # 탑·의자 등 고정 원형 장애물 [[pos, radius]]
 # 지도 표식 (타일 좌표 Vector2i): spawns 시작 위치, shrines 성소, stones 부활석, exits 고정 탈출구, descent 아래층 계단
 var marks := {"spawns": [], "shrines": [], "stones": [], "exits": [], "descent": []}
 
@@ -39,6 +49,8 @@ func _init(d: int = 1, seed_v: int = 0, map := "") -> void:
 	H = W
 	grid.resize(W * H)
 	grid.fill(EMPTY)
+	area.resize(W * H)
+	area.fill(A_IN)
 	room_id.resize(W * H)
 	room_id.fill(-1)
 	generate()
@@ -56,7 +68,7 @@ func get_t(x: int, z: int) -> int:
 
 func tile_solid(x: int, z: int) -> bool:
 	var g := get_t(x, z)
-	return g == EMPTY or g == PILLAR
+	return g == EMPTY or g == PILLAR or g == TREE
 
 
 func to_tile(v: float) -> int:
@@ -213,14 +225,24 @@ func _load_map(def: Dictionary) -> void:
 	H = int(j.h)
 	grid.resize(W * H)
 	grid.fill(EMPTY)
+	area.resize(W * H)
+	area.fill(A_IN)
 	room_id.resize(W * H)
 	room_id.fill(-1)
+	decor = j.get("decor", {})
 	var rows: Array = j.rows
+	# 타일 문자: # 벽 · . 실내 · , 야외 · T 나무 · r 야외 기둥 · c 성당 · P 성당 기둥 · p 실내 기둥
+	const KIND := {".": [ROOM, A_IN], ",": [ROOM, A_OUT], "T": [TREE, A_OUT], "r": [PILLAR, A_OUT], "c": [ROOM, A_CATH], "P": [PILLAR, A_CATH], "p": [PILLAR, A_IN]}
 	for z in H:
 		var row: String = rows[z]
 		for x in W:
 			if x < row.length() and row[x] != "#":
-				grid[idx(x, z)] = ROOM
+				var k: Array = KIND.get(row[x], [ROOM, A_IN])
+				grid[idx(x, z)] = k[0]
+				area[idx(x, z)] = k[1]
+				if k[1] == A_OUT:
+					has_outdoor = true
+	_mark_wild()
 	for k in marks:
 		var seen := {}
 		for v in j.get(k, []):
@@ -392,6 +414,43 @@ func _open_around(x: int, z: int) -> bool:
 	return true
 
 
+# 지도 가장자리에서 벽 타일을 따라 이어진 곳 = 바깥 숲/바위 (성벽이 아님)
+func _mark_wild() -> void:
+	wild.resize(W * H)
+	wild.fill(0)
+	if not has_outdoor:
+		return
+	var q := []
+	for z in H:
+		for x in W:
+			if (x == 0 or z == 0 or x == W - 1 or z == H - 1) and get_t(x, z) == EMPTY:
+				wild[idx(x, z)] = 1
+				q.append(Vector2i(x, z))
+	var head := 0
+	while head < q.size():
+		var c: Vector2i = q[head]
+		head += 1
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var n: Vector2i = c + d
+			if n.x < 0 or n.y < 0 or n.x >= W or n.y >= H:
+				continue
+			if get_t(n.x, n.y) == EMPTY and wild[idx(n.x, n.y)] == 0:
+				wild[idx(n.x, n.y)] = 1
+				q.append(n)
+
+
+func is_wild(x: int, z: int) -> bool:
+	if x < 0 or z < 0 or x >= W or z >= H:
+		return true
+	return wild.size() > 0 and wild[idx(x, z)] == 1
+
+
+func area_at(x: int, z: int) -> int:
+	if x < 0 or z < 0 or x >= W or z >= H:
+		return A_IN
+	return area[idx(x, z)]
+
+
 # 방 나누기: 8x8 구역마다 중심을 정하고, 바닥을 따라 가장 가까운 중심의 방으로 (측지 보로노이)
 func _segment_rooms(_r: RandomNumberGenerator) -> void:
 	const B := 8
@@ -454,8 +513,10 @@ func _decorate() -> void:
 		for x in W:
 			if get_t(x, z) == EMPTY:
 				continue
+			if get_t(x, z) != ROOM:
+				continue
 			for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-				if get_t(x + d.x, z + d.y) == EMPTY:
+				if get_t(x + d.x, z + d.y) == EMPTY and not is_wild(x + d.x, z + d.y):
 					cand.append([x, z, d])
 	var placed := {}
 	for c in cand:
@@ -475,7 +536,10 @@ func _decorate() -> void:
 			if _open_around(t.x, t.y):
 				continue # 벽 옆에만
 			var c := center(t.x, t.y) + Vector3(rng.randf_range(-0.8, 0.8), 0, rng.randf_range(-0.8, 0.8))
-			props.append({"type": "barrel" if rng.randf() < 0.6 else "bones", "pos": c})
+			if area[idx(t.x, t.y)] == A_OUT:
+				props.append({"type": "rock" if rng.randf() < 0.6 else "log", "pos": c})
+			elif area[idx(t.x, t.y)] == A_IN:
+				props.append({"type": "barrel" if rng.randf() < 0.6 else "bones", "pos": c})
 
 
 func _carve(a: Dictionary, b: Dictionary) -> void:
@@ -544,22 +608,70 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 	var ceil_mat := _mat(wall_tex, Vector3.ONE, Color(0.45, 0.42, 0.4))
 
 	var floors := []
+	var out_floors := [] # 숲 (풀)
+	var yard_floors := [] # 성 안뜰 (자갈)
+	var cath_floors := []
 	var ceils := []
+	var cath_ceils := []
 	var walls := []
+	var walls_by_h := {} # 4m가 아닌 벽: 높이 -> 위치
+	var merlons := []
+	var tree_x := [] # [위치, 크기, 종류]
+	var bush_x := []
+	var curtain: Array = decor.get("curtain", [])
+	var cath_h := float(decor.get("wall_h", {}).get("cathedral", WALL_H))
 	for z in H:
 		for x in W:
 			var g := get_t(x, z)
+			var c := center(x, z)
 			if g != EMPTY:
-				floors.append(Transform3D(Basis(), Vector3((x + 0.5) * T, 0, (z + 0.5) * T)))
-				ceils.append(Transform3D(Basis(Vector3.RIGHT, PI), Vector3((x + 0.5) * T, WALL_H, (z + 0.5) * T)))
+				var a := area_at(x, z)
+				var fxf := Transform3D(Basis(), Vector3(c.x, 0, c.z))
+				if a == A_OUT:
+					if _in_rect(curtain, x, z):
+						yard_floors.append(fxf)
+					else:
+						out_floors.append(fxf)
+					if g == TREE:
+						tree_x.append([Vector3(c.x + rng.randf_range(-0.3, 0.3), 0, c.z + rng.randf_range(-0.3, 0.3)), rng.randf_range(1.0, 1.45), rng.randi() % 3])
+					elif g == ROOM and rng.randf() < 0.35 and not _in_rect(curtain, x, z):
+						bush_x.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * rng.randf_range(0.6, 1.2)), Vector3(c.x + rng.randf_range(-1.6, 1.6), 0.15, c.z + rng.randf_range(-1.6, 1.6))))
+				elif a == A_CATH:
+					cath_floors.append(fxf)
+					cath_ceils.append(Transform3D(Basis(Vector3.RIGHT, PI), Vector3(c.x, cath_h, c.z)))
+				else:
+					floors.append(fxf)
+					ceils.append(Transform3D(Basis(Vector3.RIGHT, PI), Vector3(c.x, WALL_H, c.z)))
 			else:
 				var adj := false
 				for dz in range(-1, 2):
 					for dx in range(-1, 2):
 						if get_t(x + dx, z + dz) != EMPTY:
 							adj = true
+				if is_wild(x, z):
+					# 바깥 숲 가장자리: 벽 대신 빽빽한 나무 (길에서 보이는 곳만)
+					var near2 := adj
+					if not near2:
+						for dz in range(-2, 3):
+							for dx in range(-2, 3):
+								if get_t(x + dx, z + dz) != EMPTY:
+									near2 = true
+					if near2:
+						for k in 3:
+							tree_x.append([Vector3(c.x + rng.randf_range(-1.7, 1.7), 0, c.z + rng.randf_range(-1.7, 1.7)), rng.randf_range(1.1, 1.8), rng.randi() % 3])
+					continue
 				if adj:
-					walls.append(Transform3D(Basis(), Vector3((x + 0.5) * T, WALL_H / 2.0, (z + 0.5) * T)))
+					var h := _wall_h(x, z)
+					if is_equal_approx(h, WALL_H):
+						walls.append(Transform3D(Basis(), Vector3(c.x, WALL_H / 2.0, c.z)))
+					else:
+						if not walls_by_h.has(h):
+							walls_by_h[h] = []
+						walls_by_h[h].append(Transform3D(Basis(), Vector3(c.x, h / 2.0, c.z)))
+						# 성벽/본성 꼭대기 톱니 (총안)
+						if h >= 12.0:
+							for o in [Vector3(-1.0, 0, -1.0), Vector3(1.0, 0, 1.0), Vector3(-1.0, 0, 1.0), Vector3(1.0, 0, -1.0)]:
+								merlons.append(Transform3D(Basis(), Vector3(c.x, h + 0.6, c.z) + o))
 
 	# 타일 메시: assets/theme.json 의 "dungeon" 설정 또는 assets/dungeon/<이름> 파일이 있으면 교체 (docs/ART_PIPELINE.md)
 	var th := AssetRegistry.theme_section("dungeon")
@@ -575,7 +687,18 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		plane = PlaneMesh.new()
 		plane.size = Vector2(T, T)
 		plane.material = floor_mat
-	root.add_child(_multimesh(plane, floors))
+	if floors.size():
+		root.add_child(_multimesh(plane, floors))
+	# 야외/성당 바닥
+	for pair in [[out_floors, "grass", 2.0], [yard_floors, "gravel", 2.0], [cath_floors, "marble", 1.0]]:
+		if pair[0].size():
+			var pm := PlaneMesh.new()
+			pm.size = Vector2(T, T)
+			var gm := _mat(Textures.ground(pair[1]), Vector3(pair[2], pair[2], 1.0))
+			if pair[1] == "marble":
+				gm.roughness = 0.35
+			pm.material = gm
+			root.add_child(_multimesh(pm, pair[0]))
 	var cplane: Mesh = tm.call("ceiling")
 	if cplane == null:
 		cplane = AssetRegistry.mesh("dungeon", "ceiling")
@@ -584,7 +707,8 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		cplane.size = Vector2(T, T)
 		cplane.material = ceil_mat
 	var ceil_mi := _multimesh(cplane, ceils)
-	ceil_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# 야외가 있는 지도: 달빛이 실내로 새지 않도록 천장이 그림자를 드리움
+	ceil_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if has_outdoor else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	# 테마 천장은 바닥 타일을 뒤집어 쓰므로 어둡게
 	if th.has("ceiling") and cplane.get_surface_count() > 0:
 		var cm = cplane.surface_get_material(0)
@@ -592,7 +716,15 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 			var dark: StandardMaterial3D = cm.duplicate()
 			dark.albedo_color = Color(0.32, 0.3, 0.3)
 			ceil_mi.material_override = dark
-	root.add_child(ceil_mi)
+	if ceils.size():
+		root.add_child(ceil_mi)
+	if cath_ceils.size():
+		var cc := PlaneMesh.new()
+		cc.size = Vector2(T, T)
+		cc.material = _mat(Textures.stone_wall(false), Vector3(1, 1, 1), Color(0.5, 0.46, 0.42))
+		var cci := _multimesh(cc, cath_ceils)
+		cci.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
+		root.add_child(cci)
 	var box: Mesh = AssetRegistry.mesh("dungeon", "wall")
 	if box == null:
 		box = BoxMesh.new()
@@ -600,7 +732,22 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		box.material = wall_mat
 		# 벽 텍스처가 세로로 늘어나지 않도록 UV 비율 조정
 		wall_mat.uv1_scale = Vector3(3.0, 2.0 * WALL_H / T, 1.0)
-	root.add_child(_multimesh(box, walls))
+	if walls.size():
+		root.add_child(_multimesh(box, walls))
+	# 높은 벽 (성벽 12m, 본성 16m, 성당 10m, 작은 건물 바깥 7m)
+	for h in walls_by_h:
+		var tb := BoxMesh.new()
+		tb.size = Vector3(T, h, T)
+		var tmat := _mat(wall_tex, Vector3(3.0, 2.0 * h / T, 1.0))
+		tb.material = tmat
+		root.add_child(_multimesh(tb, walls_by_h[h]))
+	if merlons.size():
+		var mb := BoxMesh.new()
+		mb.size = Vector3(1.2, 1.2, 1.2)
+		mb.material = _mat(wall_tex, Vector3(0.5, 0.5, 1.0))
+		root.add_child(_multimesh(mb, merlons))
+	if has_outdoor:
+		_build_outdoor(tree_x, bush_x, wall_tex)
 	# 테마 벽면: 바닥과 벽이 맞닿는 모든 경계에 벽 조각을 세움 (뒤의 블록 벽은 틈새 메우기용)
 	var faces: Array = th.get("wall_face", [])
 	var themed := faces.size() > 0 and AssetRegistry.mesh_at(faces[0]) != null
@@ -609,11 +756,11 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		var by_mesh := {}
 		for z in H:
 			for x in W:
-				if get_t(x, z) == EMPTY:
+				if get_t(x, z) == EMPTY or area_at(x, z) == A_OUT:
 					continue
 				var c := center(x, z)
 				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-					if get_t(x + d.x, z + d.y) != EMPTY:
+					if get_t(x + d.x, z + d.y) != EMPTY or is_wild(x + d.x, z + d.y):
 						continue
 					var n := Vector3(d.x, 0, d.y)
 					var rot := Basis(Vector3.UP, PI / 2 if d.x != 0 else 0.0)
@@ -621,6 +768,9 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 					if not by_mesh.has(path):
 						by_mesh[path] = []
 					by_mesh[path].append(Transform3D(rot, c + n * (T / 2.0 + 0.45)))
+					if area_at(x, z) == A_CATH:
+						# 성당: 높은 벽을 위로 한 단 더
+						by_mesh[path].append(Transform3D(rot, c + n * (T / 2.0 + 0.45) + Vector3(0, WALL_H, 0)))
 					# 방 안쪽 벽에 가끔 깃발
 					if room_id[idx(x, z)] >= 0 and rng.randf() < 0.07:
 						var face_rot := Basis(Vector3.UP, atan2(-n.x, -n.z))
@@ -637,12 +787,18 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 	var barrel_x := []
 	var bone_x := []
 	var skull_x := []
+	var rock_x := []
+	var log_x := []
 	for p in props:
 		match p.type:
 			"pillar":
 				pillar_x.append(Transform3D(Basis(), p.pos + Vector3(0, WALL_H / 2.0, 0)))
 			"barrel":
 				barrel_x.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU), p.pos + Vector3(0, 0.6, 0)))
+			"rock":
+				rock_x.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(rng.randf_range(0.6, 1.3), rng.randf_range(0.4, 0.8), rng.randf_range(0.6, 1.3))), p.pos + Vector3(0, 0.15, 0)))
+			"log":
+				log_x.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU) * Basis(Vector3.RIGHT, PI / 2), p.pos + Vector3(0, 0.3, 0)))
 			"bones":
 				for k in 5:
 					var bb := Basis(Vector3.UP, rng.randf() * TAU) * Basis(Vector3.RIGHT, PI / 2)
@@ -696,6 +852,25 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		bmat.roughness = 0.8
 		bm.material = bmat
 		root.add_child(_multimesh(bm, barrel_x))
+	if rock_x.size():
+		var rk := SphereMesh.new()
+		rk.radius = 0.7
+		rk.height = 1.1
+		rk.radial_segments = 7
+		rk.rings = 4
+		rk.material = _mat(wall_tex, Vector3(0.6, 0.6, 1), Color(0.75, 0.75, 0.72))
+		root.add_child(_multimesh(rk, rock_x))
+	if log_x.size():
+		var lg := CylinderMesh.new()
+		lg.top_radius = 0.3
+		lg.bottom_radius = 0.34
+		lg.height = 2.6
+		lg.radial_segments = 8
+		var lm := StandardMaterial3D.new()
+		lm.albedo_texture = Textures.wood()
+		lm.albedo_color = Color(0.7, 0.6, 0.5)
+		lg.material = lm
+		root.add_child(_multimesh(lg, log_x))
 	if bone_x.size():
 		var bone_mat := StandardMaterial3D.new()
 		bone_mat.albedo_color = Color(0.81, 0.78, 0.68)
@@ -767,6 +942,320 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		root.add_child(fmi)
 
 
+func _in_rect(r: Array, x: int, z: int) -> bool:
+	return r.size() == 4 and x >= int(r[0]) and z >= int(r[1]) and x <= int(r[2]) and z <= int(r[3])
+
+
+# 벽 높이: 성벽 12m · 본성 16m · 성당 10m · 야외에 닿은 작은 건물 7m · 나머지 4m
+func _wall_h(x: int, z: int) -> float:
+	if decor.is_empty():
+		return WALL_H
+	var wh: Dictionary = decor.get("wall_h", {})
+	if _in_rect(decor.get("keep", []), x, z):
+		return float(wh.get("keep", WALL_H))
+	if _in_rect(decor.get("cathedral", []), x, z) or _in_rect(decor.get("transept", []), x, z):
+		return float(wh.get("cathedral", WALL_H))
+	var cu: Array = decor.get("curtain", [])
+	if _in_rect(cu, x, z) and (x == int(cu[0]) or x == int(cu[2]) or z == int(cu[1]) or z == int(cu[3])):
+		return float(wh.get("castle", WALL_H))
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if get_t(x + d.x, z + d.y) != EMPTY and area_at(x + d.x, z + d.y) == A_OUT:
+			return 7.0
+	return WALL_H
+
+
+# 야외 지도: 나무·덤불, 성 탑, 성당 지붕·종탑·스테인드글라스·의자·제단
+func _build_outdoor(tree_x: Array, bush_x: Array, wall_tex: Array) -> void:
+	var stone := _mat(wall_tex, Vector3(2, 2, 1))
+	# 나무 3종: 전나무 / 활엽수 / 마른 나무
+	var bark := StandardMaterial3D.new()
+	bark.albedo_texture = Textures.wood()
+	bark.albedo_color = Color(0.45, 0.36, 0.3)
+	var pine := StandardMaterial3D.new()
+	pine.albedo_color = Color(0.09, 0.17, 0.1)
+	pine.roughness = 0.9
+	var leaf := StandardMaterial3D.new()
+	leaf.albedo_color = Color(0.15, 0.24, 0.1)
+	leaf.roughness = 0.9
+	var parts := {} # 이름 -> [mesh, 변환들]
+	var add_part := func(nm: String, mesh: Mesh, xf: Transform3D) -> void:
+		if not parts.has(nm):
+			parts[nm] = [mesh, []]
+		parts[nm][1].append(xf)
+	var trunk := CylinderMesh.new()
+	trunk.top_radius = 0.16
+	trunk.bottom_radius = 0.28
+	trunk.height = 3.2
+	trunk.radial_segments = 7
+	trunk.material = bark
+	var cones := []
+	for k in 3:
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.0
+		cm.bottom_radius = [1.9, 1.5, 1.0][k]
+		cm.height = [3.0, 2.6, 2.1][k]
+		cm.radial_segments = 8
+		cm.material = pine
+		cones.append(cm)
+	var blob := SphereMesh.new()
+	blob.radius = 1.6
+	blob.height = 2.6
+	blob.radial_segments = 8
+	blob.rings = 5
+	blob.material = leaf
+	var branch := CylinderMesh.new()
+	branch.top_radius = 0.05
+	branch.bottom_radius = 0.12
+	branch.height = 2.0
+	branch.radial_segments = 5
+	branch.material = bark
+	for t in tree_x:
+		var p: Vector3 = t[0]
+		var s: float = t[1]
+		var b := Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * s)
+		var xf := func(local: Vector3, lb := Basis()) -> Transform3D:
+			return Transform3D(b * lb, p + b * local)
+		add_part.call("trunk", trunk, xf.call(Vector3(0, 1.6, 0)))
+		match int(t[2]):
+			0:
+				add_part.call("c0", cones[0], xf.call(Vector3(0, 3.0, 0)))
+				add_part.call("c1", cones[1], xf.call(Vector3(0, 4.6, 0)))
+				add_part.call("c2", cones[2], xf.call(Vector3(0, 6.0, 0)))
+			1:
+				add_part.call("blob", blob, xf.call(Vector3(0, 4.3, 0)))
+				add_part.call("blob", blob, xf.call(Vector3(0.9, 3.7, 0.4), Basis().scaled(Vector3.ONE * 0.75)))
+				add_part.call("blob", blob, xf.call(Vector3(-0.8, 3.9, -0.5), Basis().scaled(Vector3.ONE * 0.7)))
+			_:
+				add_part.call("branch", branch, xf.call(Vector3(0.45, 3.2, 0), Basis(Vector3.BACK, -0.7)))
+				add_part.call("branch", branch, xf.call(Vector3(-0.4, 3.8, 0.2), Basis(Vector3.BACK, 0.8)))
+				add_part.call("branch", branch, xf.call(Vector3(0, 4.4, -0.3), Basis(Vector3.RIGHT, 0.6)))
+	for nm in parts:
+		root.add_child(_multimesh(parts[nm][0], parts[nm][1]))
+	if bush_x.size():
+		var bush := SphereMesh.new()
+		bush.radius = 0.55
+		bush.height = 0.7
+		bush.radial_segments = 6
+		bush.rings = 3
+		bush.material = leaf
+		var bmi := _multimesh(bush, bush_x)
+		bmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(bmi)
+	# 화로(바닥) / 샹들리에(천장): 불꽃 + 점광원
+	var iron := StandardMaterial3D.new()
+	iron.albedo_color = Color(0.12, 0.11, 0.1)
+	iron.metallic = 0.6
+	iron.roughness = 0.5
+	var bowl := CylinderMesh.new()
+	bowl.top_radius = 0.55
+	bowl.bottom_radius = 0.3
+	bowl.height = 0.35
+	bowl.radial_segments = 10
+	bowl.material = iron
+	var leg := CylinderMesh.new()
+	leg.top_radius = 0.08
+	leg.bottom_radius = 0.14
+	leg.height = 1.0
+	leg.radial_segments = 6
+	leg.material = iron
+	var ring := TorusMesh.new()
+	ring.inner_radius = 1.0
+	ring.outer_radius = 1.12
+	ring.rings = 16
+	ring.ring_segments = 4
+	ring.material = iron
+	var fire := CylinderMesh.new()
+	fire.top_radius = 0.0
+	fire.bottom_radius = 0.38
+	fire.height = 0.7
+	fire.radial_segments = 6
+	fire.material = Models.glow_mat(Color(1.0, 0.6, 0.25), 4.0)
+	var candle := CylinderMesh.new()
+	candle.top_radius = 0.0
+	candle.bottom_radius = 0.07
+	candle.height = 0.22
+	candle.radial_segments = 5
+	candle.material = Models.glow_mat(Color(1.0, 0.8, 0.45), 4.0)
+	var lx := {"bowl": [bowl, []], "leg": [leg, []], "ring": [ring, []], "fire": [fire, []], "candle": [candle, []]}
+	for li in decor.get("lights", []):
+		var c := center(int(li[0]), int(li[1]))
+		var lt := OmniLight3D.new()
+		lt.light_color = Color(1.0, 0.66, 0.36)
+		lt.omni_attenuation = 1.1
+		lt.distance_fade_enabled = true
+		lt.distance_fade_begin = 45.0
+		lt.distance_fade_length = 10.0
+		if str(li[2]) == "chandelier":
+			var top := WALL_H if area_at(int(li[0]), int(li[1])) != A_CATH else float(decor.get("wall_h", {}).get("cathedral", WALL_H))
+			var y := top - 1.3
+			lx.ring[1].append(Transform3D(Basis().scaled(Vector3(1, 0.6, 1)), c + Vector3(0, y, 0)))
+			for k in 8:
+				var ang := k * TAU / 8.0
+				lx.candle[1].append(Transform3D(Basis(), c + Vector3(cos(ang) * 1.06, y + 0.16, sin(ang) * 1.06)))
+			lt.position = c + Vector3(0, y - 0.3, 0)
+			lt.light_energy = 2.6
+			lt.omni_range = 13.0
+		else:
+			lx.leg[1].append(Transform3D(Basis(), c + Vector3(0, 0.5, 0)))
+			lx.bowl[1].append(Transform3D(Basis(), c + Vector3(0, 1.1, 0)))
+			lx.fire[1].append(Transform3D(Basis(), c + Vector3(0, 1.55, 0)))
+			lt.position = c + Vector3(0, 2.0, 0)
+			lt.light_energy = 2.8
+			lt.omni_range = 14.0
+			static_blocks.append([Vector3(c.x, 0, c.z), 0.55])
+		root.add_child(lt)
+	for k in lx:
+		if lx[k][1].size():
+			var lmi := _multimesh(lx[k][0], lx[k][1])
+			if k in ["fire", "candle"]:
+				lmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			root.add_child(lmi)
+	# 성 탑: 원통 + 뾰족 지붕
+	var slate := StandardMaterial3D.new()
+	slate.albedo_color = Color(0.2, 0.22, 0.28)
+	slate.roughness = 0.6
+	for tw in decor.get("towers", []):
+		var c := center(int(tw[0]), int(tw[1]))
+		var r := float(tw[2])
+		var h := float(tw[3])
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = r
+		cyl.bottom_radius = r * 1.06
+		cyl.height = h
+		cyl.radial_segments = 16
+		cyl.material = _mat(wall_tex, Vector3(6, h / 3.0, 1))
+		var mi := MeshInstance3D.new()
+		mi.mesh = cyl
+		mi.position = c + Vector3(0, h / 2.0, 0)
+		root.add_child(mi)
+		var roof := CylinderMesh.new()
+		roof.top_radius = 0.0
+		roof.bottom_radius = r + 0.6
+		roof.height = r * 2.2
+		roof.radial_segments = 16
+		roof.material = slate
+		var rm := MeshInstance3D.new()
+		rm.mesh = roof
+		rm.position = c + Vector3(0, h + r * 1.1, 0)
+		root.add_child(rm)
+		static_blocks.append([Vector3(c.x, 0, c.z), r])
+	# 성당
+	var ca: Array = decor.get("cathedral", [])
+	if ca.size() == 4:
+		var ch := float(decor.get("wall_h", {}).get("cathedral", WALL_H))
+		var x0 := int(ca[0])
+		var z0 := int(ca[1])
+		var x1 := int(ca[2])
+		var z1 := int(ca[3])
+		var cx := (x0 + x1 + 1) * T / 2.0
+		var nave := PrismMesh.new()
+		nave.size = Vector3((x1 - x0 + 1) * T + 1.0, 7.0, (z1 - z0 + 1) * T)
+		nave.material = slate
+		var nm := MeshInstance3D.new()
+		nm.mesh = nave
+		nm.position = Vector3(cx, ch + 3.5, (z0 + z1 + 1) * T / 2.0)
+		root.add_child(nm)
+		var tr: Array = decor.get("transept", [])
+		if tr.size() == 4:
+			var tp := PrismMesh.new()
+			tp.size = Vector3((int(tr[3]) - int(tr[1]) + 1) * T + 1.0, 6.0, (int(tr[2]) - int(tr[0]) + 1) * T)
+			tp.material = slate
+			var tmi := MeshInstance3D.new()
+			tmi.mesh = tp
+			tmi.rotation.y = PI / 2
+			tmi.position = Vector3((int(tr[0]) + int(tr[2]) + 1) * T / 2.0, ch + 3.0, (int(tr[1]) + int(tr[3]) + 1) * T / 2.0)
+			root.add_child(tmi)
+		# 정면 종탑 + 첨탑
+		var sp: Array = decor.get("spire", [])
+		if sp.size() == 2:
+			var sc := center(int(sp[0]), int(sp[1]))
+			var bel := BoxMesh.new()
+			bel.size = Vector3(7, 9, 7)
+			bel.material = _mat(wall_tex, Vector3(2, 2.5, 1))
+			var bm := MeshInstance3D.new()
+			bm.mesh = bel
+			bm.position = Vector3(sc.x, ch + 4.5, sc.z)
+			root.add_child(bm)
+			var spire := CylinderMesh.new()
+			spire.top_radius = 0.0
+			spire.bottom_radius = 5.0
+			spire.height = 14.0
+			spire.radial_segments = 4
+			spire.material = slate
+			var smi := MeshInstance3D.new()
+			smi.mesh = spire
+			smi.rotation.y = PI / 4
+			smi.position = Vector3(sc.x, ch + 9.0 + 7.0, sc.z)
+			root.add_child(smi)
+		# 스테인드글라스: 성당 안쪽 벽 높은 곳의 빛나는 창
+		var glass_cols := [Color(0.25, 0.4, 1.0), Color(0.9, 0.2, 0.2), Color(1.0, 0.75, 0.25), Color(0.3, 0.8, 0.4)]
+		var glass := {}
+		for z in range(z0, z1 + 1):
+			for x in range(x0 - 7, x1 + 8):
+				if area_at(x, z) != A_CATH or get_t(x, z) == EMPTY or (x + z) % 2 != 0:
+					continue
+				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					if get_t(x + d.x, z + d.y) != EMPTY:
+						continue
+					var n := Vector3(d.x, 0, d.y)
+					var col: Color = glass_cols[rng.randi() % glass_cols.size()]
+					var key := col.to_html()
+					if not glass.has(key):
+						glass[key] = [col, []]
+					glass[key][1].append(Transform3D(Basis(Vector3.UP, atan2(-n.x, -n.z)), center(x, z) + n * (T / 2.0 - 0.08) + Vector3(0, 6.4, 0)))
+		for key in glass:
+			var q := QuadMesh.new()
+			q.size = Vector2(1.6, 3.4)
+			q.material = Models.glow_mat(glass[key][0], 1.4)
+			var gi := _multimesh(q, glass[key][1])
+			gi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			root.add_child(gi)
+		# 신랑 양쪽 긴 의자 (가운데 통로)
+		var pew := BoxMesh.new()
+		pew.size = Vector3(4.0, 0.9, 0.7)
+		var pmat := StandardMaterial3D.new()
+		pmat.albedo_texture = Textures.wood()
+		pew.material = pmat
+		var pews := []
+		var zs := (int(tr[3]) + 1) * T + 1.5 if tr.size() == 4 else (z0 + 3) * T
+		var zz: float = zs
+		while zz < z1 * T - 1.5:
+			for side in [-1.0, 1.0]:
+				var pc := Vector3(cx + side * 4.3, 0.45, zz)
+				pews.append(Transform3D(Basis(), pc))
+				static_blocks.append([Vector3(pc.x - 1.3, 0, pc.z), 0.45])
+				static_blocks.append([Vector3(pc.x, 0, pc.z), 0.45])
+				static_blocks.append([Vector3(pc.x + 1.3, 0, pc.z), 0.45])
+			zz += 2.6
+		if pews.size():
+			root.add_child(_multimesh(pew, pews))
+		# 제단 + 촛불 (후진)
+		var alt := MeshInstance3D.new()
+		var ab := BoxMesh.new()
+		ab.size = Vector3(3.2, 1.1, 1.4)
+		ab.material = stone
+		alt.mesh = ab
+		var ap := Vector3(cx, 0.55, (z0 + 2) * T)
+		alt.position = ap
+		root.add_child(alt)
+		static_blocks.append([Vector3(ap.x, 0, ap.z), 1.3])
+		var cl := CylinderMesh.new()
+		cl.top_radius = 0.05
+		cl.bottom_radius = 0.05
+		cl.height = 0.35
+		cl.material = Models.glow_mat(Color(1.0, 0.85, 0.5), 3.0)
+		var cand := []
+		for k in 5:
+			cand.append(Transform3D(Basis(), ap + Vector3(-1.2 + k * 0.6, 0.72, 0.0)))
+		root.add_child(_multimesh(cl, cand))
+		var al := OmniLight3D.new()
+		al.light_color = Color(1.0, 0.8, 0.5)
+		al.light_energy = 2.0
+		al.omni_range = 10.0
+		al.position = ap + Vector3(0, 1.5, 1.0)
+		root.add_child(al)
+
+
 func animate_torches(time: float, cam_pos: Vector3) -> void:
 	for i in torches.size():
 		var t: Dictionary = torches[i]
@@ -790,8 +1279,19 @@ func dispose() -> void:
 var dyn_blocks: Array = [] # 돌기둥 등 일시적인 원형 장애물 [[pos, radius], ...]
 
 
+func _blocks_near(pos: Vector3) -> Array:
+	if static_blocks.is_empty():
+		return dyn_blocks
+	var out := dyn_blocks.duplicate()
+	for b in static_blocks:
+		var bp: Vector3 = b[0]
+		if absf(bp.x - pos.x) < 8.0 and absf(bp.z - pos.z) < 8.0:
+			out.append(b)
+	return out
+
+
 func resolve_circle(pos: Vector3, r: float) -> Vector3:
-	for b in dyn_blocks:
+	for b in _blocks_near(pos):
 		var bp: Vector3 = b[0]
 		var bdx := pos.x - bp.x
 		var bdz := pos.z - bp.z
@@ -811,13 +1311,13 @@ func resolve_circle(pos: Vector3, r: float) -> Vector3:
 			var x := tx + dx
 			var z := tz + dz
 			var g := get_t(x, z)
-			if g == PILLAR:
+			if g == PILLAR or g == TREE:
 				var cx := (x + 0.5) * T
 				var cz := (z + 0.5) * T
 				var ddx := pos.x - cx
 				var ddz := pos.z - cz
 				var d := sqrt(ddx * ddx + ddz * ddz)
-				var mn := 1.3 + r
+				var mn := (1.3 if g == PILLAR else 0.7) + r
 				if d < mn and d > 1e-4:
 					pos.x = cx + ddx / d * mn
 					pos.z = cz + ddz / d * mn
@@ -860,10 +1360,10 @@ func los(ax: float, az: float, bx: float, bz: float) -> bool:
 		var g := get_t(tx, tz)
 		if g == EMPTY:
 			return false
-		if g == PILLAR:
+		if g == PILLAR or g == TREE:
 			var cx := (tx + 0.5) * T
 			var cz := (tz + 0.5) * T
-			if Vector2(x - cx, z - cz).length() < 1.2:
+			if Vector2(x - cx, z - cz).length() < (1.2 if g == PILLAR else 0.6):
 				return false
 	return true
 
@@ -947,6 +1447,8 @@ func random_point_in_room(room: Dictionary, margin: int = 1) -> Vector3:
 		var tl: Array = room.tiles
 		for k in 30:
 			var t: Vector2i = tl[rng.randi() % tl.size()]
+			if tile_solid(t.x, t.y):
+				continue
 			if margin > 0 and not _open_around(t.x, t.y) and k < 25:
 				continue
 			var c := center(t.x, t.y)

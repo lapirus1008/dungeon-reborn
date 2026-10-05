@@ -200,6 +200,7 @@ func build_level(d: int) -> void:
 		seed(level_seed + d)
 	dungeon = Dungeon.new(d, level_seed + d if online() else 0, map_id)
 	dungeon.build(world, false)
+	_outdoor_env()
 	_reset_lists(d)
 	_spawn_fixtures()
 
@@ -370,6 +371,38 @@ func _make_view() -> void:
 	shield_bubble = Models.shield_bubble(0.75)
 	shield_bubble.visible = false
 	camera.add_child(shield_bubble)
+
+
+# 야외가 있는 지도: 밤하늘 + 달빛 (실내는 천장 그림자로 가려짐)
+var moon: DirectionalLight3D
+
+
+func _outdoor_env() -> void:
+	if dungeon == null or not dungeon.has_outdoor:
+		return
+	var e: Environment = env.environment
+	var sky := Sky.new()
+	var sm := ProceduralSkyMaterial.new()
+	sm.sky_top_color = Color(0.03, 0.045, 0.09)
+	sm.sky_horizon_color = Color(0.12, 0.13, 0.18)
+	sm.ground_bottom_color = Color(0.02, 0.02, 0.025)
+	sm.ground_horizon_color = Color(0.1, 0.1, 0.13)
+	sm.sun_angle_max = 2.0
+	sm.sky_energy_multiplier = 0.6
+	sky.sky_material = sm
+	e.sky = sky
+	e.background_mode = Environment.BG_SKY
+	e.fog_light_color = Color(0.06, 0.07, 0.1)
+	e.fog_sky_affect = 0.35
+	moon = DirectionalLight3D.new()
+	moon.light_color = Color(0.62, 0.7, 0.95)
+	moon.light_energy = 0.45
+	moon.rotation = Vector3(deg_to_rad(-38.0), deg_to_rad(35.0), 0.0)
+	moon.shadow_enabled = true
+	moon.directional_shadow_max_distance = 70.0
+	moon.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	moon.shadow_bias = 0.05
+	world.add_child(moon)
 
 
 func _make_env(deep: bool) -> void:
@@ -1263,7 +1296,7 @@ func _zone_tick(z: Dictionary) -> void:
 		var d: float = Vector2(a.pos.x - z.pos.x, a.pos.z - z.pos.z).length()
 		if d > z.radius + a.radius or not dungeon.los(z.pos.x, z.pos.z, a.pos.x, a.pos.z):
 			continue
-		if owner != null and not hostile(owner, a):
+		if owner != null and not hostile(owner, a) and not z.get("hot", false):
 			# 아군 치유 (신의 계시)
 			if z.get("heal", 0.0) > 0.0 and (a == owner or (a.faction == owner.faction and is_adventurer(a))):
 				a.apply_heal(z.heal, 0.4)
@@ -2854,6 +2887,7 @@ func start_client(info: Dictionary, hud_node) -> void:
 	map_id = info.get("map", map_id)
 	dungeon = Dungeon.new(depth, level_seed + depth, map_id)
 	dungeon.build(world, false)
+	_outdoor_env()
 	_reset_lists(depth)
 	_spawn_fixtures()
 	for fid in info.get("fix_used", []):

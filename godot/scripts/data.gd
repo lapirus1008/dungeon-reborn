@@ -639,8 +639,8 @@ const MONSTERS := {
 # 지도 이미지에서 추출한 타일 지도(assets/maps/*.json) + 출현 몬스터
 const MAPS := {
 	"clouseau_castle": {
-		"name": "클루조 성", "file": "res://assets/maps/clouseau_castle.json", "icon": "🏰", "castle": true,
-		"desc": "고블린과 마법에 걸린 적들로 가득한 거대한 성. 좁은 복도와 넓은 홀, 성 밖 숲.",
+		"name": "클루조 성", "file": "res://assets/maps/clouseau_castle.json", "icon": "🏰",
+		"desc": "성벽과 탑으로 둘러싸인 큰 성(안뜰·본성 큰 홀·막사·창고), 서쪽의 어두운 숲, 남서쪽의 버려진 성당.",
 		"monsters": {"goblin_axeman": 22, "goblin_thief": 12, "goblin_crossbowman": 12, "giant_rat": 9, "boar": 6, "mimic_book": 6, "apparition": 6,
 			"living_armor_warrior": 8, "living_armor_swordsman": 8, "giant_bat": 6, "giant_beetle": 5, "pest": 4, "treant_wild": 3},
 		"boss": "headsman", "elites": ["khazra"], "mimic": 0.06, "floor": 1,

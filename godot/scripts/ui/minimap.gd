@@ -52,6 +52,12 @@ func _draw() -> void:
 			if center_on_player and (rx * rx + rz * rz) > r2:
 				continue
 			var c := Color("#3a342c") if v == Dungeon.PILLAR else (Color("#6d6253") if dg.room_id[i] >= 0 else Color("#4d463c"))
+			if v == Dungeon.TREE:
+				c = Color("#22361f")
+			elif dg.area.size() > i and dg.area[i] == Dungeon.A_OUT:
+				c = Color("#46523a")
+			elif dg.area.size() > i and dg.area[i] == Dungeon.A_CATH:
+				c = Color("#7a7064")
 			draw_rect(Rect2(rx, rz, scale + 0.5, scale + 0.5), c)
 	var dot := func(wx: float, wz: float, col: Color, rad: float):
 		var dx = ox + wx / Dungeon.T * scale
