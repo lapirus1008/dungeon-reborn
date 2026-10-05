@@ -993,6 +993,142 @@ static func ice_block(h: float) -> MeshInstance3D:
 
 # ------------------------------------------------------------------ 1인칭 뷰모델 (카메라 자식)
 # res://assets/viewmodels/<직업>.glb 가 있으면 교체 (자식 노드 "R", "L"이 있으면 손 애니메이션이 적용됨)
+# 1인칭 팔: 둥근 소매(직업 옷/갑옷) + 손목 띠 + 장갑 낀 손(손바닥, 쥔 손가락 4개, 엄지)
+# 팔은 +Z(화면 쪽)로 뻗고 손은 -Z 끝, 손잡이는 Y축으로 쥠
+static func fp_arm(cls: String, side: float, panther := false) -> Node3D:
+	var look: Dictionary = CLASS_LOOK.get(cls, CLASS_LOOK.fighter)
+	var metal: float = look.metal
+	var armored := metal >= 0.5 and not panther
+	var a := Node3D.new()
+	var sleeve_m := StandardMaterial3D.new()
+	sleeve_m.albedo_color = Color(0.06, 0.06, 0.07) if panther else look.body
+	sleeve_m.roughness = 0.35 if armored else 0.85
+	sleeve_m.metallic = metal if armored else 0.0
+	var glove_m := StandardMaterial3D.new()
+	if panther:
+		glove_m.albedo_color = Color(0.07, 0.07, 0.08)
+		glove_m.roughness = 0.9
+	elif armored:
+		glove_m.albedo_color = (look.body as Color).lerp(Color(0.55, 0.56, 0.6), 0.5)
+		glove_m.metallic = 0.75
+		glove_m.roughness = 0.3
+	else:
+		glove_m.albedo_color = Color(0.3, 0.19, 0.11) # 가죽 장갑
+		glove_m.roughness = 0.7
+	var trim_m := StandardMaterial3D.new()
+	trim_m.albedo_color = Color(0.22, 0.15, 0.09) if not armored else Color(0.35, 0.3, 0.2)
+	trim_m.metallic = 0.5 if armored else 0.0
+	trim_m.roughness = 0.6
+	var along := Basis(Vector3.RIGHT, PI / 2) # 원기둥(Y축)을 Z축으로 눕힘
+	var hand := Node3D.new() # 손 전체 (조금 크게)
+	hand.scale = Vector3.ONE * 1.3
+	hand.position = Vector3(0, 0, 0.04)
+	# 아래팔 (손목 쪽이 가늘게)
+	var fore := CylinderMesh.new()
+	fore.top_radius = 0.042
+	fore.bottom_radius = 0.058
+	fore.height = 0.42
+	fore.radial_segments = 14
+	fore.rings = 2
+	fore.material = sleeve_m
+	var fm := MeshInstance3D.new()
+	fm.mesh = fore
+	fm.basis = along
+	fm.position = Vector3(0, 0, 0.14)
+	a.add_child(fm)
+	if armored:
+		# 팔 보호대 판금 + 리벳 띠
+		for k in 2:
+			var band := TorusMesh.new()
+			band.inner_radius = 0.048 + k * 0.006
+			band.outer_radius = 0.062 + k * 0.006
+			band.rings = 16
+			band.ring_segments = 6
+			band.material = trim_m
+			var bm := MeshInstance3D.new()
+			bm.mesh = band
+			bm.basis = along
+			bm.position = Vector3(0, 0, 0.02 + k * 0.17)
+			a.add_child(bm)
+	else:
+		# 천 소매 끝단 + 가죽 손목 띠
+		var cuff := CylinderMesh.new()
+		cuff.top_radius = 0.06
+		cuff.bottom_radius = 0.066
+		cuff.height = 0.07
+		cuff.radial_segments = 14
+		cuff.material = sleeve_m
+		var cm := MeshInstance3D.new()
+		cm.mesh = cuff
+		cm.basis = along
+		cm.position = Vector3(0, 0, -0.04)
+		a.add_child(cm)
+		var strap := TorusMesh.new()
+		strap.inner_radius = 0.04
+		strap.outer_radius = 0.05
+		strap.rings = 16
+		strap.ring_segments = 5
+		strap.material = trim_m
+		var sm := MeshInstance3D.new()
+		sm.mesh = strap
+		sm.basis = along
+		sm.position = Vector3(0, 0, -0.075)
+		a.add_child(sm)
+	# 손바닥 (둥근 캡슐을 납작하게)
+	var palm := CapsuleMesh.new()
+	palm.radius = 0.04
+	palm.height = 0.11
+	palm.radial_segments = 12
+	palm.rings = 4
+	palm.material = glove_m
+	var pm := MeshInstance3D.new()
+	pm.mesh = palm
+	pm.basis = along.scaled(Vector3(1.0, 1.0, 0.72))
+	pm.position = Vector3(0, 0, -0.13)
+	hand.add_child(pm)
+	# 손가락 4개: 손잡이를 감싸 쥔 모양 (마디 2개)
+	var seg := CapsuleMesh.new()
+	seg.radius = 0.0135
+	seg.height = 0.05
+	seg.radial_segments = 8
+	seg.rings = 2
+	seg.material = glove_m
+	for i in 4:
+		var fx := (i - 1.5) * 0.024 * -side
+		var base := Vector3(fx, 0.012, -0.18 - absf(i - 1.5) * 0.004)
+		var f1 := MeshInstance3D.new()
+		f1.mesh = seg
+		f1.basis = Basis(Vector3.RIGHT, PI / 2 + 0.9)
+		f1.position = base + Vector3(0, -0.012, -0.012)
+		hand.add_child(f1)
+		var f2 := MeshInstance3D.new()
+		f2.mesh = seg
+		f2.basis = Basis(Vector3.RIGHT, PI / 2 + 2.2)
+		f2.position = base + Vector3(0, -0.045, 0.004)
+		hand.add_child(f2)
+	# 엄지: 손 안쪽에서 손가락 위로 감쌈
+	var th := MeshInstance3D.new()
+	th.mesh = seg
+	th.basis = Basis(Vector3.UP, side * 0.9) * Basis(Vector3.RIGHT, PI / 2 + 0.3)
+	th.position = Vector3(side * -0.04, 0.02, -0.16)
+	hand.add_child(th)
+	if armored:
+		# 손등 판금
+		var plate := CapsuleMesh.new()
+		plate.radius = 0.035
+		plate.height = 0.1
+		plate.radial_segments = 10
+		plate.rings = 3
+		plate.material = glove_m
+		var pl := MeshInstance3D.new()
+		pl.mesh = plate
+		pl.basis = along.scaled(Vector3(1.15, 1.0, 0.45))
+		pl.position = Vector3(0, 0.03, -0.12)
+		hand.add_child(pl)
+	a.add_child(hand)
+	return a
+
+
 static func view_model(cls: String, wmodel: String, panther := false, off := "") -> Node3D:
 	var key := "panther" if panther else cls
 	var custom := AssetRegistry.scene("viewmodels", key)
@@ -1012,13 +1148,7 @@ static func view_model(cls: String, wmodel: String, panther := false, off := "")
 	var arm_mat := mat(sleeve_c, 0.6, look.metal if not panther else 0.0)
 	var hand_mat := mat(Color(0.08, 0.08, 0.09) if panther else Color(0.7, 0.52, 0.4))
 	var make_arm := func(side: float) -> Node3D:
-		var a := Node3D.new()
-		var sleeve := box(Vector3(0.09, 0.09, 0.4), arm_mat)
-		sleeve.position.z = 0.12
-		var hand := box(Vector3(0.08, 0.08, 0.1), hand_mat)
-		hand.position.z = -0.12
-		a.add_child(sleeve)
-		a.add_child(hand)
+		var a := fp_arm(cls, side, panther)
 		a.position = Vector3(side * 0.3, -0.34, -0.6)
 		return a
 	var R: Node3D = make_arm.call(1.0)

@@ -575,8 +575,10 @@ func _mat(tex: Array, uv_scale := Vector3.ONE, tint := Color.WHITE) -> StandardM
 	var m := StandardMaterial3D.new()
 	m.albedo_texture = tex[0]
 	m.albedo_color = tint
-	m.normal_enabled = true
+	m.normal_enabled = tex[1] != null
 	m.normal_texture = tex[1]
+	if tex.size() > 2 and tex[2] != null:
+		m.roughness_texture = tex[2]
 	m.normal_scale = 1.0
 	m.roughness = 0.92
 	m.uv1_scale = uv_scale
@@ -601,8 +603,9 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 	root.name = "Dungeon"
 	parent.add_child(root)
 	var deep := depth > 1
-	var wall_tex := Textures.stone_wall(deep)
-	var floor_tex := Textures.floor_tiles(deep)
+	# assets/textures/<이름>/ 에 사진 기반 재질이 있으면 교체 (wall, floor, grass, gravel, marble, roof)
+	var wall_tex := Textures.pick("wall", Textures.stone_wall(deep))
+	var floor_tex := Textures.pick("floor", Textures.floor_tiles(deep))
 	var wall_mat := _mat(wall_tex)
 	var floor_mat := _mat(floor_tex)
 	var ceil_mat := _mat(wall_tex, Vector3.ONE, Color(0.45, 0.42, 0.4))
@@ -680,8 +683,8 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		if v is Array:
 			v = v[0] if v.size() else ""
 		return AssetRegistry.mesh_at(v) if v is String else null
-	var plane: Mesh = tm.call("floor")
-	if plane == null:
+	var plane: Mesh = tm.call("floor") if Textures.pbr("floor").is_empty() else null
+	if plane == null and Textures.pbr("floor").is_empty():
 		plane = AssetRegistry.mesh("dungeon", "floor")
 	if plane == null:
 		plane = PlaneMesh.new()
@@ -694,7 +697,7 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		if pair[0].size():
 			var pm := PlaneMesh.new()
 			pm.size = Vector2(T, T)
-			var gm := _mat(Textures.ground(pair[1]), Vector3(pair[2], pair[2], 1.0))
+			var gm := _mat(Textures.pick(pair[1], Textures.ground(pair[1])), Vector3(pair[2], pair[2], 1.0))
 			if pair[1] == "marble":
 				gm.roughness = 0.35
 			pm.material = gm
@@ -750,7 +753,8 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		_build_outdoor(tree_x, bush_x, wall_tex)
 	# 테마 벽면: 바닥과 벽이 맞닿는 모든 경계에 벽 조각을 세움 (뒤의 블록 벽은 틈새 메우기용)
 	var faces: Array = th.get("wall_face", [])
-	var themed := faces.size() > 0 and AssetRegistry.mesh_at(faces[0]) != null
+	# 사진 기반 벽 재질이 있으면 KayKit 벽 조각 대신 그 재질의 벽을 그대로 보여 줌
+	var themed := faces.size() > 0 and AssetRegistry.mesh_at(faces[0]) != null and Textures.pbr("wall").is_empty()
 	var banner_x := []
 	if themed:
 		var by_mesh := {}

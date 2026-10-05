@@ -42,8 +42,8 @@ func _draw() -> void:
 	for z in dg.H:
 		for x in dg.W:
 			var i: int = z * dg.W + x
-			if ex[i] == 0:
-				continue
+			if ex[i] == 0 and not big:
+				continue # M 전체 지도는 가 보지 않은 곳까지 모두 보임
 			var v: int = dg.grid[i]
 			if v == Dungeon.EMPTY:
 				continue
@@ -65,18 +65,11 @@ func _draw() -> void:
 		if center_on_player and dx * dx + dz * dz > r2:
 			return
 		draw_circle(Vector2(dx, dz), rad, col)
-	for c in game.chests:
-		if ex[dg.idx(dg.to_tile(c.pos.x), dg.to_tile(c.pos.z))]:
-			dot.call(c.pos.x, c.pos.z, Color("#5a4a2a") if c.opened else Color("#ffcc44"), maxf(2.0, scale * 0.35))
-	for b in game.loot_bags:
-		if ex[dg.idx(dg.to_tile(b.pos.x), dg.to_tile(b.pos.z))]:
-			dot.call(b.pos.x, b.pos.z, Color("#ffe08a"), maxf(1.5, scale * 0.25))
+	# 상자·시체·적은 지도에 표시하지 않음 (눈으로 찾아야 함). 같은 편 모험가만 표시
 	for a in game.actors:
-		if a == p or not a.alive or a.extracted:
+		if a == p or not a.alive or a.extracted or a.kind == "monster" or game.hostile(p, a):
 			continue
-		if a.pos.distance_to(p.pos) > 30.0 or not dg.los(p.pos.x, p.pos.z, a.pos.x, a.pos.z):
-			continue
-		dot.call(a.pos.x, a.pos.z, Color("#ff5a3a") if a.kind == "bot" else Color("#cc3333"), maxf(2.0, scale * 0.35))
+		dot.call(a.pos.x, a.pos.z, Color("#5ab4ff"), maxf(2.0, scale * 0.35))
 	for po in game.portals:
 		var col := Color("#4ab8ff") if po.kind == "exit" else Color("#ff3a2a")
 		var dx: float = ox + po.pos.x / Dungeon.T * scale

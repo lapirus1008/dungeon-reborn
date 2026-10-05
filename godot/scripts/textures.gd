@@ -166,3 +166,40 @@ static func ground(kind: String) -> Array:
 	var out := [ImageTexture.create_from_image(albedo), ImageTexture.create_from_image(height)]
 	_cache[key] = out
 	return out
+
+
+
+# 사진 기반(PBR) 재질 교체: assets/textures/<이름>/ 에 파일을 넣으면 절차적 텍스처 대신 사용
+#  색: *diff* / *albedo* / *color* / *basecolor*   노멀(OpenGL): *nor_gl* / *normalgl* / *normal*   거칠기: *rough*   (jpg/png)
+#  반환: [albedo, normal, roughness(없으면 null)] 또는 빈 배열
+static func pbr(name: String) -> Array:
+	var key := "pbr_" + name
+	if _cache.has(key):
+		return _cache[key]
+	var dir := "res://assets/textures/%s" % name
+	var out := []
+	var da := DirAccess.open(dir)
+	if da != null:
+		var found := {"albedo": "", "normal": "", "rough": ""}
+		for f in da.get_files():
+			var lf := f.to_lower()
+			if lf.ends_with(".import") or not (lf.ends_with(".jpg") or lf.ends_with(".png")):
+				continue
+			if found.albedo == "" and ("diff" in lf or "albedo" in lf or "basecolor" in lf or "_color" in lf):
+				found.albedo = f
+			elif ("nor_gl" in lf or "normalgl" in lf) or (found.normal == "" and "normal" in lf and not "dx" in lf):
+				found.normal = f
+			elif found.rough == "" and "rough" in lf:
+				found.rough = f
+		if found.albedo != "":
+			var ld := func(f: String):
+				return load(dir + "/" + f) if f != "" else null
+			out = [ld.call(found.albedo), ld.call(found.normal), ld.call(found.rough)]
+	_cache[key] = out
+	return out
+
+
+# PBR 파일이 있으면 그것, 없으면 절차적 텍스처
+static func pick(name: String, fallback: Array) -> Array:
+	var p := pbr(name)
+	return p if p.size() else fallback

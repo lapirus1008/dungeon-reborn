@@ -396,7 +396,7 @@ func _build_bigmap() -> void:
 	bigmap.custom_minimum_size = Vector2(700, 700)
 	bigmap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(bigmap)
-	v.add_child(_centered(UI.label("M 닫기 · 파랑: 탈출 포탈 · 빨강: 심연 포탈 · 노랑: 상자", 13, UI.MUTED)))
+	v.add_child(_centered(UI.label("M 닫기 · 파랑: 탈출 포탈 · 빨강: 심연 포탈", 13, UI.MUTED)))
 	c.add_child(v)
 	bigmap_wrap.add_child(c)
 	bigmap_wrap.visible = false
