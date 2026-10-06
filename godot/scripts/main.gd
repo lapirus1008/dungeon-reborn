@@ -82,6 +82,8 @@ func _ready() -> void:
 		_mapshots.call_deferred(args[args.find("--mapshots") + 1])
 	elif args.has("--invshots"):
 		_invshots.call_deferred(args[args.find("--invshots") + 1])
+	elif args.has("--doortest"):
+		_doortest.call_deferred()
 	elif args.has("--invtest"):
 		for l in _inv_checks():
 			print("[invtest] ", l)
@@ -97,7 +99,7 @@ func _ready() -> void:
 func _setup_input() -> void:
 	var keys := {
 		"move_forward": [KEY_W], "move_back": [KEY_S], "move_left": [KEY_A], "move_right": [KEY_D],
-		"jump": [KEY_SPACE], "skill_q": [KEY_Q], "skill_e": [KEY_E],
+		"jump": [KEY_SPACE], "walk": [KEY_SHIFT], "crouch": [KEY_CTRL, KEY_C], "skill_q": [KEY_Q], "skill_e": [KEY_E],
 		"interact": [KEY_F], "inventory": [KEY_TAB, KEY_I], "map": [KEY_M],
 		"weapon1": [KEY_1], "weapon2": [KEY_2], "use3": [KEY_3], "use4": [KEY_4], "use5": [KEY_5], "torch": [KEY_G], "reload": [KEY_R], "menu": [KEY_ESCAPE],
 	}
@@ -489,6 +491,118 @@ func _shot(dir: String, name: String) -> void:
 	print("[shot] ", name)
 
 
+# 문: 건물 입구마다 생성, F를 1초 눌러 열기(0.55초 닫기), 닫히면 이동/시야/투사체 막음, AI는 밀어서 엶
+func _doortest() -> void:
+	await get_tree().create_timer(0.3).timeout
+	_test_char("fighter")
+	start_raid("clouseau_castle")
+	game.force_act = true
+	await _wait(1.0)
+	var g := game
+	var p := g.player
+	p.invuln = 999.0
+	for a in g.actors:
+		if a.kind == "monster" or a.kind == "bot":
+			a.stun = 999.0
+	var out := []
+	var dn: int = g.dungeon.doors.size()
+	var d: Dictionary = g.dungeon.doors[0]
+	var inw: Vector3 = d.inward
+	# 바깥쪽 1.6m에서 문을 바라봄
+	p.pos = d.pos - inw * 1.6
+	p.yaw = Actor.yaw_to(inw.x, inw.z)
+	var a0: Vector3 = d.pos - inw * 3.0
+	var b0: Vector3 = d.pos + inw * 3.0
+	var los_closed: bool = not g.dungeon.los(a0.x, a0.z, b0.x, b0.z)
+	# 닫힌 문을 지나가려 하면 막힘
+	var w: Vector3 = d.pos - inw * 1.0
+	for i in 30:
+		w = g.dungeon.resolve_circle(w + inw * 0.1, 0.4)
+	var blocked: bool = (w - d.pos).dot(inw) < 0.0
+	var prompt: String = g._prompt_for(g.find_interactable(p))
+	Input.action_press("interact")
+	await _wait(0.5)
+	var half: bool = not d.open
+	await _wait(0.7)
+	var opened: bool = d.open
+	await _wait(0.3)
+	var still_open: bool = d.open # F를 계속 누르고 있어도 바로 닫히지 않음
+	Input.action_release("interact")
+	await _wait(0.1)
+	var los_open: bool = g.dungeon.los(a0.x, a0.z, b0.x, b0.z)
+	w = d.pos - inw * 1.0
+	for i in 30:
+		w = g.dungeon.resolve_circle(w + inw * 0.1, 0.4)
+	var pass_ok: bool = (w - d.pos).dot(inw) > 0.5
+	Input.action_press("interact")
+	await _wait(0.75)
+	var closed: bool = not d.open
+	Input.action_release("interact")
+	await _wait(0.1)
+	out.append("문 %d개, 안내 '%s', 닫힘: 시야 막힘 %s 통과 막힘 %s · F 0.5초 그대로 %s, 1.2초 열림 %s, 계속 눌러도 유지 %s · 열림: 시야 %s 통과 %s · 닫기(0.75초) %s" % [
+		dn, prompt, "O" if los_closed else "X", "O" if blocked else "X", "O" if half else "X", "O" if opened else "X", "O" if still_open else "X",
+		"O" if los_open else "X", "O" if pass_ok else "X", "O" if closed else "X"])
+	# 상자: F 길게 (1.2초) 눌러야 열림
+	var ch = null
+	for c in g.chests:
+		if not c.opened:
+			ch = c
+			break
+	var chest_ok := false
+	if ch != null:
+		p.pos = g.dungeon.resolve_circle(ch.pos + Vector3(1.2, 0, 0), 0.4)
+		p.yaw = Actor.yaw_to(ch.pos.x - p.pos.x, ch.pos.z - p.pos.z)
+		await get_tree().process_frame
+		Input.action_press("interact")
+		await _wait(0.6)
+		var early: bool = not ch.opened
+		await _wait(0.9)
+		chest_ok = early and ch.opened and p.container == ch
+		Input.action_release("interact")
+		await get_tree().process_frame
+		g.close_container_for(p)
+	# AI가 닫힌 문을 밀면 열림
+	var mon = null
+	for a in g.actors:
+		if a.kind == "monster" and a.alive and not a.def.boss:
+			mon = a
+			break
+	var ai_ok := false
+	var d2: Dictionary = g.dungeon.doors[1]
+	if mon != null and not d2.open:
+		mon.stun = 0.0
+		for i in 12:
+			mon.pos = d2.pos - d2.inward * 0.5
+			mon.move_amt = 1.0
+			g._ai_doors(0.25)
+		ai_ok = d2.open
+	out.append("상자 F 1.2초 길게 열기 %s, 몬스터가 문을 밀어 엶 %s" % ["O" if chest_ok else "X", "O" if ai_ok else "X"])
+	# 걷기(Shift)/앉기(Ctrl): 느려지고, 앉으면 키·시점이 낮아지고, 몬스터가 등 뒤에서 알아채는 거리가 줄어듦
+	var mv := func(act: String) -> Array:
+		var p0: Vector3 = p.pos
+		if act != "":
+			Input.action_press(act)
+		Input.action_press("move_forward")
+		await _wait(0.6)
+		Input.action_release("move_forward")
+		var hr: float = p.hear_r
+		var h: float = p.height
+		var e: float = p.eye_height()
+		if act != "":
+			Input.action_release(act)
+		await _wait(0.2)
+		return [Vector2(p.pos.x - p0.x, p.pos.z - p0.z).length(), hr, h, e]
+	p.pos = g.dungeon.marks.spawns[0] if g.dungeon.marks.spawns.size() and g.dungeon.marks.spawns[0] is Vector3 else p.pos
+	var r0: Array = await mv.call("")
+	var r1: Array = await mv.call("walk")
+	var r2: Array = await mv.call("crouch")
+	out.append("이동 0.6초: 보통 %.1fm(소리 %.1fm), 걷기 %.1fm(소리 %.1fm), 앉기 %.1fm(소리 %.1fm, 키 %.2f, 눈높이 %.2f) %s" % [r0[0], r0[1], r1[0], r1[1], r2[0], r2[1], r2[2], r2[3],
+		"O" if r1[0] < r0[0] * 0.7 and r2[0] < r0[0] * 0.6 and r1[1] < r0[1] and r2[1] < r1[1] and r2[2] < 1.5 and r2[3] < r0[3] * 0.8 else "X"])
+	for l in out:
+		print("[doortest] ", l)
+	get_tree().quit()
+
+
 # 1인칭 손/방어/반격 빛/투척 포물선/횃불 화면 확인용
 func _fpshots(dir: String) -> void:
 	await get_tree().create_timer(0.5).timeout
@@ -542,6 +656,29 @@ func _fpshots(dir: String) -> void:
 	p.pitch = -0.35
 	await get_tree().create_timer(0.3).timeout
 	await _shot(dir, "fp_7_ground_torch")
+	# 문: 바깥에서 문 앞 (F 안내), F를 반쯤 누른 상태, 열린 뒤 실내
+	var d: Dictionary = g.dungeon.doors[2]
+	p.pos = d.pos - d.inward * 2.2
+	p.yaw = Actor.yaw_to(d.inward.x, d.inward.z)
+	p.pitch = 0.05
+	await get_tree().create_timer(0.4).timeout
+	await _shot(dir, "fp_8_door")
+	Input.action_press("interact")
+	await get_tree().create_timer(0.55).timeout
+	await _shot(dir, "fp_9_door_hold")
+	Input.action_release("interact")
+	g.toggle_door(d) # 소프트웨어 렌더링은 프레임이 낮아 길게 누르기가 오래 걸림
+	await get_tree().create_timer(1.2).timeout
+	await _shot(dir, "fp_10_door_open")
+	p.pos = d.pos + d.inward * 3.0
+	await get_tree().create_timer(0.4).timeout
+	await _shot(dir, "fp_11_inside")
+	# 성 외곽: 성벽을 멀리서
+	p.pos = d.pos - d.inward * 14.0
+	p.pos = g.dungeon.resolve_circle(p.pos, 0.4)
+	p.yaw = Actor.yaw_to(d.pos.x - p.pos.x, d.pos.z - p.pos.z) + 0.5
+	await get_tree().create_timer(0.5).timeout
+	await _shot(dir, "fp_12_exterior")
 	get_tree().quit()
 
 

@@ -14,6 +14,7 @@ const TREE := 4 # 야외 나무 (지나갈 수 없음)
 const A_IN := 0
 const A_OUT := 1
 const A_CATH := 2
+const INDOOR_LAYER := 2 # 실내 바닥: 달빛(방향광)이 비추지 않는 렌더 레이어
 
 var depth := 1
 var W := 46
@@ -585,6 +586,41 @@ func _segment_rooms(_r: RandomNumberGenerator) -> void:
 		rm.h = mx.y - mn.y + 1
 
 
+# 성 외곽 횃불: 건물 바깥 벽면에 4칸(16m)마다, 그리고 모든 출입문 양옆 (난수 없이 지도에서 정해짐)
+func _exterior_torches() -> void:
+	var have := {}
+	for z in H:
+		for x in W:
+			if get_t(x, z) != ROOM or area_at(x, z) != A_OUT:
+				continue
+			for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var wx: int = x + d.x
+				var wz: int = z + d.y
+				# 문 양옆: 이웃이 실내 바닥(출입구)이면, 출입구 옆 칸의 같은 벽면에 하나씩
+				if area_at(wx, wz) != A_OUT and get_t(wx, wz) in [ROOM, CORR]:
+					var side := Vector2i(d.y, d.x)
+					for s in [side, -side]:
+						var tx: int = x + s.x
+						var tz: int = z + s.y
+						if get_t(tx, tz) == ROOM and area_at(tx, tz) == A_OUT and get_t(tx + d.x, tz + d.y) == EMPTY:
+							_add_wall_torch(tx, tz, d, Vector3(-s.x, 0, -s.y) * (T * 0.5 - 0.7), have)
+					continue
+				if get_t(wx, wz) != EMPTY or is_wild(wx, wz):
+					continue
+				if (x + z) % 4 == 0:
+					_add_wall_torch(x, z, d, Vector3.ZERO, have)
+
+
+func _add_wall_torch(x: int, z: int, d: Vector2i, off: Vector3, have: Dictionary) -> void:
+	var key := Vector3i(x, z, d.x * 3 + d.y)
+	if have.has(key):
+		return
+	have[key] = true
+	var nrm := Vector3(d.x, 0, d.y)
+	var ct := center(x, z) + off
+	torches.append({"tx": x, "tz": z, "off": off, "pos": Vector3(ct.x + nrm.x * (T / 2.0 - 0.25), 3.2, ct.z + nrm.z * (T / 2.0 - 0.25)), "n": nrm})
+
+
 # 지도용 횃불과 소품
 func _decorate() -> void:
 	var cand := []
@@ -599,7 +635,10 @@ func _decorate() -> void:
 					cand.append([x, z, d])
 	var placed := {}
 	for c in cand:
-		if rng.randf() > 0.09:
+		# 실내는 횃불을 드물게 (어둡게 조심히 다니도록), 야외 벽면은 아래에서 일정 간격으로
+		var outside: bool = has_outdoor and area_at(c[0], c[1]) == A_OUT
+		var roll := rng.randf()
+		if outside or roll > (0.05 if has_outdoor else 0.09):
 			continue
 		var key := Vector2i(c[0] / 3, c[1] / 3)
 		if placed.has(key):
@@ -609,6 +648,8 @@ func _decorate() -> void:
 		var nrm := Vector3(d.x, 0, d.y)
 		var ct := center(c[0], c[1])
 		torches.append({"tx": c[0], "tz": c[1], "pos": Vector3(ct.x + nrm.x * (T / 2.0 - 0.25), 3.2, ct.z + nrm.z * (T / 2.0 - 0.25)), "n": nrm})
+	if has_outdoor:
+		_exterior_torches()
 	for rm in rooms:
 		for i in rng.randi_range(0, 2):
 			var t: Vector2i = rm.tiles[rng.randi() % rm.tiles.size()]
@@ -658,9 +699,17 @@ func _mat(tex: Array, uv_scale := Vector3.ONE, tint := Color.WHITE) -> StandardM
 	m.normal_texture = tex[1]
 	if tex.size() > 2 and tex[2] != null:
 		m.roughness_texture = tex[2]
-	m.normal_scale = 1.0
+	m.normal_scale = 1.35
 	m.roughness = 0.92
 	m.uv1_scale = uv_scale
+	# 요철: 높이맵 시차(폴리곤 추가 없이 벽돌·돌 틈이 움푹 들어가 보임)
+	if Textures.relief and tex.size() > 3 and tex[3] != null:
+		m.heightmap_enabled = true
+		m.heightmap_texture = tex[3]
+		m.heightmap_scale = 2.2
+		m.heightmap_deep_parallax = true
+		m.heightmap_min_layers = 4
+		m.heightmap_max_layers = 12
 	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 	return m
 
@@ -791,7 +840,9 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		plane.size = Vector2(T, T)
 		plane.material = floor_mat
 	if floors.size():
-		root.add_child(_multimesh(plane, floors))
+		var fmi := _multimesh(plane, floors)
+		fmi.layers = INDOOR_LAYER if has_outdoor else 1
+		root.add_child(fmi)
 	# 야외/성당 바닥
 	if out_floors.size() and not hv.is_empty():
 		_build_terrain(out_floors)
@@ -804,7 +855,10 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 			if pair[1] == "marble":
 				gm.roughness = 0.35
 			pm.material = gm
-			root.add_child(_multimesh(pm, pair[0]))
+			var omi := _multimesh(pm, pair[0])
+			if pair[1] == "marble":
+				omi.layers = INDOOR_LAYER # 성당 안: 달빛을 받지 않음
+			root.add_child(omi)
 	var has_pbr_ceil := Textures.pbr("ceiling").size() > 0
 	var cplane: Mesh = tm.call("ceiling") if not has_pbr_ceil else null
 	if cplane == null and not has_pbr_ceil:
@@ -1025,7 +1079,7 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		var n: Vector3 = t.n
 		if torch_mesh != null:
 			# 벽걸이 횃불 모델: 벽면에 붙이고, 불꽃은 횃불 끝에
-			var c := center(t.tx, t.tz)
+			var c: Vector3 = center(t.tx, t.tz) + t.get("off", Vector3.ZERO)
 			var mount := c + n * (T / 2.0 - 0.02) + Vector3(0, 2.15, 0)
 			sx.append(Transform3D(Basis(Vector3.UP, atan2(-n.x, -n.z)), mount))
 			t.pos = mount - n * 0.42 + Vector3(0, 0.72, 0) - Vector3(-n.x * 0.12, 0.1, -n.z * 0.12)
@@ -1052,6 +1106,7 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		flame_mm = fmi.multimesh
 		root.add_child(fmi)
 	_chunkify()
+	_build_doors()
 
 
 # 성능: 지도 전체를 한 덩어리로 그리면 화면 밖·먼 곳까지 매 프레임 그리게 됨.
@@ -1079,6 +1134,7 @@ func _chunkify() -> void:
 		for key in groups:
 			var part := _multimesh(mm.mesh, groups[key])
 			part.cast_shadow = mi.cast_shadow
+			part.layers = mi.layers
 			part.material_override = mi.material_override
 			part.visibility_range_end = VIEW_RANGE
 			part.visibility_range_end_margin = 10.0
@@ -1467,6 +1523,8 @@ var dyn_blocks: Array = [] # 돌기둥 등 일시적인 원형 장애물 [[pos, 
 
 
 func resolve_circle(pos: Vector3, r: float) -> Vector3:
+	if closed_n > 0:
+		pos = _push_doors(pos, r)
 	pos = _push_blocks(pos, r, dyn_blocks)
 	if static_blocks.size():
 		pos = _push_blocks(pos, r, static_blocks)
@@ -1536,6 +1594,8 @@ func _resolve_tiles(pos: Vector3, r: float) -> Vector3:
 
 
 func los(ax: float, az: float, bx: float, bz: float) -> bool:
+	if closed_n > 0 and door_between(Vector3(ax, 0, az), Vector3(bx, 0, bz)):
+		return false
 	var dx := bx - ax
 	var dz := bz - az
 	var d := sqrt(dx * dx + dz * dz)
@@ -1655,3 +1715,203 @@ func random_point_in_room(room: Dictionary, margin: int = 1) -> Vector3:
 			c.z += rng.randf_range(-1.0, 1.0)
 			return c
 	return center(int(room.cx), int(room.cz))
+
+
+# ------------------------------------------------------------------ 문
+# 건물 입구(야외 ↔ 실내/성당 타일 경계)마다 4m 폭 양문. 닫혀 있으면 이동·시야·투사체를 막음.
+# 위치는 지도에서 정해지므로 서버/클라이언트가 같은 목록을 가짐 (열림 상태만 동기화)
+# door: {id, axis(0: x=coord 경계, 1: z=coord 경계), coord, lo, hi, pos, open, node, L, R, swing}
+var doors: Array = []
+var closed_n := 0
+const DOOR_H := 3.6
+
+
+func _build_doors() -> void:
+	doors.clear()
+	if not has_outdoor:
+		return
+	var wood := _pbr_or("wood", _mat(Textures.stone_wall(false), Vector3.ONE, Color(0.35, 0.23, 0.12)), Vector3(1, 2, 1), Color(0.8, 0.65, 0.5))
+	var iron := StandardMaterial3D.new()
+	iron.albedo_color = Color(0.13, 0.12, 0.12)
+	iron.metallic = 0.8
+	iron.roughness = 0.55
+	for z in H:
+		for x in W:
+			if not _walkable_door(x, z):
+				continue
+			for d in [Vector2i(1, 0), Vector2i(0, 1)]:
+				var nx: int = x + d.x
+				var nz: int = z + d.y
+				if not _walkable_door(nx, nz):
+					continue
+				var a := area_at(x, z)
+				var b := area_at(nx, nz)
+				if a == b or (a != A_OUT and b != A_OUT):
+					continue
+				var door := {"id": doors.size(), "kind": "door", "name": "문", "open": false, "swing": 0.0}
+				if d.x == 1:
+					door.axis = 0
+					door.coord = (x + 1) * T
+					door.lo = z * T
+					door.hi = (z + 1) * T
+					door.pos = Vector3(door.coord, 0, (z + 0.5) * T)
+				else:
+					door.axis = 1
+					door.coord = (z + 1) * T
+					door.lo = x * T
+					door.hi = (x + 1) * T
+					door.pos = Vector3((x + 0.5) * T, 0, door.coord)
+				door.pos.y = minf(ground_y(door.pos.x - 0.1 * d.x, door.pos.z - 0.1 * d.y), ground_y(door.pos.x + 0.1 * d.x, door.pos.z + 0.1 * d.y))
+				# 안쪽(실내) 방향: 문은 안쪽으로 열림
+				door.inward = Vector3(d.x, 0, d.y) * (1.0 if b != A_OUT else -1.0)
+				_door_node(door, wood, iron)
+				doors.append(door)
+	closed_n = doors.size()
+
+
+# 건물 안(실내/성당)이면 달빛을 받지 않는 레이어로: 실내에 들어간 캐릭터·뷰모델·상자가 달빛에 밝게 뜨지 않게
+func indoor_at(p: Vector3) -> bool:
+	return has_outdoor and area_at(to_tile(p.x), to_tile(p.z)) != A_OUT
+
+
+static func set_indoor(node: Node3D, indoor: bool) -> void:
+	if node == null or node.get_meta("indoor", false) == indoor:
+		return
+	node.set_meta("indoor", indoor)
+	var lay := INDOOR_LAYER if indoor else 1
+	for n in node.find_children("*", "VisualInstance3D", true, false):
+		(n as VisualInstance3D).layers = lay
+	if node is VisualInstance3D:
+		(node as VisualInstance3D).layers = lay
+
+
+func _walkable_door(x: int, z: int) -> bool:
+	var g := get_t(x, z)
+	return g == ROOM or g == CORR
+
+
+func _door_node(door: Dictionary, wood: Material, iron: Material) -> void:
+	var n := Node3D.new()
+	n.position = door.pos
+	# 문짝 평면이 경계선을 따라가도록: axis 0이면 z 방향으로 늘어섬
+	n.rotation.y = PI / 2 if door.axis == 0 else 0.0
+	root.add_child(n)
+	var leaves := []
+	for side in [-1.0, 1.0]:
+		var hinge := Node3D.new()
+		hinge.position = Vector3(side * T * 0.5, 0, 0)
+		n.add_child(hinge)
+		var leaf := Node3D.new()
+		hinge.add_child(leaf)
+		var w := T * 0.5 - 0.04
+		var plank := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = Vector3(w, DOOR_H, 0.14)
+		plank.mesh = bm
+		plank.material_override = wood
+		plank.position = Vector3(-side * (w * 0.5 + 0.02), DOOR_H * 0.5, 0)
+		leaf.add_child(plank)
+		# 쇠띠 3줄 + 손잡이 고리
+		for hy in [0.5, DOOR_H * 0.5, DOOR_H - 0.5]:
+			var band := MeshInstance3D.new()
+			var bb := BoxMesh.new()
+			bb.size = Vector3(w * 0.92, 0.12, 0.18)
+			band.mesh = bb
+			band.material_override = iron
+			band.position = Vector3(-side * (w * 0.5 + 0.02), hy, 0)
+			leaf.add_child(band)
+		var ring := MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 0.07
+		tm.outer_radius = 0.11
+		tm.rings = 8
+		tm.ring_segments = 6
+		ring.mesh = tm
+		ring.material_override = iron
+		ring.rotation.x = PI / 2
+		ring.position = Vector3(-side * (w - 0.25), 1.2, 0.12)
+		leaf.add_child(ring)
+		leaves.append(hinge)
+	# 문틀 위 상인방 (문 위쪽 벽과 이어짐)
+	var lintel := MeshInstance3D.new()
+	var lb := BoxMesh.new()
+	lb.size = Vector3(T + 0.3, 0.35, 0.4)
+	lintel.mesh = lb
+	lintel.material_override = wood
+	lintel.position = Vector3(0, DOOR_H + 0.17, 0)
+	n.add_child(lintel)
+	door.node = n
+	door.leaves = leaves
+	# 열리는 방향: 문 노드의 로컬 +z가 inward와 같으면 +, 아니면 -
+	var local_z := n.transform.basis.z
+	door.dir_sign = 1.0 if local_z.dot(door.inward) > 0.0 else -1.0
+
+
+func set_door_open(id: int, open: bool) -> void:
+	if id < 0 or id >= doors.size():
+		return
+	var d: Dictionary = doors[id]
+	if d.open == open:
+		return
+	d.open = open
+	closed_n += -1 if open else 1
+
+
+# 문짝 회전 애니메이션 (열림 0 → 1)
+func animate_doors(dt: float) -> void:
+	for d in doors:
+		var target := 1.0 if d.open else 0.0
+		if d.swing == target:
+			continue
+		d.swing = move_toward(d.swing, target, dt * 2.5)
+		var e: float = d.swing * d.swing * (3.0 - 2.0 * d.swing)
+		var ang: float = e * deg_to_rad(95.0) * d.dir_sign
+		d.leaves[0].rotation.y = -ang
+		d.leaves[1].rotation.y = ang
+
+
+func _push_doors(pos: Vector3, r: float) -> Vector3:
+	var rr := r + 0.1
+	for d in doors:
+		if d.open:
+			continue
+		if d.axis == 0:
+			if pos.z < d.lo - rr or pos.z > d.hi + rr or absf(pos.x - d.coord) >= rr:
+				continue
+			pos.x = d.coord + (rr if pos.x >= d.coord else -rr)
+		else:
+			if pos.x < d.lo - rr or pos.x > d.hi + rr or absf(pos.z - d.coord) >= rr:
+				continue
+			pos.z = d.coord + (rr if pos.z >= d.coord else -rr)
+	return pos
+
+
+# a→b 선분이 닫힌 문을 지나는지
+func door_between(a: Vector3, b: Vector3) -> bool:
+	for d in doors:
+		if d.open:
+			continue
+		var c: float = d.coord
+		var pa: float = a.x if d.axis == 0 else a.z
+		var pb: float = b.x if d.axis == 0 else b.z
+		if (pa - c) * (pb - c) > 0.0 or pa == pb:
+			continue
+		var t := (c - pa) / (pb - pa)
+		var q: float = lerpf(a.z, b.z, t) if d.axis == 0 else lerpf(a.x, b.x, t)
+		if q >= d.lo and q <= d.hi:
+			# 높이: 문 위로 넘어가는 투사체는 통과
+			var y := lerpf(a.y, b.y, t)
+			if y <= d.pos.y + DOOR_H + 0.3:
+				return true
+	return false
+
+
+func door_near(p: Vector3, max_d: float):
+	var best = null
+	var bd := max_d
+	for d in doors:
+		var dd := Vector2(d.pos.x - p.x, d.pos.z - p.z).length()
+		if dd < bd:
+			bd = dd
+			best = d
+	return best

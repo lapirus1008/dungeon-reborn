@@ -113,7 +113,11 @@ func sense(rng: float):
 		if not game.dungeon.los(pos.x, pos.z, a.pos.x, a.pos.z):
 			continue
 		var ang := absf(angle_difference(yaw, yaw_to(a.pos.x - pos.x, a.pos.z - pos.z)))
-		if ang > 1.9 and d > 6.0:
+		# 등 뒤는 소리로만: 천천히 걷거나 앉아서 움직이면 아주 가까이 가야 알아챔
+		if ang > 1.9 and d > a.hear_r:
+			continue
+		# 앉아 있으면 멀리서는 잘 안 보임
+		if a.crouch and d > rng * 0.6:
 			continue
 		best = a
 		bd = d
@@ -128,6 +132,12 @@ func animate(dt: float) -> void:
 	r.node.visible = visible and _stealth_visible() and not mimic_form
 	r.node.position = pos
 	r.node.rotation.y = yaw
+	if game.dungeon.has_outdoor:
+		Dungeon.set_indoor(r.node, game.dungeon.indoor_at(pos))
+	# 앉은 모험가: 몸을 낮춤
+	var sy := 0.72 if crouch else 1.0
+	if r.node.scale.y != sy:
+		r.node.scale = Vector3(1.0, sy, 1.0)
 	_update_mimic_box()
 	if not alive:
 		death_t += dt

@@ -3,6 +3,7 @@ class_name Textures
 extends RefCounted
 
 static var _cache := {}
+static var relief := true # 높이맵 요철(시차) 사용 — 그래픽 품질 낮음이면 끔
 
 
 static func _noise_img(size: int, freq: float, seed_v: int) -> Image:
@@ -180,7 +181,7 @@ static func pbr(name: String) -> Array:
 	var out := []
 	var da := DirAccess.open(dir)
 	if da != null:
-		var found := {"albedo": "", "normal": "", "rough": ""}
+		var found := {"albedo": "", "normal": "", "rough": "", "height": ""}
 		for f in da.get_files():
 			var lf := f.to_lower()
 			if lf.ends_with(".import") or not (lf.ends_with(".jpg") or lf.ends_with(".png")):
@@ -191,10 +192,12 @@ static func pbr(name: String) -> Array:
 				found.normal = f
 			elif found.rough == "" and "rough" in lf:
 				found.rough = f
+			elif found.height == "" and ("disp" in lf or "height" in lf):
+				found.height = f
 		if found.albedo != "":
 			var ld := func(f: String):
 				return load(dir + "/" + f) if f != "" else null
-			out = [ld.call(found.albedo), ld.call(found.normal), ld.call(found.rough)]
+			out = [ld.call(found.albedo), ld.call(found.normal), ld.call(found.rough), ld.call(found.height)]
 	_cache[key] = out
 	return out
 

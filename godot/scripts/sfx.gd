@@ -108,14 +108,16 @@ func _build() -> void:
 	streams["death"] = _to_wav(_mix(_tone(0.7, 200, 40, 0.6, "saw"), _noise(0.5, 0.06, 0.02, 1.5)))
 	streams["bell"] = _to_wav(_mix(_tone(2.5, 220, 218, 0.4), _tone(2.5, 440, 438, 0.2)))
 	streams["step"] = _to_wav(_noise(0.07, 0.08, 0.04, 0.7))
+	streams["door"] = _to_wav(_mix(_tone(0.7, 260, 180, 0.18, "saw"), _noise(0.5, 0.1, 0.05, 0.5))) # 삐걱
+	streams["door_shut"] = _to_wav(_mix(_tone(0.25, 90, 50, 0.6, "square"), _noise(0.2, 0.2, 0.05, 1.2))) # 쿵
 	streams["ui"] = _to_wav(_tone(0.05, 700, 700, 0.18, "tri"))
 
 
 # dist: 청자(플레이어)와의 거리, -1이면 감쇠 없음
-func play(name: String, dist: float = -1.0, pitch_var := 0.06) -> void:
+func play(name: String, dist: float = -1.0, pitch_var := 0.06, vol := 1.0) -> void:
 	if not streams.has(name):
 		return
-	var v := master_volume
+	var v := master_volume * vol
 	if dist >= 0.0:
 		v *= maxf(0.0, 1.0 - dist / 35.0)
 	if v <= 0.01:

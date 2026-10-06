@@ -16,7 +16,7 @@ SLOTS = {
     "wood": "medieval_wood",             # 의자·통·나무 소품
     "rock": "rock_wall_08",              # 바위
 }
-MAPS = {"Diffuse": "diff", "nor_gl": "nor_gl", "Rough": "rough"}
+MAPS = {"Diffuse": "diff", "nor_gl": "nor_gl", "Rough": "rough", "Displacement": "disp"}  # disp: 요철(시차) 높이맵
 UA = {"User-Agent": "dungeon-reborn-asset-fetch/1.0"}
 
 
@@ -30,8 +30,10 @@ for slot, aid in SLOTS.items():
     os.makedirs(d, exist_ok=True)
     files = json.load(get(f"https://api.polyhaven.com/files/{aid}"))
     for key, short in MAPS.items():
-        url = files[key]["1k"]["jpg"]["url"]
-        out = os.path.join(d, f"{aid}_{short}_1k.jpg")
+        if key not in files:
+            continue
+        url = files[key]["1k"]["png" if key == "Displacement" and "jpg" not in files[key]["1k"] else "jpg"]["url"]
+        out = os.path.join(d, f"{aid}_{short}_1k." + url.rsplit(".", 1)[1])
         if not os.path.exists(out):
             with open(out, "wb") as fo:
                 fo.write(get(url).read())

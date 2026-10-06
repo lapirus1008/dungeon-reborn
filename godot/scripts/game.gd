@@ -203,6 +203,7 @@ func build_level(d: int) -> void:
 	if online():
 		seed(level_seed + d)
 	dungeon = Dungeon.new(d, level_seed + d if online() else 0, map_id)
+	Textures.relief = quality != "low"
 	dungeon.build(world, false)
 	_outdoor_env()
 	_reset_lists(d)
@@ -404,9 +405,14 @@ func _outdoor_env() -> void:
 	e.background_mode = Environment.BG_SKY
 	e.fog_light_color = Color(0.06, 0.07, 0.1)
 	e.fog_sky_affect = 0.35
+	# 주변광을 낮춰 횃불·달빛이 닿지 않는 곳(건물 안)은 거의 어둡게
+	e.ambient_light_color = Color(0.2, 0.22, 0.3)
+	e.ambient_light_energy = 0.16
 	moon = DirectionalLight3D.new()
 	moon.light_color = Color(0.62, 0.7, 0.95)
-	moon.light_energy = 0.45
+	moon.light_energy = 0.55
+	# 실내 바닥은 달빛을 받지 않음 (그림자를 끈 낮음 품질에서도 실내가 어두움)
+	moon.light_cull_mask = 0xFFFFF & ~Dungeon.INDOOR_LAYER
 	moon.rotation = Vector3(deg_to_rad(-38.0), deg_to_rad(35.0), 0.0)
 	moon.shadow_enabled = quality != "low" # 낮음: 달빛 그림자 끔 (가장 큰 부하)
 	moon.directional_shadow_max_distance = 45.0
@@ -519,6 +525,7 @@ func spawn_chest(room: Dictionary, tier: int, luck: float) -> void:
 	var count := 6 if tier == 2 else (randi_range(3, 4) if tier == 1 else randi_range(1, 3))
 	var nm := "황금 보물상자" if tier == 2 else ("장식된 상자" if tier == 1 else "나무 상자")
 	var pk := Inv.pack_container(Data.roll_loot(count, luck + tier))
+	Dungeon.set_indoor(node, dungeon.indoor_at(p))
 	chests.append({"id": chests.size(), "pos": p, "rot": node.rotation.y, "node": node, "tier": tier, "room": room, "opened": false, "items": pk.items, "gw": pk.gw, "gh": pk.gh, "name": nm, "claimed_by": null, "kind": "chest"})
 
 
@@ -889,7 +896,8 @@ func update_projectiles(dt: float) -> void:
 				hit_pillar(pil, p.dmg)
 				_projectile_impact(p, pp - vel.normalized() * 0.2, null)
 				break
-			if dungeon.is_solid(pp.x, pp.z) or pp.y < dungeon.ground_y(pp.x, pp.z) + 0.02 or (pp.y > Dungeon.WALL_H - 0.05 and dungeon.area_at(dungeon.to_tile(pp.x), dungeon.to_tile(pp.z)) != Dungeon.A_OUT):
+			if dungeon.is_solid(pp.x, pp.z) or pp.y < dungeon.ground_y(pp.x, pp.z) + 0.02 or (pp.y > Dungeon.WALL_H - 0.05 and dungeon.area_at(dungeon.to_tile(pp.x), dungeon.to_tile(pp.z)) != Dungeon.A_OUT) \
+					or (dungeon.closed_n > 0 and dungeon.door_between(pp - vel * sdt, pp)):
 				done = true
 				p.vel = vel
 				if p.kind in ["arrow", "knife"]:
@@ -1034,7 +1042,7 @@ func aim_point(origin: Vector3, dir: Vector3, max_d: float, who = null, on_groun
 		var tx := dungeon.to_tile(n.x)
 		var tz := dungeon.to_tile(n.z)
 		var g := dungeon.get_t(tx, tz)
-		if g == Dungeon.EMPTY or n.y <= dungeon.ground_y(n.x, n.z):
+		if g == Dungeon.EMPTY or n.y <= dungeon.ground_y(n.x, n.z) or (dungeon.closed_n > 0 and dungeon.door_between(p, n)):
 			break
 		if dungeon.area_at(tx, tz) != Dungeon.A_OUT and n.y >= dungeon.ceiling_y(n.x, n.z) - 0.05:
 			break
@@ -2322,7 +2330,7 @@ func find_interactable(pl = null):
 	var f := Actor.fwd(pl.yaw)
 	var best = null
 	var bs := -1e9
-	for list in [chests, loot_bags, fixtures]:
+	for list in [chests, loot_bags, fixtures, dungeon.doors]:
 		for o in list:
 			var dx: float = o.pos.x - pl.pos.x
 			var dz: float = o.pos.z - pl.pos.z
@@ -2348,18 +2356,40 @@ func _item_count(o: Dictionary) -> int:
 func _prompt_for(o) -> String:
 	if o == null:
 		return ""
-	if o.kind == "chest" and not o.opened:
-		return "[F] 길게 눌러 %s 열기" % o.name
-	if o.kind == "item":
-		return "[F] 줍기: %s" % o.name
 	match o.kind:
+		"door":
+			return "F|문 닫기" if o.open else "F|문 열기"
+		"chest":
+			return "F|%s 열기" % o.name if not o.opened else "F|%s 살펴보기 (%d)" % [o.name, _item_count(o)]
+		"item":
+			return "F|줍기: %s" % o.name
 		"shrine":
-			return "%s (사용함)" % o.name if o.used else "[F] 길게 눌러 %s 사용 (체력 회복)" % o.name
+			return "%s (사용함)" % o.name if o.used else "F|%s 사용 (체력 회복)" % o.name
 		"stone":
-			return "[F] 길게 눌러 %s 사용 (쓰러진 파티원 부활)" % o.name
+			return "F|%s 사용 (쓰러진 파티원 부활)" % o.name
 		"stairs":
 			return "%s — 2층 준비 중" % o.name
-	return "[F] %s 살펴보기 (%d)" % [o.name, _item_count(o)]
+		"corpse":
+			return "F|%s 뒤지기 (%d)" % [o.name, _item_count(o)]
+	return "F|%s 살펴보기 (%d)" % [o.name, _item_count(o)]
+
+
+# F를 이만큼 누르고 있어야 상호작용이 끝남 (닫기는 열기보다 빠름)
+func _hold_time(o) -> float:
+	match o.kind:
+		"door":
+			return 0.55 if o.open else 1.0
+		"chest":
+			return 0.4 if o.opened else 1.2
+		"stone":
+			return 3.0
+		"shrine":
+			return 1.5
+		"item":
+			return 0.3
+		"corpse":
+			return 1.0
+	return 0.6
 
 
 func update_interact(dt: float) -> void:
@@ -2373,7 +2403,10 @@ func _interact_for(p, dt: float) -> void:
 	# 서버의 원격 플레이어: F를 누르고 있지 않고 열린 창도 없으면 주변 물건을 찾을 필요가 없음
 	if not local and p.container == null and not p.inp.pressed("interact"):
 		p.interact_t = 0.0
+		p.f_lock = false
 		return
+	if not p.inp.pressed("interact"):
+		p.f_lock = false # 상호작용이 끝난 뒤에는 F를 한 번 떼야 다음 것을 시작
 	var o = find_interactable(p)
 	if local:
 		interact_target = o
@@ -2385,6 +2418,7 @@ func _interact_for(p, dt: float) -> void:
 	if p.inp.just_pressed("interact") and p.container != null and not menu:
 		close_container_for(p)
 		p.interact_t = 0.0
+		p.f_lock = true
 		if local and hud != null:
 			hud.prompt(_prompt_for(o))
 		return
@@ -2395,36 +2429,86 @@ func _interact_for(p, dt: float) -> void:
 		return
 	if local and hud != null:
 		hud.prompt(_prompt_for(o))
-	if o.kind in ["shrine", "stone"] and not o.get("used", false):
-		if p.inp.pressed("interact") and not panel and not menu:
-			p.interact_t += dt
-			var need := 1.5 if o.kind == "shrine" else 3.0
-			channel_for(p, "%s 사용 중..." % o.name, p.interact_t / need)
-			if p.interact_t >= need:
-				p.interact_t = 0.0
-				if is_auth():
-					_use_fixture(p, o)
-		else:
-			p.interact_t = 0.0
-	elif o.kind in ["shrine", "stone", "stairs"]:
-		if p.inp.just_pressed("interact") and o.kind == "stairs" and is_auth():
+	if o.kind == "stairs":
+		if p.inp.just_pressed("interact") and is_auth():
 			_use_fixture(p, o)
-	elif o.kind == "chest" and not o.opened:
-		if p.inp.pressed("interact") and not panel and not menu:
-			p.interact_t += dt
-			channel_for(p, "상자 여는 중...", p.interact_t / 1.2)
-			if p.interact_t >= 1.2:
-				p.interact_t = 0.0
-				open_chest(o, p)
-				open_container_for(p, o)
-		else:
+		return
+	if o.kind == "shrine" and o.get("used", false):
+		p.interact_t = 0.0
+		return
+	if p.inp.pressed("interact") and not panel and not menu and not p.f_lock and p.container == null:
+		if p.interact_obj != o:
+			p.interact_obj = o
 			p.interact_t = 0.0
-	elif p.inp.just_pressed("interact") and not menu:
-		if o.kind == "item":
+		p.interact_t += dt
+		var need := _hold_time(o)
+		channel_for(p, "F", p.interact_t / need)
+		if p.interact_t >= need:
+			p.interact_t = 0.0
+			p.f_lock = true
+			_finish_interact(p, o)
+	else:
+		p.interact_t = 0.0
+
+
+func _finish_interact(p, o) -> void:
+	match o.kind:
+		"door":
+			toggle_door(o)
+		"chest":
+			if not o.opened:
+				open_chest(o, p)
+			open_container_for(p, o)
+		"item":
 			if is_auth():
 				pickup_item(p, o)
-		else:
+		"shrine", "stone":
+			if is_auth():
+				_use_fixture(p, o)
+		_:
 			open_container_for(p, o)
+
+
+# ------------------------------------------------------------------ 문
+func toggle_door(d: Dictionary) -> void:
+	if not is_auth():
+		return
+	dungeon.set_door_open(d.id, not d.open)
+	sfx("door" if d.open else "door_shut", d.pos + Vector3(0, 1.5, 0))
+
+
+# AI(몬스터/모험가)는 닫힌 문 앞에서 잠시 밀다가 열고 지나감 (삐걱 소리가 남)
+var door_ai_t := 0.0
+
+
+func _ai_doors(dt: float) -> void:
+	if dungeon.closed_n <= 0:
+		return
+	door_ai_t -= dt
+	if door_ai_t > 0.0:
+		return
+	door_ai_t = 0.25
+	for d in dungeon.doors:
+		if d.open:
+			d.erase("push")
+			continue
+		var pushing := false
+		for a in actors:
+			if a is Player or not a.alive or a.extracted:
+				continue
+			if absf(a.pos.x - d.pos.x) > 2.6 or absf(a.pos.z - d.pos.z) > 2.6:
+				continue
+			var off: float = (a.pos.x - d.coord) if d.axis == 0 else (a.pos.z - d.coord)
+			if absf(off) < a.radius + 0.45 and a.move_amt > 0.05:
+				pushing = true
+				break
+		if pushing:
+			d["push"] = d.get("push", 0.0) + 0.25
+			if d.push >= 1.25:
+				d.erase("push")
+				toggle_door(d)
+		else:
+			d.erase("push")
 
 
 # ------------------------------------------------------------------ 메인 루프
@@ -2477,6 +2561,8 @@ func _process(delta: float) -> void:
 			p.update(dt)
 	_t = _pt("플레이어", _t)
 	update_interact(dt)
+	_ai_doors(dt)
+	dungeon.animate_doors(dt)
 	_t = _pt("상호작용", _t)
 	# 플레이어에게서 45m 넘게 떨어진 몬스터·봇은 4프레임에 한 번만 (모아 둔 시간으로) 갱신
 	lod_frame += 1
@@ -2501,6 +2587,7 @@ func _process(delta: float) -> void:
 	separate()
 	_t = _pt("밀어내기", _t)
 	_draw_actors(dt)
+	_footsteps(dt)
 	_t = _pt("액터 그리기/애니", _t)
 	update_projectiles(dt)
 	update_zones(dt)
@@ -2570,6 +2657,25 @@ func _finish_raid() -> void:
 
 
 # 캐릭터 표시: 보이지 않는 캐릭터는 그리지 않음 (멀거나 벽 너머)
+# 다른 모험가의 발소리: 가까울수록 크게. 천천히 걷기/앉기면 작게, 은신이면 없음
+func _footsteps(dt: float) -> void:
+	if hud == null or player == null:
+		return
+	for a in actors:
+		if a == player or not a.alive or not (a.kind in ["player", "bot"]) or a.stealth > 0.0:
+			continue
+		var sp := Vector2(a.last_vel.x, a.last_vel.z).length()
+		if sp < 0.3:
+			continue
+		var acc: float = a.get_meta("step_acc", 0.0) - dt * sp
+		if acc <= 0.0:
+			acc = 2.6
+			var d: float = a.pos.distance_to(player.pos)
+			if d < 25.0:
+				Sfx.play("step", d * 1.4, 0.15, 0.15 if a.crouch else (0.3 if a.quiet else 0.9))
+		a.set_meta("step_acc", acc)
+
+
 func _draw_actors(dt: float) -> void:
 	cull_t -= dt
 	var do_cull := cull_t <= 0.0
@@ -2746,7 +2852,8 @@ func throw_arc(c) -> Array:
 		var np: Vector3 = p + v * sdt
 		acc += np.distance_to(p)
 		p = np
-		var stop := dungeon.is_solid(p.x, p.z) or p.y < dungeon.ground_y(p.x, p.z) + 0.02 or (p.y > Dungeon.WALL_H - 0.05 and dungeon.area_at(dungeon.to_tile(p.x), dungeon.to_tile(p.z)) != Dungeon.A_OUT)
+		var stop := dungeon.is_solid(p.x, p.z) or p.y < dungeon.ground_y(p.x, p.z) + 0.02 or (p.y > Dungeon.WALL_H - 0.05 and dungeon.area_at(dungeon.to_tile(p.x), dungeon.to_tile(p.z)) != Dungeon.A_OUT) \
+			or (dungeon.closed_n > 0 and dungeon.door_between(p - v * sdt, p))
 		if not stop and p.y < PILLAR_H:
 			for b in dungeon.dyn_blocks:
 				var bp: Vector3 = b[0]
@@ -2935,6 +3042,10 @@ func _pack_actor(out: PackedFloat32Array, a) -> void:
 		f |= 64
 	if a.mimic_form:
 		f |= 128
+	if a.crouch:
+		f |= 256
+	if a.quiet:
+		f |= 512
 	var mv: float = a.move_amt
 	var atk: float = a.attack_anim
 	if a is Player:
@@ -2946,6 +3057,11 @@ func _pack_actor(out: PackedFloat32Array, a) -> void:
 
 # 서버 -> 각 클라이언트 (초당 20회). UDP 한 패킷(MTU)에 들어가도록 액터를 나눠 보냄
 func _send_snapshots() -> void:
+	# 열린 문 번호 목록
+	var door_bits := PackedInt32Array()
+	for d in dungeon.doors:
+		if d.open:
+			door_bits.append(d.id)
 	var zs := []
 	for z in zones:
 		zs.append([z.id, z.kind, z.pos, z.radius])
@@ -2969,7 +3085,7 @@ func _send_snapshots() -> void:
 		var projs := PackedFloat32Array()
 		for p in near:
 			projs.append_array([p.id, PROJ_KINDS.find(p.kind), p.pos.x, p.pos.y, p.pos.z, p.vel.x, p.vel.y, p.vel.z, 1.0 if p.stuck > 0.0 else 0.0, p.gravity])
-		Net.send_snap(pl.peer_id, {"t": time_left, "a": acts.slice(0, first), "z": zs}, pl.net_state())
+		Net.send_snap(pl.peer_id, {"t": time_left, "a": acts.slice(0, first), "z": zs, "dr": door_bits}, pl.net_state())
 		Net.send_projs(pl.peer_id, projs)
 		var i := first
 		while i < acts.size():
@@ -3014,6 +3130,7 @@ func start_client(info: Dictionary, hud_node) -> void:
 	_make_env(depth > 1)
 	map_id = info.get("map", map_id)
 	dungeon = Dungeon.new(depth, level_seed + depth, map_id)
+	Textures.relief = quality != "low"
 	dungeon.build(world, false)
 	_outdoor_env()
 	_reset_lists(depth)
@@ -3035,6 +3152,7 @@ func start_client(info: Dictionary, hud_node) -> void:
 		node.position = c[1]
 		node.rotation.y = c[2]
 		world.add_child(node)
+		Dungeon.set_indoor(node, dungeon.indoor_at(c[1]))
 		var ch := {"id": c[0], "pos": c[1], "node": node, "tier": c[3], "name": c[4], "opened": c[5], "items": [], "kind": "chest"}
 		chests.append(ch)
 		if c[5]:
@@ -3081,8 +3199,10 @@ func _process_client(dt: float) -> void:
 		if a != player:
 			a.update(dt)
 	_draw_actors(dt)
+	_footsteps(dt)
 	_client_projectiles(dt)
 	_sync_blocks()
+	dungeon.animate_doors(dt)
 	for id in net_zones:
 		var z: Dictionary = net_zones[id]
 		z.node.position = z.pos
@@ -3136,6 +3256,12 @@ func net_snapshot(w: Dictionary, me: Dictionary) -> void:
 		return
 	time_left = w.t
 	net_actor_chunk(w.a)
+	if w.has("dr") and dungeon.doors.size():
+		var opened := {}
+		for id in w.dr:
+			opened[id] = true
+		for d in dungeon.doors:
+			dungeon.set_door_open(d.id, opened.has(d.id))
 	# 지속 구역
 	var zseen := {}
 	for s in w.z:

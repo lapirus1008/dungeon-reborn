@@ -33,6 +33,13 @@ var target_box: VBoxContainer
 var target_name: Label
 var target_hp: ProgressBar
 var prompt_label: Label
+# 상호작용 안내: [F] 키 칸 + 설명. F를 누르고 있으면 키 칸이 아래에서 위로 차오름
+var key_box: HBoxContainer
+var key_fill: ColorRect
+var key_label: Label
+var key_text: Label
+var key_t := 0.0
+const KEY_SZ := 40.0
 var channel_box: VBoxContainer
 var ammo_box: VBoxContainer
 var ammo_label: Label
@@ -161,6 +168,46 @@ func _ready() -> void:
 	prompt_label.add_theme_color_override("font_shadow_color", Color.BLACK)
 	prompt_label.add_theme_constant_override("shadow_outline_size", 6)
 	root.add_child(prompt_label)
+
+	key_box = HBoxContainer.new()
+	key_box.set_anchors_preset(Control.PRESET_CENTER)
+	key_box.position = Vector2(-150, 100)
+	key_box.custom_minimum_size = Vector2(300, KEY_SZ)
+	key_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	key_box.add_theme_constant_override("separation", 10)
+	key_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var kp := Panel.new()
+	kp.custom_minimum_size = Vector2(KEY_SZ, KEY_SZ)
+	kp.clip_contents = true
+	kp.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ks := StyleBoxFlat.new()
+	ks.bg_color = Color(0.05, 0.05, 0.05, 0.75)
+	ks.border_color = Color(0.92, 0.88, 0.78)
+	ks.set_border_width_all(2)
+	ks.set_corner_radius_all(5)
+	kp.add_theme_stylebox_override("panel", ks)
+	key_fill = ColorRect.new()
+	key_fill.color = Color(0.95, 0.85, 0.55, 0.85)
+	key_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	key_fill.position = Vector2(2, KEY_SZ - 2)
+	key_fill.size = Vector2(KEY_SZ - 4, 0)
+	kp.add_child(key_fill)
+	key_label = UI.label("F", 20)
+	key_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	key_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	key_label.size = Vector2(KEY_SZ, KEY_SZ)
+	key_label.add_theme_color_override("font_shadow_color", Color.BLACK)
+	key_label.add_theme_constant_override("shadow_outline_size", 5)
+	key_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	kp.add_child(key_label)
+	key_box.add_child(kp)
+	key_text = UI.label("", 17)
+	key_text.add_theme_color_override("font_shadow_color", Color.BLACK)
+	key_text.add_theme_constant_override("shadow_outline_size", 6)
+	key_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	key_box.add_child(key_text)
+	key_box.visible = false
+	root.add_child(key_box)
 
 	channel_box = VBoxContainer.new()
 	channel_box.set_anchors_preset(Control.PRESET_CENTER)
@@ -638,13 +685,33 @@ func toast(text: String) -> void:
 	UI.toast(text)
 
 
+# "F|설명" = F를 길게 눌러 하는 상호작용 (키 칸 표시), 그 밖의 문구는 안내 글자만
 func prompt(text: String) -> void:
-	if prompt_label.text != text:
-		prompt_label.text = text
-	prompt_label.visible = text != ""
+	var keyed := text.begins_with("F|")
+	var t := text.substr(2) if keyed else text
+	if keyed:
+		if key_text.text != t:
+			key_text.text = t
+		if prompt_label.visible:
+			prompt_label.visible = false
+	else:
+		if prompt_label.text != t:
+			prompt_label.text = t
+		prompt_label.visible = t != ""
+	key_box.visible = keyed
+
+
+func key_progress(k: float) -> void:
+	key_t = 0.12
+	var h := (KEY_SZ - 4.0) * clampf(k, 0.0, 1.0)
+	key_fill.position = Vector2(2, KEY_SZ - 2 - h)
+	key_fill.size = Vector2(KEY_SZ - 4, h)
 
 
 func channel(text: String, k: float) -> void:
+	if text == "F":
+		key_progress(k)
+		return
 	channel_t = 0.1
 	channel_label.text = text
 	channel_bar.value = clampf(k, 0.0, 1.0)
@@ -858,6 +925,11 @@ func update_hud(dt: float) -> void:
 	else:
 		target_box.visible = false
 
+	if key_t > 0.0:
+		key_t -= dt
+		if key_t <= 0.0:
+			key_progress(0.0)
+			key_t = 0.0
 	if channel_t > 0.0:
 		channel_t -= dt
 	channel_box.visible = channel_t > 0.0

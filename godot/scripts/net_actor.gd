@@ -58,6 +58,8 @@ func push_snap(s: PackedFloat32Array) -> void:
 	spin_t = 1.0 if (f & 16) != 0 else 0.0
 	stealth = 1.0 if (f & 32) != 0 else 0.0
 	mimic_form = (f & 128) != 0
+	crouch = (f & 256) != 0
+	quiet = (f & 512) != 0
 	if (f & 64) != 0:
 		hit_flash = 0.15
 	move_amt = s[7]
@@ -109,6 +111,8 @@ func mirror(p) -> void:
 	spin_t = p.spin_t
 	stealth = p.stealth
 	mimic_form = p.mimic_form
+	crouch = p.crouch
+	quiet = p.quiet
 	hit_flash = p.hit_flash
 	frozen = p.frozen
 	move_amt = 1.0 if p.moving else 0.0

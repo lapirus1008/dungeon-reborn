@@ -21,12 +21,15 @@ var charge_t := -1.0 # 프리스트 정화 충전
 var bob := 0.0
 var extract_t := 0.0
 var interact_t := 0.0
+var interact_obj = null # F를 누르고 있는 대상 (바뀌면 처음부터)
+var f_lock := false # 상호작용을 끝낸 뒤 F를 뗄 때까지 다음 상호작용 막음
 var kills := 0
 var pvp_kills := 0
 var step_t := 0.0
 var shield_hit_fx := 0.0
 var cast := 0.0
 var sprinting := false
+var crouch_k := 0.0 # 앉는 동작 (0 서 있음 → 1 앉음, 카메라가 부드럽게 내려감)
 var moving := false
 var shake := 0.0
 var zoom := false
@@ -257,7 +260,7 @@ func look(rel: Vector2, sens: float) -> void:
 func eye_height() -> float:
 	if mimic_form:
 		return 0.75
-	return EYE * (0.7 if panther else 1.0)
+	return EYE * (0.7 if panther else 1.0) * lerpf(1.0, 0.6, crouch_k)
 
 
 # 조준: 시선 위치와 방향 (원격 플레이어도 같은 계산)
@@ -381,6 +384,13 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 
 	# 던전본처럼 달리기/스태미나 없음: 이동 속도는 장비·능력치로만 정해짐
 	sprinting = false
+	# Shift: 천천히 걷기 (발소리 작게) / Ctrl·C: 앉기 (더 느리고 거의 소리 없음, 키가 작아짐)
+	var want_crouch: bool = not locked and not game.typing and inp.pressed("crouch") and not mimic_form and not panther
+	if want_crouch != crouch:
+		crouch = want_crouch
+		height = 1.9 * (0.65 if crouch else 1.0)
+	quiet = crouch or (not locked and not game.typing and inp.pressed("walk"))
+	crouch_k = move_toward(crouch_k, 1.0 if crouch else 0.0, dt * 6.0)
 	var speed: float = stats.base_speed * stats.speed_mul
 	if sprinting:
 		speed *= 1.45
@@ -398,6 +408,10 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 		speed *= 0.5
 	if mimic_form:
 		speed *= 0.18 # 상자: 아주 느리게
+	if crouch:
+		speed *= 0.45
+	elif quiet:
+		speed *= 0.5
 	speed *= speed_factor()
 	if iz < 0.0:
 		speed *= 0.8
@@ -407,13 +421,14 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 		move(wish.x * speed, wish.z * speed, dt)
 	last_vel = wish * speed
 	moving = wl > 0.0 and dash == null and root <= 0.0 and not locked
+	hear_r = (1.5 if crouch else (2.5 if quiet else 6.0)) if moving else 2.0
 	if moving:
 		bob += dt * speed * 1.9
 		step_t -= dt * speed
 		if step_t <= 0.0:
 			step_t = 2.6
 			if stealth <= 0.0 and self == game.player:
-				Sfx.play("step", -1.0, 0.15)
+				Sfx.play("step", -1.0, 0.15, 0.2 if crouch else (0.35 if quiet else 1.0))
 
 	# 점프
 	# 바닥 높이(언덕)를 따라 걷고, 내리막에서는 중력으로 붙음
@@ -833,6 +848,8 @@ func update_camera(cam: Camera3D, vm: Node3D, bubble: MeshInstance3D, dt: float)
 		for n in vm.find_children("*", "GeometryInstance3D", true, false):
 			(n as GeometryInstance3D).transparency = tr
 	ViewAnim.animate(self, vm, b, dt)
+	if game.dungeon.has_outdoor:
+		Dungeon.set_indoor(vm, game.dungeon.indoor_at(pos))
 
 
 # ------------------------------------------------------------------ 멀티플레이 동기화
