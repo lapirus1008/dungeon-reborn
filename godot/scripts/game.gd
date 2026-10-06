@@ -97,7 +97,10 @@ func start_server(mode: String, hs: Array, is_pvp: bool, hud_node, map := "") ->
 	humans = hs
 	pvp = is_pvp
 	level_seed = randi() % 2000000000 + 1
-	Net.game = self
+	if mode == "server":
+		Net.register_raid(self, hs.map(func(h): return int(h.peer))) # 레이드 여러 개 동시 진행
+	else:
+		Net.game = self
 	start({}, hud_node)
 	for p in players:
 		if p.peer_id > 1:
@@ -2349,8 +2352,12 @@ func update_interact(dt: float) -> void:
 
 
 func _interact_for(p, dt: float) -> void:
-	var o = find_interactable(p)
 	var local: bool = p == player
+	# 서버의 원격 플레이어: F를 누르고 있지 않고 열린 창도 없으면 주변 물건을 찾을 필요가 없음
+	if not local and p.container == null and not p.inp.pressed("interact"):
+		p.interact_t = 0.0
+		return
+	var o = find_interactable(p)
 	if local:
 		interact_target = o
 	if p.container != null and p.container.pos.distance_to(p.pos) > 3.5:
@@ -2541,7 +2548,7 @@ func _finish_raid() -> void:
 	if not running:
 		return
 	running = false
-	Net.raid_finished()
+	Net.raid_finished(self)
 	raid_over.emit()
 
 

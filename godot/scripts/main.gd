@@ -74,6 +74,8 @@ func _ready() -> void:
 		_lobbyshots.call_deferred(args[args.find("--lobbyshots") + 1])
 	elif args.has("--cpuprobe"):
 		_cpuprobe.call_deferred(args[args.find("--cpuprobe") + 1])
+	elif args.has("--loadtest"):
+		_loadtest.call_deferred(int(args[args.find("--loadtest") + 1]))
 	elif args.has("--perfprobe"):
 		_perfprobe.call_deferred(args[args.find("--perfprobe") + 1])
 	elif args.has("--mapshots"):
@@ -254,7 +256,7 @@ func _on_server_begin(loadouts: Dictionary) -> void:
 		add_child(game)
 		game.raid_over.connect(_on_raid_over.bind(game))
 		game.start_server("server", hs, Net.pvp, null, Net.raid_map)
-		print("[server] 레이드 시작: %d명" % hs.size())
+		print("[server] 레이드 시작: %s %d명 (%s)" % [Data.MAPS.get(Net.raid_map, {}).get("name", Net.raid_map), hs.size(), Net.server_load()])
 		return
 	pending_loadout = null
 	_create_game()
@@ -263,9 +265,11 @@ func _on_server_begin(loadouts: Dictionary) -> void:
 
 
 func _on_raid_over(g) -> void:
-	Net.game = null
 	if dedicated:
-		print("[server] 레이드 종료")
+		Net.unregister_raid(g)
+		print("[server] 레이드 종료 (%s)" % Net.server_load())
+	else:
+		Net.game = null
 	# 결과 화면을 이미 넘겨 백그라운드로 돌던 레이드면 정리
 	if g != game or mode != "raid" or dedicated:
 		if is_instance_valid(g):
@@ -314,6 +318,8 @@ func _run_dedicated(args: PackedStringArray) -> void:
 		return
 	if args.has("--pvp"):
 		Net.pvp = true
+	# 서버 틱: 초당 60회로 제한 (헤드리스는 제한이 없으면 CPU를 계속 씀). 스냅샷은 초당 20회
+	Engine.max_fps = 60
 	print("[server] Dungeon Reborn 전용 서버 - UDP 포트 %d, 계정 %s. 가장 먼저 접속한 사람이 레이드를 시작합니다." % [port, "서버 저장" if acc_dir != "" else "각자 PC 저장"])
 
 
@@ -1225,6 +1231,8 @@ func _mptest(role: String) -> void:
 		await _mptest_host(port)
 	elif role == "account":
 		await _mptest_account(port)
+	elif role == "raidjoin":
+		await _mptest_raidjoin(port)
 	else:
 		await _mptest_client(port)
 	print("[mptest] 완료")
@@ -1456,6 +1464,30 @@ func _mptest_account(port: int) -> void:
 	await _wait(0.5)
 
 
+# 전용 서버 동시 레이드: 계정으로 접속 → 지정한 맵 대기방 → 레이드 입장 → 몇 초 머문 뒤 나감
+func _mptest_raidjoin(port: int) -> void:
+	var args := OS.get_cmdline_user_args()
+	if args.has("--port"):
+		port = int(args[args.find("--port") + 1])
+	var map: String = args[args.find("--map") + 1] if args.has("--map") else "sinners_end_1"
+	Net.join("127.0.0.1", port, "동시%d" % (randi() % 100000), "1234")
+	var t := 0.0
+	while not SaveData.online and t < 10.0:
+		await _wait(0.1)
+		t += 0.1
+	start_raid(map)
+	t = 0.0
+	while (game == null or not game.running) and t < 40.0:
+		await _wait(0.1)
+		t += 0.1
+	var ok: bool = game != null and game.running
+	print("[mptest] 동시 레이드 입장 %s: %s, 플레이어 %d명" % [Data.MAPS[map].name, ok, game.players.size() if ok else 0])
+	await _wait(6.0)
+	print("[mptest] 레이드 유지 %s" % (game != null and game.running))
+	Net.leave()
+	await _wait(0.5)
+
+
 # 격자 인벤토리 규칙 검사
 func _inv_checks() -> Array:
 	var out := []
@@ -1536,6 +1568,17 @@ func _inv_checks() -> Array:
 	ok.call("성 지도 높낮이 (숲 언덕 최고 %.1fm, 성 안 %.1fm)" % [hmax, cd.ground_y(56 * 4.0, 31 * 4.0)], hmax > 1.0 and absf(cd.ground_y(56 * 4.0, 31 * 4.0)) < 0.01)
 	ok.call("성 지도 (야외 %s, 성당 %s, 시작 위치 %s, 나무 충돌 %s, 큰 홀·성당까지 길 %s)" % [cd.has_outdoor, cd.area_at(16, 58) == Dungeon.A_CATH, sp_ok, pushed.distance_to(tc) > 1.0, reach],
 		cd.has_outdoor and cd.area_at(16, 58) == Dungeon.A_CATH and sp_ok and pushed.distance_to(tc) > 1.0 and reach)
+	# 공개 서버 보호: PIN 5번 틀리면 잠금, 같은 주소 새 계정 3개까지
+	var tmpd := OS.get_user_data_dir() + "/acct_test_%d" % randi()
+	var store := AccountStore.new(tmpd)
+	store.login("잠금시험", "1111", "1.2.3.4")
+	for i in 5:
+		store.login("잠금시험", "0000", "1.2.3.4")
+	var locked: bool = not store.login("잠금시험", "1111", "1.2.3.4").ok
+	store.login("새계정2", "1111", "1.2.3.4")
+	store.login("새계정3", "1111", "1.2.3.4")
+	var capped: bool = not store.login("새계정4", "1111", "1.2.3.4").ok and store.login("새계정5", "1111", "5.6.7.8").ok
+	ok.call("서버 계정 보호 (PIN 5회 실패 잠금 %s, 주소당 새 계정 3개 %s)" % [locked, capped], locked and capped)
 	# 1세트 검/방패 · 2세트 장검: 가방의 방패 우클릭 → 1세트 보조 칸과 교체
 	var seq := Account.empty_equipment()
 	seq.w1 = Data.make_item("old_sword") if Data.ITEM_BASES.has("old_sword") else Data.make_item("old_longsword")
@@ -1701,6 +1744,55 @@ func _perf_line(tag: String) -> String:
 	return "%s | 물체 %d · 드로우콜 %d · 삼각형 %dK · 프레임 %.1fms (스크립트 %.1fms)" % [tag,
 		Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
 		Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME) / 1000, dt, proc / fr * 1000.0]
+
+
+# 서버 부하 시험: 접속 안 한 가상 플레이어로 레이드 N개를 동시에 돌리고 서버 한 틱 시간을 잼
+# (가상 플레이어는 맵 곳곳에 퍼져 서 있음 → 주변 몬스터가 깨어나 싸움)
+func _loadtest(n_raids: int) -> void:
+	dedicated = true
+	Net.mode = "server"
+	Engine.max_fps = 0
+	var per := 11
+	var maps := Data.MAP_ORDER
+	for r in n_raids:
+		var hs := []
+		for i in per:
+			var cls: String = Data.CLASSES.keys()[(r + i) % Data.CLASSES.size()]
+			var c := Account.new_character("부하%d_%d" % [r, i], cls)
+			hs.append({"peer": 900000 + r * 100 + i, "name": c.name, "cls": cls, "equipment": c.equipment, "bag": c.bag, "skills": c.skills, "wset": 1, "char": ""})
+		Net.raid_map = maps[r % maps.size()]
+		var g := Game.new()
+		add_child(g)
+		g.start_server("server", hs, false, null, Net.raid_map)
+		for p in g.players:
+			p.invuln = 99999.0
+	await _wait(2.0)
+	for g in Net.raids:
+		g.prof = {}
+	var frames := 0
+	var t0 := Time.get_ticks_usec()
+	var worst := 0.0
+	var last := t0
+	while frames < 240:
+		await get_tree().process_frame
+		var now := Time.get_ticks_usec()
+		worst = maxf(worst, (now - last) / 1000.0)
+		last = now
+		frames += 1
+	var avg := (Time.get_ticks_usec() - t0) / 1000.0 / frames
+	var actors := 0
+	for g in Net.raids:
+		actors += g.actors.size()
+	print("[load] 레이드 %d개 · 플레이어 %d명 · 액터 %d · 서버 틱 평균 %.1fms (%.0f틱/초) · 최악 %.1fms · 메모리 %dMB" % [Net.raids.size(), n_raids * per, actors, avg, 1000.0 / avg, worst, OS.get_static_memory_usage() / 1048576])
+	var tot := {}
+	for g in Net.raids:
+		for k in g.prof:
+			tot[k] = tot.get(k, 0) + g.prof[k]
+	var keys := tot.keys()
+	keys.sort_custom(func(x, y): return tot[x] > tot[y])
+	for k in keys:
+		print("[load]   %s %.2fms/틱 (레이드 전체 합)" % [k, tot[k] / 1000.0 / frames])
+	get_tree().quit()
 
 
 # CPU 측정 (헤드리스 = 그리기 없음): 게임 로직만의 한 프레임 비용과 항목별 시간

@@ -16,13 +16,17 @@ const VERSION := "dr-mp-3"
 # 대기방: 같은 맵을 고른 사람끼리 모여 최소 10초 ~ 최대 60초 로딩 후 함께 입장
 const ROOM_MIN := 10.0
 const ROOM_MAX := 60.0
-const MAX_PLAYERS := 8
+const MAX_PLAYERS := 8 # 친구 PC 호스트
+const SERVER_CAP := 100 # 전용(온라인) 서버 동시 접속 한도
+const RAID_MAX := 12 # 레이드 하나에 함께 들어가는 최대 인원 (넘치면 다음 레이드로)
 
 var mode := "offline" # offline | host | server(전용) | client
 var my_name := "모험가"
 var roster := {} # peer_id -> {name, cls, state("lobby"/"raid")}
 var pvp := false
-var game = null # 진행 중인 Game (RPC 전달 대상)
+var game = null # 진행 중인 Game (클라이언트/호스트: RPC 전달 대상)
+var peer_game := {} # 전용 서버: peer_id -> 그 사람이 들어가 있는 레이드 (레이드 여러 개 동시 진행)
+var raids: Array = [] # 전용 서버: 진행 중인 레이드들
 var status := ""
 var loadouts := {}
 var preparing := false
@@ -86,7 +90,8 @@ func _set_status(t: String) -> void:
 func host(port: int, pname: String, dedicated := false, accounts_dir := "") -> String:
 	leave()
 	var peer := ENetMultiplayerPeer.new()
-	var err := peer.create_server(port, MAX_PLAYERS)
+	# 전용 서버는 100명 + 여유 연결 (가득 찼다는 안내를 보내기 위한 몇 자리)
+	var err := peer.create_server(port, SERVER_CAP + 8 if dedicated else MAX_PLAYERS)
 	if err != OK:
 		return "포트 %d 을(를) 열 수 없습니다 (이미 사용 중?)" % port
 	peer.host.compress(ENetConnection.COMPRESS_RANGE_CODER)
@@ -165,8 +170,10 @@ func _on_peer_disconnected(id: int) -> void:
 	if not is_server():
 		return
 	var nm: String = roster.get(id, {}).get("name", "?")
-	if game != null and is_instance_valid(game):
-		game.on_peer_left(id) # 계정 결과(사망) 반영 후 정리
+	var g = _game_of(id)
+	if g != null and is_instance_valid(g):
+		g.on_peer_left(id) # 계정 결과(사망) 반영 후 정리
+	peer_game.erase(id)
 	roster.erase(id)
 	loadouts.erase(id)
 	_room_remove(id)
@@ -186,6 +193,9 @@ func hello(pname: String, cls: String, ver: String, pin_code: String) -> void:
 	if ver != VERSION:
 		kicked.rpc_id(id, "게임 버전이 다릅니다 (서버 %s). 최신 버전으로 업데이트하세요" % VERSION)
 		return
+	if mode == "server" and roster.size() >= SERVER_CAP:
+		kicked.rpc_id(id, "서버가 가득 찼습니다 (%d/%d). 잠시 후 다시 접속해 주세요" % [roster.size(), SERVER_CAP])
+		return
 	var nm := pname.strip_edges().left(16)
 	if nm == "":
 		nm = "모험가%d" % (roster.size() + 1)
@@ -195,7 +205,13 @@ func hello(pname: String, cls: String, ver: String, pin_code: String) -> void:
 			if AccountStore.key_of(peer_acct[other]) == AccountStore.key_of(nm):
 				kicked.rpc_id(id, "이미 접속 중인 계정입니다")
 				return
-		var r := accounts.login(nm, pin_code)
+		var ip := ""
+		var mp = multiplayer.multiplayer_peer
+		if mp is ENetMultiplayerPeer:
+			var pp: ENetPacketPeer = mp.get_peer(id)
+			if pp != null:
+				ip = pp.get_remote_address()
+		var r := accounts.login(nm, pin_code, ip)
 		if not r.ok:
 			kicked.rpc_id(id, r.msg)
 			return
@@ -262,6 +278,34 @@ func raid_running() -> bool:
 		if roster[id].state == "raid":
 			return true
 	return game != null and is_instance_valid(game) and is_server()
+
+
+# 전용 서버: 이 사람의 레이드 (없으면 호스트/클라이언트의 단일 game)
+func _game_of(id: int):
+	var g = peer_game.get(id)
+	if g != null and is_instance_valid(g):
+		return g
+	return game
+
+
+func register_raid(g, peers: Array) -> void:
+	raids.append(g)
+	for id in peers:
+		peer_game[id] = g
+
+
+func unregister_raid(g) -> void:
+	raids.erase(g)
+	for id in peer_game.keys():
+		if peer_game[id] == g:
+			peer_game.erase(id)
+			if roster.has(id):
+				roster[id].state = "lobby"
+	push_roster()
+
+
+func server_load() -> String:
+	return "접속 %d/%d · 진행 중 레이드 %d" % [roster.size(), SERVER_CAP, raids.size()]
 
 
 # ------------------------------------------------------------------ 대기방 / 레이드 시작
@@ -361,15 +405,20 @@ func _nobody_else(_map: String) -> bool:
 
 func _tick_rooms(dt: float) -> void:
 	_room_push_t += dt
-	var busy := preparing or raid_running()
+	# 전용 서버는 레이드를 여러 개 동시에 돌림 (친구 PC 호스트는 하나씩)
+	var busy := preparing or (mode != "server" and raid_running())
 	for m in rooms.keys():
 		var r: Dictionary = rooms[m]
 		r.t += dt
 		if busy:
 			continue
-		if r.t >= ROOM_MAX or (r.t >= ROOM_MIN and _nobody_else(m)):
-			var members: Array = r.members.duplicate()
-			rooms.erase(m)
+		if r.t >= ROOM_MAX or (r.t >= ROOM_MIN and _nobody_else(m)) or r.members.size() >= RAID_MAX:
+			# 한 레이드는 최대 RAID_MAX명, 남은 사람은 대기방에 남아 다음 레이드로
+			var members: Array = r.members.slice(0, RAID_MAX)
+			r.members = r.members.slice(RAID_MAX)
+			r.t = 0.0
+			if r.members.is_empty():
+				rooms.erase(m)
 			push_rooms()
 			server_prepare(m, members)
 			return
@@ -378,7 +427,7 @@ func _tick_rooms(dt: float) -> void:
 
 
 func server_prepare(map: String, members: Array) -> void:
-	if preparing or raid_running():
+	if preparing or (mode != "server" and raid_running()):
 		return
 	raid_map = map
 	_prep_members = members
@@ -471,7 +520,10 @@ func player_left_raid(id: int) -> void:
 		push_roster()
 
 
-func raid_finished() -> void:
+func raid_finished(g = null) -> void:
+	if mode == "server" and g != null:
+		unregister_raid(g) # 그 레이드 사람들만 대기실로
+		return
 	for id in roster:
 		roster[id].state = "lobby"
 	_set_status("레이드 종료 - 대기실")
@@ -485,8 +537,9 @@ func send_input(p: Vector3, yaw: float, pitch: float, bits: int, can_act: bool, 
 
 @rpc("any_peer", "unreliable_ordered", "call_remote", 1)
 func c_input(p: Vector3, yaw: float, pitch: float, bits: int, can_act: bool, panel: bool) -> void:
-	if is_server() and game != null:
-		game.net_input(multiplayer.get_remote_sender_id(), p, yaw, pitch, bits, can_act, panel)
+	var g = _game_of(multiplayer.get_remote_sender_id()) if is_server() else null
+	if g != null and is_instance_valid(g):
+		g.net_input(multiplayer.get_remote_sender_id(), p, yaw, pitch, bits, can_act, panel)
 
 
 func send_press(action: String) -> void:
@@ -495,8 +548,9 @@ func send_press(action: String) -> void:
 
 @rpc("any_peer", "reliable")
 func c_press(action: String) -> void:
-	if is_server() and game != null:
-		game.net_press(multiplayer.get_remote_sender_id(), action)
+	var g = _game_of(multiplayer.get_remote_sender_id()) if is_server() else null
+	if g != null and is_instance_valid(g):
+		g.net_press(multiplayer.get_remote_sender_id(), action)
 
 
 func send_inv(op: String, args: Array) -> void:
@@ -505,8 +559,9 @@ func send_inv(op: String, args: Array) -> void:
 
 @rpc("any_peer", "reliable")
 func c_inv(op: String, args: Array) -> void:
-	if is_server() and game != null:
-		game.net_inv(multiplayer.get_remote_sender_id(), op, args)
+	var g = _game_of(multiplayer.get_remote_sender_id()) if is_server() else null
+	if g != null and is_instance_valid(g):
+		g.net_inv(multiplayer.get_remote_sender_id(), op, args)
 
 
 # ------------------------------------------------------------------ 레이드 중 (서버 -> 클라이언트)
