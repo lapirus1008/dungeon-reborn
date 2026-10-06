@@ -716,6 +716,7 @@ const PROJ_COLORS := {
 	"icebolt": Color(0.6, 0.9, 1.0), "thorn": Color(0.45, 0.95, 0.35), "poison": Color(0.4, 0.95, 0.2),
 	"grasp": Color(0.35, 0.95, 0.55), "blade": Color(0.55, 0.75, 1.0), "fireball": Color(1.0, 0.42, 0.1),
 	"holy": Color(1.0, 0.9, 0.5), "spit": Color(0.6, 0.9, 0.2), "magic_orb": Color(0.9, 0.3, 0.9), "flask": Color(0.85, 0.9, 0.8),
+	"torch": Color(1.0, 0.6, 0.2),
 }
 
 
@@ -730,7 +731,7 @@ func spawn_projectile(owner, kind: String, p: Vector3, dir: Vector3, speed: floa
 		"knife":
 			gravity = 3.0
 			sfx("swing", p)
-		"blade":
+		"blade", "torch":
 			pass
 		"pyroblast", "fireball":
 			rad = 0.45
@@ -765,6 +766,8 @@ func _proj_node(kind: String) -> Node3D:
 				(m as GeometryInstance3D).material_overlay = Models.glow_mat(Color(0.4, 0.6, 1.0, 0.5), 1.5)
 		"pyroblast", "fireball":
 			node = Models.orb(color, 0.42)
+		"torch":
+			node = Models.ground_torch(false)
 		"poison":
 			node = Models.orb(color, 0.16, false)
 		_:
@@ -1020,11 +1023,12 @@ func explode_fx(p: Vector3, rad: float, color: Color) -> void:
 
 # 조준선이 처음 닿는 곳의 바닥 지점 (번개 지팡이·눈보라 등): 벽·천장·바닥·기둥/나무 줄기·적에서 멈춤.
 # 나무/기둥 칸은 줄기 둘레만 막음 (칸 전체를 막으면 숲에서 원이 발 앞에 붙음)
-func aim_point(origin: Vector3, dir: Vector3, max_d: float) -> Vector3:
+# who: 조준하는 액터 (자기 자신은 무시), on_ground=false면 맞은 지점 그대로 (투척 조준)
+func aim_point(origin: Vector3, dir: Vector3, max_d: float, who = null, on_ground := true) -> Vector3:
 	var p := origin
 	var d := 0.0
 	var step := 0.2
-	var me = player if player != null and origin.distance_to(player.pos) < 3.0 else null
+	var me = who if who != null else (player if player != null and origin.distance_to(player.pos) < 3.0 else null)
 	while d < max_d:
 		var n := p + dir * step
 		var tx := dungeon.to_tile(n.x)
@@ -1049,6 +1053,8 @@ func aim_point(origin: Vector3, dir: Vector3, max_d: float) -> Vector3:
 		d += step
 		if hit:
 			break
+	if not on_ground:
+		return Vector3(p.x, maxf(p.y, dungeon.ground_y(p.x, p.z)), p.z)
 	return Vector3(p.x, dungeon.ground_y(p.x, p.z), p.z)
 
 
@@ -1196,6 +1202,11 @@ func _zone_node(z: Dictionary) -> Node3D:
 			parts.mesh = pm
 			parts.position.y = 0.6
 			node.add_child(parts)
+		"ground_torch":
+			# 바닥에 떨어진 횃불: 비스듬히 누워 타면서 주변을 밝힘
+			var gt := Models.ground_torch(true)
+			gt.rotation = Vector3(0, z.get("yaw", 0.0), 0)
+			node.add_child(gt)
 		"fire_ground":
 			var disc := MeshInstance3D.new()
 			var cm := CylinderMesh.new()
@@ -1313,7 +1324,7 @@ func update_zones(dt: float) -> void:
 
 
 func _zone_tick(z: Dictionary) -> void:
-	if z.kind == "stone_pillar":
+	if z.kind == "stone_pillar" or z.kind == "ground_torch":
 		return
 	var owner = z.owner
 	if z.kind == "lightning":
@@ -1377,6 +1388,12 @@ func _flask_impact(p: Dictionary, pp: Vector3, hit) -> void:
 		gp = Vector3(pp.x - back.x, 0.0, pp.z - back.z)
 	gp.y = dungeon.ground_y(gp.x, gp.z)
 	match p.flask:
+		"torch":
+			# 던진 횃불: 맞으면 아주 약한 화염 피해, 떨어진 자리에서 남은 시간 동안 주변을 밝힘
+			if hit != null and owner != null and hostile(owner, hit):
+				hit(owner, hit, p.dmg, {"from": owner.pos, "ranged": true, "dtype": "fire"})
+			add_zone({"pos": gp, "radius": 0.3, "dur": maxf(1.0, p.get("burn_left", 60.0)), "tick": 999.0, "owner": owner, "kind": "ground_torch", "yaw": atan2(p.vel.x, p.vel.z)})
+			sfx("fire", gp, 0.2)
 		"fire":
 			# 10초 동안 반경 3m의 지면이 불탐
 			add_zone({"pos": gp, "radius": 3.0, "dur": 10.0, "tick": 0.25, "owner": owner, "kind": "fire_ground", "hot": true})
@@ -2662,7 +2679,7 @@ const ARC_MAX := 64
 
 func _update_throw_arc() -> void:
 	var it = player.equipment.get(player.held) if player.held in ["c3", "c4", "c5"] else null
-	var show: bool = player.alive and it != null and Data.base_of(it).has("throw") and player.drink_t <= 0.0
+	var show: bool = player.alive and (it != null and Data.base_of(it).has("throw") or player.held == "torch") and player.drink_t <= 0.0
 	if not show:
 		if arc_dots != null:
 			arc_dots.visible = false
@@ -2701,15 +2718,14 @@ func _update_throw_arc() -> void:
 		world.add_child(arc_end)
 	var pts := throw_arc(player)
 	var mm2: MultiMesh = arc_dots.multimesh
-	# 눈앞 1m 안쪽 점은 화면을 가리므로 생략
-	var o: Vector3 = pts[0]
+	# 오른손에서부터 점을 찍되, 눈에 가까운 점은 작게 (화면을 가리지 않게)
+	var eye: Vector3 = camera.global_position
 	var n := 0
 	for i in range(1, pts.size() - 1):
 		if n >= ARC_MAX:
 			break
-		if pts[i].distance_to(o) < 1.0:
-			continue
-		mm2.set_instance_transform(n, Transform3D(Basis(), pts[i]))
+		var k := clampf(pts[i].distance_to(eye) / 3.0, 0.25, 1.0)
+		mm2.set_instance_transform(n, Transform3D(Basis().scaled(Vector3.ONE * k), pts[i]))
 		n += 1
 	mm2.visible_instance_count = n
 	arc_dots.visible = true
@@ -2898,7 +2914,7 @@ func net_inv(id: int, op: String, args: Array) -> void:
 # 스냅샷 한 줄 (float 10개): id, x, y, z, yaw, hp, flags, move, windup_k, attack
 const ACT_STRIDE := 10
 const PROJ_STRIDE := 10
-const PROJ_KINDS := ["arrow", "knife", "blade", "bolt", "firebolt", "pyroblast", "icebolt", "thorn", "poison", "grasp", "fireball", "holy", "spit", "magic_orb", "flask"]
+const PROJ_KINDS := ["arrow", "knife", "blade", "bolt", "firebolt", "pyroblast", "icebolt", "thorn", "poison", "grasp", "fireball", "holy", "spit", "magic_orb", "flask", "torch"]
 
 
 func _pack_actor(out: PackedFloat32Array, a) -> void:

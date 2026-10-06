@@ -475,6 +475,10 @@ func _render_online() -> void:
 		port_edit.text_changed.connect(func(t): mp_port = int(t) if t.is_valid_int() else Net.PORT)
 		nh.add_child(port_edit)
 		v.add_child(nh)
+		v.add_child(UI.button("☁ 공식 온라인 서버 접속 (이름 + PIN 필요)", func():
+			mp_addr = Net.OFFICIAL_SERVER
+			mp_port = Net.PORT
+			_mp_join()))
 		v.add_child(UI.button("🏠 호스트 열기 (내 PC가 서버)", _mp_host))
 		var jh := HBoxContainer.new()
 		var addr_edit := LineEdit.new()

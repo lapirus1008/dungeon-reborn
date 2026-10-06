@@ -556,6 +556,7 @@ static func held_item_view(base_id: String) -> Node3D:
 	root.add_child(l)
 	root.set_meta("R", r)
 	root.set_meta("L", l)
+	root.set_meta("R0", Vector3(0.34, -0.3, -0.6))
 	return root
 
 
@@ -580,6 +581,59 @@ static func torch_view() -> Node3D:
 	root.add_child(l)
 	root.set_meta("R", r)
 	root.set_meta("L", l)
+	root.set_meta("R0", Vector3(0.34, -0.3, -0.6))
+	return root
+
+
+# 던진 횃불 / 바닥에 떨어진 횃불 (lying=true: 누운 채로 주변을 밝히는 불빛)
+static func ground_torch(lying: bool) -> Node3D:
+	var root := Node3D.new()
+	var t := Node3D.new()
+	root.add_child(t)
+	var stick := cyl(0.025, 0.035, 0.5, mat(Color(0.35, 0.22, 0.1)), 6)
+	t.add_child(stick)
+	var head := cyl(0.045, 0.04, 0.1, mat(Color(0.18, 0.12, 0.08)), 6)
+	head.position.y = 0.25
+	t.add_child(head)
+	var flame := cyl(0.0, 0.07, 0.2, glow_mat(Color(1.0, 0.6, 0.2), 4.0), 6)
+	flame.position.y = 0.38
+	t.add_child(flame)
+	var l := OmniLight3D.new()
+	l.light_color = Color(1.0, 0.62, 0.3)
+	l.shadow_enabled = false
+	if lying:
+		# 손잡이는 바닥에, 불 붙은 쪽은 살짝 들림. 불꽃은 위로
+		t.rotation.x = deg_to_rad(72.0)
+		t.position.y = 0.06
+		flame.rotation.x = -t.rotation.x
+		l.light_energy = 2.4
+		l.omni_range = 10.0
+		l.position = Vector3(0, 0.6, 0.25)
+		root.add_child(l)
+		var parts := CPUParticles3D.new()
+		parts.amount = 14
+		parts.lifetime = 0.6
+		parts.direction = Vector3.UP
+		parts.spread = 12.0
+		parts.gravity = Vector3(0, 1.5, 0)
+		parts.initial_velocity_min = 0.3
+		parts.initial_velocity_max = 0.8
+		var pm := SphereMesh.new()
+		pm.radius = 0.03
+		pm.height = 0.06
+		pm.radial_segments = 4
+		pm.rings = 2
+		pm.material = glow_mat(Color(1.0, 0.55, 0.15), 3.0)
+		parts.mesh = pm
+		parts.position = Vector3(0, 0.2, 0.3)
+		root.add_child(parts)
+	else:
+		l.light_energy = 1.5
+		l.omni_range = 6.0
+		t.add_child(l)
+		l.position.y = 0.4
+	for n in root.find_children("*", "GeometryInstance3D", true, false):
+		(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return root
 
 
@@ -1149,7 +1203,7 @@ static func view_model(cls: String, wmodel: String, panther := false, off := "")
 	var hand_mat := mat(Color(0.08, 0.08, 0.09) if panther else Color(0.7, 0.52, 0.4))
 	var make_arm := func(side: float) -> Node3D:
 		var a := fp_arm(cls, side, panther)
-		a.position = Vector3(side * 0.3, -0.34, -0.6)
+		a.position = Vector3(side * 0.42, -0.37, -0.6) # 화면 양쪽으로 벌려 듦
 		return a
 	var R: Node3D = make_arm.call(1.0)
 	var L: Node3D = make_arm.call(-1.0)
@@ -1177,7 +1231,7 @@ static func view_model(cls: String, wmodel: String, panther := false, off := "")
 				w.rotation = Vector3(-0.45, 0, 0.15)
 				w.scale = Vector3.ONE * 0.55
 				R.add_child(w)
-				L.position = Vector3(-0.08, -0.38, -0.55)
+				L.position = Vector3(0.16, -0.41, -0.55)
 			"greatsword":
 				w = weapon("greatsword")
 				w.position = Vector3(-0.08, 0.0, -0.12)
@@ -1203,7 +1257,8 @@ static func view_model(cls: String, wmodel: String, panther := false, off := "")
 				w.add_child(limb)
 				w.rotation = Vector3(-0.1, 0, 0)
 				R.add_child(w)
-				L.position = Vector3(-0.1, -0.38, -0.7)
+				R.position = Vector3(0.3, -0.34, -0.6) # 석궁은 조준하듯 가운데 쪽
+				L.position = Vector3(0.2, -0.4, -0.78)
 			"mace":
 				w = weapon("mace")
 				w.position = Vector3(0, 0, -0.12)
@@ -1261,4 +1316,5 @@ static func view_model(cls: String, wmodel: String, panther := false, off := "")
 	g.set_meta("L", L)
 	g.set_meta("weapon", w)
 	g.set_meta("L0", L.position)
+	g.set_meta("R0", R.position)
 	return g

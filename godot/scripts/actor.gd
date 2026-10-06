@@ -75,8 +75,11 @@ var lod_acc := 0.0
 var mimic_form := false # 미믹 플라스크: 상자로 변신 (아주 느림, 피격/우클릭 시 해제)
 var frozen := 0.0 # 서리 장벽 (무적, 행동 불가)
 var parry := 0.0
-var block_t := 0.0 # 방어 자세를 잡은 시간 (장검: 막 들자마자 맞으면 패링)
-var counter_t := 0.0 # 패링 후 우클릭 반격 가능 시간
+var block_t := 0.0 # 방어 자세를 잡은 시간 (GUARD_RAISE 안에 맞으면 완전 방어)
+var counter_t := 0.0 # 완전 방어 후 우클릭 반격 가능 시간 (무기가 하얗게 빛남)
+var perfect_ok := true # 이번 방어 자세가 완전 방어 판정을 받을 수 있는지 (연타 방지)
+const GUARD_RAISE := 0.25 # 평소 자세 → 방어 자세까지 걸리는 시간 = 완전 방어 구간
+const COUNTER_WIN := 0.9
 var skill_casting := false
 var res_idle := 99.0 # 마지막으로 자원을 쓴 뒤 지난 시간
 var beam_on := false # 화염 지팡이 레이저 중
@@ -310,12 +313,15 @@ func take_damage(amount: float, src, info: Dictionary = {}) -> float:
 	var blocked := false
 	if blocking and from != null:
 		var y := yaw_to(from.x - pos.x, from.z - pos.z)
-		# 장검: 공격이 오는 순간에 맞춰 막으면 (자세를 잡은 지 0.3초 안) 패링 → 우클릭으로 강력한 반격
-		if absf(angle_difference(yaw, y)) < 1.25 and is_hero() and block_t < 0.3 and Skills.wcat(self) == "longsword" and not info.get("ranged", false):
+		# 완전 방어: 평소 자세에서 방어 자세로 올리는 도중(GUARD_RAISE 안)에 맞으면 피해 0.
+		# 양손 근접 무기(장검/지팡이)는 무기가 하얗게 빛나는 동안 다시 우클릭하면 강한 반격
+		if absf(angle_difference(yaw, y)) < 1.25 and self is Player and block_t < GUARD_RAISE and perfect_ok and not info.get("ranged", false):
 			game.sfx("block", pos)
-			if src != null and src != self and src.alive:
-				src.add_stun(1.2)
-			counter_t = 1.5
+			var two := Skills.can_counter(self)
+			if two:
+				if src != null and src != self and src.alive:
+					src.add_stun(0.9)
+				counter_t = COUNTER_WIN
 			on_parry(src)
 			game.on_damage(self, 0.0, src, true, {"parried": true})
 			return 0.0

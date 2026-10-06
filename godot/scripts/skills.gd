@@ -60,6 +60,11 @@ static func uses_block(c) -> bool:
 	return true # 우클릭은 무조건 방어 (무기마다 막는 양만 다름)
 
 
+# 완전 방어 후 반격: 양손 근접 무기만 (장검/지팡이). 쌍단검·한손검·방패는 피해 0으로 막기만
+static func can_counter(c) -> bool:
+	return not c.panther and wcat(c) in ["longsword", "staff"]
+
+
 # 무기 종류별 근접 공격 (bash = 지팡이 치기)
 static func melee_profile(c, bash := false) -> Dictionary:
 	var spd: float = c.stats.get("act_mul", 1.0)
@@ -445,10 +450,28 @@ const FLASK_GRAVITY := 9.0
 
 
 # 던지는 출발점과 속도 (포물선 미리보기와 실제 투사체가 같은 계산을 씀)
+# 투척(플라스크/횃불): 오른손에서 출발해 조준점에 떨어지는 포물선 (낮은 각도 해).
+# 조준점이 던질 수 있는 거리 밖이면 조준 방향으로 살짝 띄워 던짐
 static func flask_launch(c, aim: Dictionary) -> Dictionary:
 	var dir: Vector3 = aim.dir
-	dir.y += 0.15
-	return {"origin": aim.origin, "vel": dir.normalized() * FLASK_SPEED}
+	var y: float = c.yaw
+	var right := Vector3(cos(y), 0.0, -sin(y))
+	var eye: Vector3 = c.pos + Vector3(0, c.eye_height() if c.has_method("eye_height") else c.height * 0.9, 0)
+	var hand: Vector3 = eye + right * 0.32 + Vector3(0, -0.3, 0) + Vector3(dir.x, 0, dir.z).normalized() * 0.45
+	var tgt: Vector3 = c.game.aim_point(eye, dir, 40.0, c, false)
+	var v := FLASK_SPEED
+	var g := FLASK_GRAVITY
+	var d := Vector3(tgt.x - hand.x, 0, tgt.z - hand.z)
+	var x := d.length()
+	var dy := tgt.y - hand.y
+	var disc := v * v * v * v - g * (g * x * x + 2.0 * dy * v * v)
+	if x > 0.5 and disc >= 0.0:
+		var ang := atan((v * v - sqrt(disc)) / (g * x))
+		var hd := d / x
+		return {"origin": hand, "vel": (hd * cos(ang) + Vector3.UP * sin(ang)) * v}
+	var fd := dir
+	fd.y += 0.15
+	return {"origin": hand, "vel": fd.normalized() * v}
 
 
 # 투척 플라스크 (소모품 칸 3/4/5): 화염(지면) / 대지(돌기둥) / 전기(번개+둔화)

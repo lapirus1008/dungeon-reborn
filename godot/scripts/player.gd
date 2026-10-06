@@ -45,6 +45,7 @@ var hold_q := -1.0 # 누르고 있는 Q/E (화염 폭발, 치료)
 var hold_e := -1.0
 var psi_lmb := true
 var counter_rmb := true
+var last_guard := -10.0
 var psi_rmb := true
 var combo_i := 0 # 로그 단검 콤보 단계
 var combo_t := 0.0
@@ -224,7 +225,7 @@ func on_block(_amount: float) -> void:
 
 
 func on_parry(_src) -> void:
-	game.notify(self, "toast", ["패링!"])
+	game.notify(self, "toast", ["완벽한 방어! 우클릭으로 반격" if counter_t > 0.0 else "완벽한 방어!"])
 	shake = 0.15
 
 
@@ -455,7 +456,7 @@ func _combat(dt: float, act: bool) -> void:
 	var rmb_new := rmb_held and not counter_rmb
 	counter_rmb = rmb_held
 	if counter_t > 0.0 and rmb_new and swing == null and held == "":
-		# 패링 성공 후 우클릭: 강력한 반격
+		# 완전 방어 후 (무기가 빛나는 동안) 다시 우클릭: 강력한 반격
 		counter_t = 0.0
 		var cp := Skills.melee_profile(self)
 		cp.dmg *= 2.4
@@ -475,6 +476,10 @@ func _combat(dt: float, act: bool) -> void:
 			cd.rmb = 0.8
 			_start_swing(Skills.melee_profile(self, true), true)
 
+	# 방어를 새로 올릴 때만 완전 방어 판정 (우클릭 연타로 계속 완전 방어가 되지 않게 0.6초 간격)
+	if blocking and block_t <= 0.0:
+		perfect_ok = game.time - last_guard >= 0.6
+		last_guard = game.time
 	block_t = block_t + dt if blocking else 0.0
 	# 좌클릭을 새로 누른 순간 (심령의 검: 누른 채로 소환을 시작했으면 한 번 떼야 발사)
 	var lmb_edge := lmb_held and not psi_lmb
@@ -489,9 +494,9 @@ func _combat(dt: float, act: bool) -> void:
 			cd.lmb = 0.8
 			attack_anim = 0.25
 			game.sfx("swing", pos)
-			game.melee_hit(self, 18.0 * dmg_mul(), 2.4, 1.6, {"knock": 2.0})
-		elif rmb_pressed:
-			set_held("")
+			game.melee_hit(self, 6.0 * dmg_mul(), 2.4, 1.6, {"knock": 1.0})
+		elif rmb_pressed and free:
+			throw_torch()
 	elif held != "":
 		blocking = false
 		if equipment.get(held) == null:
@@ -642,6 +647,19 @@ func toggle_torch() -> void:
 		game.sfx("fire", pos)
 		game.inv_changed(self)
 	set_held("torch")
+
+
+# 횃불 우클릭: 조준점으로 포물선을 그리며 던짐. 떨어진 횃불은 남은 시간 동안 주변을 밝힘
+func throw_torch() -> void:
+	if torch_t <= 0.0 or incapacitated():
+		return
+	var L := Skills.flask_launch(self, aim())
+	game.spawn_projectile(self, "torch", L.origin, L.vel.normalized(), Skills.FLASK_SPEED, 5.0 * dmg_mul(),
+		{"gravity": Skills.FLASK_GRAVITY, "flask": "torch", "burn_left": torch_t})
+	game.sfx("swing", pos)
+	attack_anim = 0.25
+	torch_t = 0.0
+	set_held("")
 
 
 # 던전 입장 시 기본 횃불 2개
@@ -832,7 +850,7 @@ func net_state() -> Dictionary:
 		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion, cd.util, cd.flask],
 		"chg": charges, "hold": [hold_q, hold_e],
 		"s": [stun, slow, root, stealth, frozen, parry, immune, dr, spin_t, channel_t, charge_t, cast],
-		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "chr": channel_ready, "dw": draw_t, "ld": active_crossbow() != null and active_crossbow().get("loaded", false), "rl": reload_t, "dk": drink_t, "dkm": drink_max, "mf": mimic_form,
+		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "chr": channel_ready, "dw": draw_t, "ld": active_crossbow() != null and active_crossbow().get("loaded", false), "rl": reload_t, "ct": counter_t, "dk": drink_t, "dkm": drink_max, "mf": mimic_form,
 		"k": [kills, pvp_kills], "ch": ch,
 	}
 
@@ -888,6 +906,7 @@ func apply_net_state(d: Dictionary) -> void:
 	torch_t = d.get("tt", 0.0)
 	reload_t = d.get("rl", 0.0)
 	drink_t = d.get("dk", 0.0)
+	counter_t = d.get("ct", 0.0)
 	drink_max = d.get("dkm", 1.0)
 	mimic_form = d.get("mf", false)
 	var cbw = active_crossbow()

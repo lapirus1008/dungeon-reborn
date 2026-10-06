@@ -2,13 +2,14 @@
 class_name ViewAnim
 extends RefCounted
 
-const R0 := Vector3(0.3, -0.34, -0.6)
+const R0_DEFAULT := Vector3(0.42, -0.37, -0.6)
 
 
 static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 	var R: Node3D = vm.get_meta("R")
 	var L: Node3D = vm.get_meta("L")
-	var L0: Vector3 = vm.get_meta("L0", Vector3(-0.3, -0.36, -0.6))
+	var L0: Vector3 = vm.get_meta("L0", Vector3(-0.42, -0.37, -0.6))
+	var R0: Vector3 = vm.get_meta("R0", R0_DEFAULT)
 	vm.position = Vector3(sin(p.bob * 0.5) * (0.015 if p.moving else 0.0), bob * 0.4, 0)
 	R.rotation = Vector3.ZERO
 	R.position = R0
@@ -26,7 +27,7 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 	if p.get("drink_t") != null and p.drink_t > 0.0:
 		var dk: float = 1.0 - clampf(p.drink_t / maxf(0.01, p.drink_max), 0.0, 1.0)
 		var up := clampf(dk / 0.35, 0.0, 1.0) * (1.0 - clampf((dk - 0.85) / 0.15, 0.0, 1.0))
-		R.position += Vector3(-0.22, 0.24, 0.28) * up
+		R.position += Vector3(-0.34, 0.25, 0.28) * up
 		R.rotation = Vector3(0.9 * up, 0.0, 0.5 * up + 0.4 * clampf((dk - 0.35) / 0.5, 0.0, 1.0) * up)
 		return
 	# 석궁 재장전: 석궁을 아래로 기울이고 왼손으로 볼트를 끼워 당김
@@ -94,20 +95,27 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 			if p.cls in ["swordmaster", "deathknight"]:
 				# 양손 무기: 왼손이 따라감
 				L.position = R.position + Vector3(-0.08, -0.04, 0.08)
-	if p.blocking:
-		# 방어 자세: 방패는 왼손을 앞으로, 무기는 가로로 세워 막음 (단검은 양손 교차)
+	# 방어 자세: 우클릭을 누르면 평소 자세에서 GUARD_RAISE에 걸쳐 자연스럽게 올라감 (떼면 다시 내려감)
+	var gk: float = vm.get_meta("gk", 0.0)
+	gk = move_toward(gk, 1.0 if p.blocking else 0.0, _dt / (Actor.GUARD_RAISE if p.blocking else 0.18))
+	vm.set_meta("gk", gk)
+	if gk > 0.0:
+		var e := gk * gk * (3.0 - 2.0 * gk)
+		# 방패는 왼손을 앞으로, 무기는 가로로 세워 막음 (단검은 양손 교차)
 		var off: String = Data.offhand_cat(p.equipment, p.wset)
 		if off == "shield":
-			L.position = Vector3(-0.14, -0.2, -0.5)
-			L.rotation.y = 0.5
+			L.position = L.position.lerp(Vector3(-0.16, -0.2, -0.5), e)
+			L.rotation = L.rotation.lerp(Vector3(0, 0.5, 0), e)
 		else:
-			R.position = Vector3(0.04, -0.16, -0.48)
-			R.rotation = Vector3(0.25, 0, 1.3)
+			R.position = R.position.lerp(Vector3(0.06, -0.16, -0.48), e)
+			R.rotation = R.rotation.lerp(Vector3(0.25, 0, 1.3), e)
 			if off == "dagger":
-				L.position = Vector3(-0.04, -0.18, -0.48)
-				L.rotation = Vector3(0.25, 0, -1.3)
-			elif Skills.wcat(p) == "longsword":
-				L.position = R.position + Vector3(-0.12, -0.02, 0.04)
+				L.position = L.position.lerp(Vector3(-0.06, -0.18, -0.48), e)
+				L.rotation = L.rotation.lerp(Vector3(0.25, 0, -1.3), e)
+			elif Skills.wcat(p) in Data.TWO_HANDED:
+				L.position = L.position.lerp(Vector3(-0.06, -0.18, -0.44), e)
+	# 완전 방어 직후: 무기가 하얗게 빛남 (이때 우클릭 = 반격)
+	_counter_glow(vm, p.counter_t)
 	if p.parry > 0.0:
 		R.position = Vector3(0.05, -0.15, -0.5)
 		R.rotation = Vector3(0, 0, 1.3)
@@ -117,3 +125,26 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 		L.position = L0 + Vector3(0.1, 0.08 + c * 0.05, -0.05)
 	if p.cast > 0.0 and p.swing == null:
 		R.position = R0 + Vector3(0, 0.08, -0.1)
+
+
+static var _glow_mat: StandardMaterial3D
+
+
+static func _counter_glow(vm: Node3D, ct: float) -> void:
+	var on := ct > 0.0
+	if not on and not vm.get_meta("glowing", false):
+		return
+	vm.set_meta("glowing", on)
+	if _glow_mat == null:
+		_glow_mat = StandardMaterial3D.new()
+		_glow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_glow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_glow_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		_glow_mat.albedo_color = Color(1, 1, 1, 0.8)
+	var w = vm.get_meta("weapon") if vm.has_meta("weapon") else null
+	if w == null or not is_instance_valid(w):
+		return
+	var a := clampf(ct / 0.3, 0.0, 1.0) * (0.7 + 0.3 * sin(ct * 40.0))
+	_glow_mat.albedo_color = Color(1, 1, 1, a)
+	for n in (w as Node3D).find_children("*", "GeometryInstance3D", true, false):
+		(n as GeometryInstance3D).material_overlay = _glow_mat if on else null

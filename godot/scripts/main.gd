@@ -88,6 +88,8 @@ func _ready() -> void:
 		get_tree().quit()
 	elif args.has("--autotest"):
 		_autotest.call_deferred()
+	elif args.has("--fpshots"):
+		_fpshots.call_deferred(args[args.find("--fpshots") + 1])
 	elif args.has("--screenshots"):
 		_screenshots.call_deferred(args[args.find("--screenshots") + 1])
 
@@ -487,6 +489,62 @@ func _shot(dir: String, name: String) -> void:
 	print("[shot] ", name)
 
 
+# 1인칭 손/방어/반격 빛/투척 포물선/횃불 화면 확인용
+func _fpshots(dir: String) -> void:
+	await get_tree().create_timer(0.5).timeout
+	_test_char("fighter")
+	start_raid("clouseau_castle")
+	game.force_act = true
+	await get_tree().create_timer(1.0).timeout
+	var g := game
+	var p := g.player
+	p.invuln = 999.0
+	for a in g.actors:
+		if a.kind == "monster" or a.kind == "bot":
+			a.stun = 999.0
+	p.equipment.w1 = Data.make_item("old_longsword")
+	p.equipment.w1o = null
+	p.recalc()
+	# 앞이 가장 멀리 트인 방향을 봄 (포물선이 잘 보이게)
+	var best := 0.0
+	for i in 24:
+		var yw := i * TAU / 24.0
+		var eye: Vector3 = p.pos + Vector3(0, p.eye_height(), 0)
+		var look := -Basis.from_euler(Vector3(-0.12, yw, 0), EULER_ORDER_YXZ).z
+		var d: float = g.aim_point(eye, look, 30.0, p, false).distance_to(eye)
+		if d > best:
+			best = d
+			p.yaw = yw
+	p.pitch = -0.05
+	await get_tree().create_timer(1.0).timeout
+	await _shot(dir, "fp_1_idle")
+	Input.action_press("secondary")
+	await get_tree().create_timer(0.1).timeout
+	await _shot(dir, "fp_2_guard_rising")
+	await get_tree().create_timer(0.4).timeout
+	await _shot(dir, "fp_3_guard_full")
+	p.counter_t = 0.9
+	await get_tree().process_frame
+	await _shot(dir, "fp_4_counter_glow")
+	Input.action_release("secondary")
+	await get_tree().create_timer(0.6).timeout
+	p.equipment.c4 = Data.make_item("fire_flask")
+	p.set_held("c4")
+	p.pitch = -0.12
+	await get_tree().create_timer(0.6).timeout
+	await _shot(dir, "fp_5_flask_arc")
+	p.torch_t = 60.0
+	p.set_held("torch")
+	await get_tree().create_timer(0.6).timeout
+	await _shot(dir, "fp_6_torch_arc")
+	p.throw_torch()
+	await get_tree().create_timer(1.5).timeout
+	p.pitch = -0.35
+	await get_tree().create_timer(0.3).timeout
+	await _shot(dir, "fp_7_ground_torch")
+	get_tree().quit()
+
+
 func _screenshots(dir: String) -> void:
 	await get_tree().create_timer(0.5).timeout
 	var args := OS.get_cmdline_user_args()
@@ -679,8 +737,26 @@ func _flask_checks(pl, out: Array) -> void:
 				break
 		if found:
 			break
-	pl.pitch = 0.1
+	pl.pitch = -0.08 # 실내에서 위로 던지면 천장에 먼저 맞으므로 바닥 쪽을 조준
 	var arc: Array = game.throw_arc(pl)
+	# 포물선은 오른손(눈 오른쪽 아래)에서 시작해 조준점 근처에 떨어짐
+	var eye: Vector3 = pl.pos + Vector3(0, pl.eye_height(), 0)
+	var rgt := Vector3(cos(pl.yaw), 0, -sin(pl.yaw))
+	var aimp: Vector3 = game.aim_point(eye, pl.aim().dir, 40.0, pl, false)
+	var hand_ok: bool = (arc[0] - eye).dot(rgt) > 0.2 and arc[0].y < eye.y
+	var land_ok: bool = arc.back().distance_to(aimp) < 1.5
+	# 횃불 우클릭: 던지면 손이 비고, 떨어진 자리에 남은 시간만큼 타는 횃불
+	pl.torch_t = 50.0
+	pl.held = "torch"
+	pl.throw_torch()
+	var tp: Array = game.projectiles.filter(func(pr): return pr.kind == "torch")
+	var tz_ok := false
+	if tp.size():
+		game._flask_impact(tp[0], pl.pos + Actor.fwd(pl.yaw) * 3.0, null)
+		var gz: Array = game.zones.filter(func(z): return z.kind == "ground_torch")
+		tz_ok = gz.size() == 1 and absf(gz[0].t - 50.0) < 0.5
+	out.append("투척 포물선: 오른손에서 시작 %s, 조준점에 떨어짐 %s (차이 %.1fm) · 횃불 우클릭 던지기 %s, 바닥 횃불 50초 조명 %s" % ["O" if hand_ok else "X", "O" if land_ok else "X", arc.back().distance_to(aimp), "O" if tp.size() == 1 and pl.held == "" and pl.torch_t == 0.0 else "X", "O" if tz_ok else "X"])
+	pl.held = "c4"
 	var blocked: bool = not Skills.throw_flask(pl, pl.aim(), ff, "c4")
 	pl.held = ""
 	# 대지: 던진 방향에 가로로 기둥 4개, 이동을 막고, 피해를 받으면 무너짐
@@ -1082,8 +1158,33 @@ func _autotest() -> void:
 			await get_tree().process_frame
 			Input.action_release("secondary")
 			var countered: bool = q.swing != null and q.swing.prof.get("power", false)
+			# 방어 자세를 다 올린 뒤(0.25초 후) 맞으면 일반 방어: 일부 피해
+			await _wait(0.9)
+			q.swing = null
+			q.stun = 0.0
+			Input.action_press("secondary")
+			await _wait(0.4)
+			var hp1: float = q.hp
+			q.take_damage(30.0, mon, {"from": mon.pos})
+			var partial: bool = q.hp < hp1 and hp1 - q.hp < 30.0 and q.counter_t <= 0.0
+			Input.action_release("secondary")
+			# 쌍단검: 완전 방어는 피해 0, 반격은 없음
+			q.equipment.w1 = Data.make_item("old_dagger") if Data.ITEM_BASES.has("old_dagger") else Data.make_item("dagger")
+			q.recalc()
+			q.draw_t = 0.0
+			await _wait(0.7)
+			q.draw_t = 0.0
+			Input.action_press("secondary")
+			await get_tree().process_frame
+			await get_tree().process_frame
+			var hp2: float = q.hp
+			q.take_damage(30.0, mon, {"from": mon.pos})
+			var dag_ok: bool = q.hp == hp2 and q.counter_t <= 0.0
+			Input.action_release("secondary")
+			q.equipment.w1 = Data.make_item("old_longsword")
+			q.recalc()
 			q.invuln = 999.0
-			out.append("파이터 장검: 타이밍 방어 → 패링 %s, 우클릭 반격 %s" % ["O" if parried else "X", "O" if countered else "X"])
+			out.append("파이터 장검: 방어 올리는 중 → 완전 방어 %s, 우클릭 반격 %s, 다 올린 뒤 일반 방어(일부 피해) %s, 단검 완전 방어 0피해·반격 없음 %s" % ["O" if parried else "X", "O" if countered else "X", "O" if partial else "X", "O" if dag_ok else "X"])
 			# 석궁: 입장 시 장전 → 쏘면 장전 해제 → 가방 볼트 1개로 재장전 → 볼트가 없으면 재장전 불가, 석궁을 가방으로 내리면 장전 풀림
 			await _wait(0.6)
 			var cbw = q.equipment.w2

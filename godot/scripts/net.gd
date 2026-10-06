@@ -13,6 +13,7 @@ signal disconnected(reason: String)
 
 const PORT := 7777
 const VERSION := "dr-mp-4"
+const OFFICIAL_SERVER := "54.66.235.118" # 공식 온라인 서버 (AWS Lightsail 고정 IP)
 var version: String = VERSION + "-" + BuildInfo.BUILD # 빌드마다 달라짐
 # 대기방: 같은 맵을 고른 사람끼리 모여 최소 10초 ~ 최대 60초 로딩 후 함께 입장
 const ROOM_MIN := 10.0
