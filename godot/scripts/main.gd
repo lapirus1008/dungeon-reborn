@@ -1482,7 +1482,28 @@ func _mptest_raidjoin(port: int) -> void:
 		t += 0.1
 	var ok: bool = game != null and game.running
 	print("[mptest] 동시 레이드 입장 %s: %s, 플레이어 %d명" % [Data.MAPS[map].name, ok, game.players.size() if ok else 0])
-	await _wait(6.0)
+	await _wait(3.0)
+	if ok:
+		# 높이 동기화 확인: 내 캐릭터 / 몬스터 / 상자가 내 화면의 땅 높이와 맞는지
+		var dg = game.dungeon
+		var bad_a := 0
+		var na := 0
+		for a2 in game.actors:
+			if a2 == game.player or not a2.alive:
+				continue
+			na += 1
+			if absf(a2.pos.y - dg.ground_y(a2.pos.x, a2.pos.z)) > 0.3:
+				bad_a += 1
+		var bad_c := 0
+		for c in game.chests:
+			if absf(c.pos.y - dg.ground_y(c.pos.x, c.pos.z)) > 0.3:
+				bad_c += 1
+		var ys := []
+		for i in 10:
+			ys.append(snappedf(game.player.pos.y - dg.ground_y(game.player.pos.x, game.player.pos.z), 0.01))
+			await get_tree().process_frame
+		print("[mptest] 높이: 내 캐릭터-땅 %s, 몬스터 %d/%d 어긋남, 상자 %d/%d 어긋남, 언덕 %s" % [ys, bad_a, na, bad_c, game.chests.size(), not dg.hv.is_empty()])
+	await _wait(3.0)
 	print("[mptest] 레이드 유지 %s" % (game != null and game.running))
 	Net.leave()
 	await _wait(0.5)

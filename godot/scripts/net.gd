@@ -12,7 +12,8 @@ signal server_begin(loadouts: Dictionary) # 서버: 모든 장비가 모였으�
 signal disconnected(reason: String)
 
 const PORT := 7777
-const VERSION := "dr-mp-3"
+const VERSION := "dr-mp-4"
+var version: String = VERSION + "-" + BuildInfo.BUILD # 빌드마다 달라짐
 # 대기방: 같은 맵을 고른 사람끼리 모여 최소 10초 ~ 최대 60초 로딩 후 함께 입장
 const ROOM_MIN := 10.0
 const ROOM_MAX := 60.0
@@ -147,7 +148,7 @@ func leave() -> void:
 
 func _on_connected() -> void:
 	_set_status("접속 완료 - 던전 입장 → 맵 선택으로 대기방에 들어가세요")
-	hello.rpc_id(1, my_name, SaveData.data.cls, VERSION, pin)
+	hello.rpc_id(1, my_name, SaveData.data.cls, version, pin)
 
 
 func _on_failed() -> void:
@@ -190,8 +191,8 @@ func hello(pname: String, cls: String, ver: String, pin_code: String) -> void:
 	if not is_server():
 		return
 	var id := multiplayer.get_remote_sender_id()
-	if ver != VERSION:
-		kicked.rpc_id(id, "게임 버전이 다릅니다 (서버 %s). 최신 버전으로 업데이트하세요" % VERSION)
+	if ver != version:
+		kicked.rpc_id(id, "게임 버전이 다릅니다 (서버 %s, 내 게임 %s). 최신 버전으로 업데이트하세요" % [version, ver])
 		return
 	if mode == "server" and roster.size() >= SERVER_CAP:
 		kicked.rpc_id(id, "서버가 가득 찼습니다 (%d/%d). 잠시 후 다시 접속해 주세요" % [roster.size(), SERVER_CAP])
