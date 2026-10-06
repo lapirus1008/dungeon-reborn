@@ -90,7 +90,7 @@ static func melee_profile(c, bash := false) -> Dictionary:
 # 원거리 기본 공격 (중석궁, 지팡이·오브를 든 술사)
 static func ranged_profile(c) -> Dictionary:
 	if wcat(c) == "crossbow":
-		return {"kind": "bolt", "speed": 55.0, "dmg": 62.0, "cd": 1.4, "cost": 0.0, "gravity": 1.5}
+		return {"kind": "bolt", "speed": 45.0, "dmg": 62.0, "cd": 1.4, "cost": 0.0, "gravity": 1.5} # 매우 빠르지만 멀리서는 옆으로 피할 수 있음
 	match c.cls:
 		"druid":
 			return {"kind": "thorn", "speed": 40.0, "dmg": 20.0, "cd": 0.5, "cost": 0.0}
@@ -1065,7 +1065,7 @@ static func _psionic(c, aim: Dictionary, n: int) -> bool:
 			slots.append(c.equipment[s])
 	for i in n:
 		var sword: Dictionary = slots[i]
-		var bonus := 1.2 if int(sword.get("rarity", 0)) >= 2 else 1.0
+		var bonus := 1.2 if int(sword.get("rarity", 0)) >= 3 else 1.0
 		var off := (i - (n - 1) / 2.0) * 0.18
 		var dir: Vector3 = aim.dir.rotated(Vector3.UP, off)
 		dir.y += 0.08

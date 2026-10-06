@@ -759,9 +759,61 @@ func _flask_checks(pl, out: Array) -> void:
 	Input.action_release("secondary")
 	await get_tree().process_frame
 	var rmb_end: bool = mim2 and not pl.mimic_form
+	await _arrow_checks(pl, out)
 	out.append("플라스크: 공유 대기 20초 %s(다른 플라스크 막힘 %s), 포물선 점 %d개 %s, 대지 기둥 %d개 · 이동 막음 %s · 부서짐 %s, 화염 지면(반경3m·10초·16/0.5초·안 겹침·나도 피해) %s, 전기(피해+75%% 둔화 4.5초) %s, 방어 보호막(마신 뒤) %s, 미믹 변신 %s · 몬스터 무시 %s · 피격 해제 %s · 우클릭 해제 %s" % [
 		"O" if cd_ok else "X", "O" if blocked else "X", arc.size(), "O" if arc.size() > 2 else "X", pillars.size(), "O" if block_ok else "X", "O" if broke else "X",
 		"O" if fire_ok else "X", "O" if light_ok else "X", "O" if sh_ok else "X", "O" if mim_ok else "X", "O" if ignore_ok else "X", "O" if hit_end else "X", "O" if rmb_end else "X"])
+
+
+# 몬스터 화살: 가만히 있으면 맞고, 15m 밖에서 옆으로 움직이면 피함
+func _arrow_checks(pl, out: Array) -> void:
+	var archer = null
+	for a in game.actors:
+		if a.kind == "monster" and a.alive and not a.def.boss:
+			archer = a
+			break
+	if archer == null:
+		return
+	for z0 in game.zones:
+		z0.t = 0.0 # 앞 시험의 돌기둥·불 지대 치우기
+	game.update_zones(0.0)
+	game._sync_blocks()
+	# 가장 멀리 트인 방향 (최대 15m)
+	var f := Actor.fwd(pl.yaw)
+	var best := 0.0
+	for i in 16:
+		var fw := Actor.fwd(i * TAU / 16.0)
+		var dd := 0.0
+		while dd < 16.0 and not game.dungeon.is_solid(pl.pos.x + fw.x * (dd + 0.5), pl.pos.z + fw.z * (dd + 0.5)):
+			dd += 0.5
+		if dd > best:
+			best = dd
+			f = fw
+	var dist := minf(15.0, best - 1.0)
+	var side := Vector3(-f.z, 0, f.x)
+	var res := []
+	for strafe in [false, true]:
+		for a in game.actors:
+			if a != pl and a != archer:
+				a.stun = 99.0
+		archer.stun = 99.0
+		archer.pos = pl.pos + f * dist
+		archer.pos.y = game.dungeon.ground_y(archer.pos.x, archer.pos.z)
+		archer.yaw = Actor.yaw_to(pl.pos.x - archer.pos.x, pl.pos.z - archer.pos.z)
+		pl.invuln = 0.0
+		pl.shield = 0.0
+		pl.hp = pl.max_hp
+		game.shoot_at(archer, pl, "arrow", 10.0, 30.0)
+		var t := 0.0
+		while t < 0.9:
+			await get_tree().process_frame
+			var dt := get_process_delta_time()
+			t += dt
+			if strafe:
+				pl.pos = game.dungeon.resolve_circle(pl.pos + side * 5.0 * dt, pl.radius)
+		res.append(pl.hp < pl.max_hp)
+		pl.invuln = 999.0
+	out.append("몬스터 화살 (%.0fm): 가만히 있으면 맞음 %s, 옆으로 움직이면 피함 %s" % [dist, "O" if res[0] else "X", "O" if not res[1] else "X"])
 
 
 const PSI_WAIT := 1.25 # 검 2자루 소환 시간 (0.55초씩)

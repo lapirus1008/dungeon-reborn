@@ -2,9 +2,11 @@
 # 던전본 위키(방어구/무기/몬스터)와 직업 스킬·패시브 자료를 기준으로 구성
 extends Node
 
-# ------------------------------------------------------------------ 희귀도 (지도 범례: 일반/고급/희귀/영웅/전설)
+# ------------------------------------------------------------------ 희귀도: 낡음(회색) / 일반(흰색) / 고급 / 희귀 / 영웅 / 전설
+# 0 낡음: 기본 지급 장비·소모품 (옵션 없음) · 1 일반: 던전에서 나오는 낡은 장비 + 옵션 1개 · 2 이상: 장비 표의 단계
 const RARITIES := [
-	{"name": "낡음", "color": Color("#8e8e8e"), "value": 1.0}, # 0등급 회색 (흰색보다 아래): 기본 장비·소모품
+	{"name": "낡음", "color": Color("#8e8e8e"), "value": 0.7},
+	{"name": "일반", "color": Color("#f2f2f2"), "value": 1.0},
 	{"name": "고급", "color": Color("#4fd16a"), "value": 2.0},
 	{"name": "희귀", "color": Color("#4a9dff"), "value": 4.0},
 	{"name": "영웅", "color": Color("#b65cff"), "value": 8.0},
@@ -365,6 +367,9 @@ func _ready() -> void:
 
 func _add(id: String, d: Dictionary) -> void:
 	d["id"] = id
+	# 표의 등급 1~4(고급~전설)는 흰색 '일반'이 들어가면서 한 칸씩 위 (2~5)
+	if int(d.get("rarity", 0)) >= 1:
+		d["rarity"] = int(d.rarity) + 1
 	ITEM_BASES[id] = d
 
 
@@ -835,12 +840,14 @@ func stat_label(k: String, v) -> String:
 func roll_rarity(luck: float = 0.0) -> int:
 	var r := randf() * 100.0 - luck * 9.0
 	if r < 1.0:
-		return 4
+		return 5
 	if r < 6.0:
-		return 3
+		return 4
 	if r < 20.0:
+		return 3
+	if r < 45.0:
 		return 2
-	if r < 50.0:
+	if r < 75.0:
 		return 1
 	return 0
 
@@ -880,9 +887,21 @@ func roll_loot(count: int, luck: float = 0.0) -> Array:
 	for i in count:
 		var r := randf()
 		if r < 0.45:
-			var pool := _gear_by_rarity(roll_rarity(luck))
+			var rr := roll_rarity(luck)
+			if rr <= 1:
+				# 낡은 장비: 회색(옵션 없음) 또는 흰색 일반(무작위 옵션 1개)
+				var it0 := make_item(_gear_by_rarity(0).pick_random())
+				if rr == 1:
+					it0.rarity = 1
+					var a := _roll_mod("any", "3", {})
+					if not a.is_empty():
+						it0.affixes.append(a)
+					it0.value = int(it0.value * 1.6)
+				items.append(it0)
+				continue
+			var pool := _gear_by_rarity(rr)
 			if pool.is_empty():
-				pool = _gear_by_rarity(1)
+				pool = _gear_by_rarity(2)
 			items.append(make_item(pool.pick_random()))
 		elif r < 0.65:
 			var c = ["health_potion", "health_potion", "bandage", "bandage", "fire_flask", "rock_flask", "lightning_flask", "mimic_flask", "protection_flask", "torch"].pick_random()

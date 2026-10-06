@@ -142,6 +142,11 @@ static func _fix_item(it: Dictionary) -> void:
 		var fresh_item := Data.make_item(it.base)
 		it["stats"] = fresh_item.stats
 		it["fixed"] = fresh_item.fixed
+	# 흰색 '일반' 등급 추가 전 저장된 아이템: 장비 표 등급이 한 칸 올라감
+	var br := int(Data.ITEM_BASES.get(it.base, {}).get("rarity", 0))
+	if br >= 2 and int(it.rarity) < br:
+		it["rarity"] = br
+	it["rarity"] = clampi(int(it.rarity), 0, Data.RARITIES.size() - 1)
 	if it.get("stats", {}).has("dmg"):
 		it.stats.dmg = int(it.stats.dmg)
 	if Data.ITEM_BASES.get(it.base, {}).get("slot", "") in ["consumable", "torch", "ammo"]:

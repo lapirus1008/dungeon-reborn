@@ -350,11 +350,11 @@ func release_attack() -> void:
 		"shoot":
 			atk_cd = def.cd
 			if target != null:
-				game.shoot_at(self, target, "arrow", dmg, 32.0, 0.04)
+				game.shoot_at(self, target, "arrow", dmg, 30.0)
 		"orb":
 			atk_cd = def.cd
 			if target != null:
-				game.shoot_at(self, target, "magic_orb", dmg, 16.0, 0.03)
+				game.shoot_at(self, target, "magic_orb", dmg, 16.0)
 		"sting":
 			atk_cd = def.cd
 			recover_t = 1.0

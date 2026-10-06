@@ -693,17 +693,18 @@ func melee_hit(attacker, dmg: float, rng: float, arc: float, opts: Dictionary = 
 	return hits
 
 
-func shoot_at(src, tgt, kind: String, dmg: float, speed: float, spread: float) -> void:
+# 몬스터 원거리 공격: 쏘는 순간 대상이 있는 곳을 정확히 노림 (앞질러 쏘지 않음)
+# → 투사체는 빠르지만, 일정 거리 밖에서는 옆으로 움직이면 피할 수 있음. 화살 낙하만 보정
+func shoot_at(src, tgt, kind: String, dmg: float, speed: float, _spread := 0.0) -> void:
 	var from := Vector3(src.pos.x, src.pos.y + src.height * 0.75, src.pos.z)
 	from += Actor.fwd(src.yaw) * 0.6
 	var to: Vector3 = tgt.center()
-	var d := from.distance_to(to)
-	to += tgt.last_vel * (d / speed) * 0.6
-	var dir := (to - from).normalized()
-	dir.x += randf_range(-1, 1) * spread
-	dir.y += randf_range(-0.5, 0.5) * spread
-	dir.z += randf_range(-1, 1) * spread
-	spawn_projectile(src, kind, from, dir.normalized(), speed, dmg)
+	var t := from.distance_to(to) / speed
+	to.y += 0.5 * PROJ_GRAVITY.get(kind, 0.0) * t * t
+	spawn_projectile(src, kind, from, (to - from).normalized(), speed, dmg)
+
+
+const PROJ_GRAVITY := {"arrow": 5.0, "bolt": 1.5}
 
 
 # 투사체 종류별 외형/색

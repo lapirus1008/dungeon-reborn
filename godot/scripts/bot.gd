@@ -38,7 +38,7 @@ static func _random_gear(c: String, depth: int) -> Dictionary:
 		var ks := []
 		for k in Data.ITEM_BASES:
 			var b: Dictionary = Data.ITEM_BASES[k]
-			if b.slot == "weapon" and b.cat == cat and int(b.rarity) <= clampi(Data.roll_rarity(luck), 0, 4):
+			if b.slot == "weapon" and b.cat == cat and int(b.rarity) <= clampi(Data.roll_rarity(luck), 0, 5):
 				ks.append(k)
 		return ks.pick_random() if ks.size() else ""
 	var eq := Account.empty_equipment()
@@ -58,7 +58,9 @@ static func _random_gear(c: String, depth: int) -> Dictionary:
 	var at: String = Data.STARTER_ARMOR[c]
 	for slot in ["head", "chest", "hands", "legs", "feet"]:
 		if randf() < 0.7:
-			var r := clampi(Data.roll_rarity(luck), 0, 3)
+			var r := clampi(Data.roll_rarity(luck), 0, 4)
+			if r == 1:
+				r = 0
 			var ks := []
 			for k in Data.ITEM_BASES:
 				var b: Dictionary = Data.ITEM_BASES[k]
