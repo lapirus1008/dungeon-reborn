@@ -174,8 +174,9 @@ func describe(a) -> Dictionary:
 	return d
 
 
+# 내 주변 빛의 그림자: 움직이는 점광원 그림자는 매 프레임 주변을 6방향으로 다시 그려서 매우 무거움 → '높음'에서만
 func shadows_enabled() -> bool:
-	return quality != "low"
+	return quality == "high"
 
 
 func build_level(d: int) -> void:
@@ -311,7 +312,13 @@ func build_level(d: int) -> void:
 			continue
 		if r in elite_rooms and elites.size():
 			add_actor(Monster.new(self, elites.pick_random(), dungeon.random_point_in_room(r), r, mul))
-		var n := mini(4, 1 + area / 16)
+		# 밀집 줄이기: 넓이당 수를 낮추고, 야외(숲·안뜰)는 더 드문드문, 일부 방은 비움
+		var outdoor := dungeon.area_at(int(r.cx), int(r.cz)) == Dungeon.A_OUT
+		var n := mini(3, area / (30 if outdoor else 18))
+		if randf() < 0.15:
+			n = 0
+		elif n == 0 and randf() < 0.6:
+			n = 1
 		for i in n:
 			var t: String = pick.call()
 			add_actor(Monster.new(self, t, dungeon.random_point_in_room(r), r, mul))
@@ -875,7 +882,7 @@ func update_projectiles(dt: float) -> void:
 				hit_pillar(pil, p.dmg)
 				_projectile_impact(p, pp - vel.normalized() * 0.2, null)
 				break
-			if dungeon.is_solid(pp.x, pp.z) or pp.y < 0.02 or pp.y > Dungeon.WALL_H - 0.05:
+			if dungeon.is_solid(pp.x, pp.z) or pp.y < dungeon.ground_y(pp.x, pp.z) + 0.02 or (pp.y > Dungeon.WALL_H - 0.05 and dungeon.area_at(dungeon.to_tile(pp.x), dungeon.to_tile(pp.z)) != Dungeon.A_OUT):
 				done = true
 				p.vel = vel
 				if p.kind in ["arrow", "knife"]:
@@ -1007,17 +1014,38 @@ func explode_fx(p: Vector3, rad: float, color: Color) -> void:
 	effects.append({"node": m, "light": l, "t": 0.0, "dur": 0.45, "kind": "explode", "rad": rad, "mat": mt})
 
 
-# 조준선이 벽/바닥에 닿는 지점 (얼음 폭풍 위치)
+# 조준선이 처음 닿는 곳의 바닥 지점 (번개 지팡이·눈보라 등): 벽·천장·바닥·기둥/나무 줄기·적에서 멈춤.
+# 나무/기둥 칸은 줄기 둘레만 막음 (칸 전체를 막으면 숲에서 원이 발 앞에 붙음)
 func aim_point(origin: Vector3, dir: Vector3, max_d: float) -> Vector3:
 	var p := origin
 	var d := 0.0
+	var step := 0.2
+	var me = player if player != null and origin.distance_to(player.pos) < 3.0 else null
 	while d < max_d:
-		var n := p + dir * 0.25
-		if dungeon.is_solid(n.x, n.z) or n.y <= 0.0:
+		var n := p + dir * step
+		var tx := dungeon.to_tile(n.x)
+		var tz := dungeon.to_tile(n.z)
+		var g := dungeon.get_t(tx, tz)
+		if g == Dungeon.EMPTY or n.y <= dungeon.ground_y(n.x, n.z):
 			break
+		if dungeon.area_at(tx, tz) != Dungeon.A_OUT and n.y >= dungeon.ceiling_y(n.x, n.z) - 0.05:
+			break
+		if g == Dungeon.PILLAR or g == Dungeon.TREE:
+			var c := dungeon.center(tx, tz)
+			if Vector2(n.x - c.x, n.z - c.z).length() < (1.2 if g == Dungeon.PILLAR else 0.5):
+				break
+		var hit := false
+		for a in actors:
+			if a == me or not a.alive or a.extracted or (me != null and not hostile(me, a)):
+				continue
+			if absf(a.pos.x - n.x) < 1.0 and absf(a.pos.z - n.z) < 1.0 and Vector2(a.pos.x - n.x, a.pos.z - n.z).length() < a.radius and n.y < a.pos.y + a.height:
+				hit = true
+				break
 		p = n
-		d += 0.25
-	return Vector3(p.x, 0.0, p.z)
+		d += step
+		if hit:
+			break
+	return Vector3(p.x, dungeon.ground_y(p.x, p.z), p.z)
 
 
 # ------------------------------------------------------------------ 지속 지역 효과 (얼음 폭풍, 영혼의 장막, 회오리 검)
@@ -1343,6 +1371,7 @@ func _flask_impact(p: Dictionary, pp: Vector3, hit) -> void:
 	var gp := Vector3(pp.x, 0.0, pp.z)
 	if dungeon.is_solid(gp.x, gp.z):
 		gp = Vector3(pp.x - back.x, 0.0, pp.z - back.z)
+	gp.y = dungeon.ground_y(gp.x, gp.z)
 	match p.flask:
 		"fire":
 			# 10초 동안 반경 3m의 지면이 불탐
@@ -1738,7 +1767,8 @@ func _kill_hooks(actor, src) -> void:
 func drop_bag(p: Vector3, items: Array, nm: String, color := Color(0.42, 0.31, 0.19)) -> void:
 	if items.is_empty():
 		return
-	var pp := Vector3(p.x, 0, p.z)
+	var pp := Vector3(p.x, 0.0, p.z)
+	pp.y = dungeon.ground_y(pp.x, pp.z)
 	bag_seq += 1
 	var b := _add_bag_node(bag_seq, pp, color, nm)
 	var pk := Inv.pack_container(items)
@@ -1750,7 +1780,8 @@ func drop_bag(p: Vector3, items: Array, nm: String, color := Color(0.42, 0.31, 0
 
 # 바닥에 아이템 하나를 떨어뜨림 (아이템 모양 + 등급 빛줄기, F로 줍기)
 func drop_item(p: Vector3, it: Dictionary, scatter := 0.0) -> void:
-	var pp := Vector3(p.x, 0, p.z)
+	var pp := Vector3(p.x, 0.0, p.z)
+	pp.y = dungeon.ground_y(pp.x, pp.z)
 	if scatter > 0.0:
 		for _i in 6:
 			var q := pp + Vector3(randf_range(-scatter, scatter), 0, randf_range(-scatter, scatter))
@@ -1815,7 +1846,8 @@ static func top_rarity(items: Array) -> int:
 func drop_monster_corpse(actor, items: Array) -> void:
 	if items.is_empty():
 		return
-	var pp := Vector3(actor.pos.x, 0, actor.pos.z)
+	var pp := Vector3(actor.pos.x, 0.0, actor.pos.z)
+	pp.y = dungeon.ground_y(pp.x, pp.z)
 	bag_seq += 1
 	var rar := top_rarity(items)
 	var b := _add_bag_node(bag_seq, pp, Color.WHITE, actor.name + "의 시체", rar)
@@ -1896,7 +1928,8 @@ func drop_corpse(a, nm: String, color: Color) -> void:
 	var bag: Array = a.bag.duplicate(true)
 	if bag.is_empty() and eq.values().all(func(v): return v == null):
 		return
-	var pp := Vector3(a.pos.x, 0, a.pos.z)
+	var pp := Vector3(a.pos.x, 0.0, a.pos.z)
+	pp.y = dungeon.ground_y(pp.x, pp.z)
 	bag_seq += 1
 	var b := _add_bag_node(bag_seq, pp, color, nm, top_rarity(bag + eq.values()))
 	b.kind = "corpse"
@@ -2689,7 +2722,7 @@ func throw_arc(c) -> Array:
 		var np: Vector3 = p + v * sdt
 		acc += np.distance_to(p)
 		p = np
-		var stop := dungeon.is_solid(p.x, p.z) or p.y < 0.02 or p.y > Dungeon.WALL_H - 0.05
+		var stop := dungeon.is_solid(p.x, p.z) or p.y < dungeon.ground_y(p.x, p.z) + 0.02 or (p.y > Dungeon.WALL_H - 0.05 and dungeon.area_at(dungeon.to_tile(p.x), dungeon.to_tile(p.z)) != Dungeon.A_OUT)
 		if not stop and p.y < PILLAR_H:
 			for b in dungeon.dyn_blocks:
 				var bp: Vector3 = b[0]

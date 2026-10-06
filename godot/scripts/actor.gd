@@ -120,7 +120,7 @@ func _init(g, o: Dictionary) -> void:
 	name = o.name
 	faction = o.faction
 	pos = o.pos
-	pos.y = 0.0
+	pos.y = g.dungeon.ground_y(pos.x, pos.z) if g != null and g.get("dungeon") != null else 0.0
 	last_pos = pos
 	yaw = randf() * TAU
 	radius = o.get("radius", 0.45)
@@ -516,6 +516,8 @@ func move(dx: float, dz: float, dt: float) -> void:
 	pos.x += dx * dt
 	pos.z += dz * dt
 	pos = game.dungeon.resolve_circle(pos, radius)
+	if kind != "player":
+		pos.y = game.dungeon.ground_y(pos.x, pos.z) # 몬스터·AI는 언덕을 따라감
 
 
 func update(_dt: float) -> void:

@@ -80,7 +80,9 @@ func is_solid(x: float, z: float) -> bool:
 
 
 func center(tx: int, tz: int) -> Vector3:
-	return Vector3((tx + 0.5) * T, 0.0, (tz + 0.5) * T)
+	var x := (tx + 0.5) * T
+	var z := (tz + 0.5) * T
+	return Vector3(x, ground_y(x, z), z)
 
 
 func room_at(x: float, z: float):
@@ -258,6 +260,7 @@ func _load_map(def: Dictionary) -> void:
 	if marks.spawns.is_empty():
 		marks.spawns = _spread_points(10, [], map_rng)
 	_segment_rooms(map_rng)
+	_build_heights()
 	for k in marks:
 		marks[k] = marks[k].filter(func(t): return get_t(t.x, t.y) != EMPTY)
 	if marks.spawns.size() < 4:
@@ -437,6 +440,82 @@ func _mark_wild() -> void:
 			if get_t(n.x, n.y) == EMPTY and wild[idx(n.x, n.y)] == 0:
 				wild[idx(n.x, n.y)] = 1
 				q.append(n)
+
+
+# 바닥 높이: 숲은 완만한 언덕 (타일 모서리 높이를 이중 선형 보간), 건물·성 안뜰·실내는 0
+var hv := PackedFloat32Array() # (W+1) x (H+1) 모서리 높이
+const HILL_AMP := 3.5
+
+
+func ground_y(x: float, z: float) -> float:
+	if hv.is_empty():
+		return 0.0
+	var fx := clampf(x / T, 0.0, W - 0.001)
+	var fz := clampf(z / T, 0.0, H - 0.001)
+	var i := int(fx)
+	var j := int(fz)
+	var u := fx - i
+	var v := fz - j
+	var a := hv[j * (W + 1) + i]
+	var b := hv[j * (W + 1) + i + 1]
+	var c := hv[(j + 1) * (W + 1) + i]
+	var d := hv[(j + 1) * (W + 1) + i + 1]
+	return lerpf(lerpf(a, b, u), lerpf(c, d, u), v)
+
+
+func _build_heights() -> void:
+	if not has_outdoor:
+		return
+	var CW := W + 1
+	var dist := PackedInt32Array()
+	dist.resize(CW * (H + 1))
+	dist.fill(-1)
+	var q := []
+	var cu: Array = decor.get("curtain", [])
+	for j in H + 1:
+		for i in CW:
+			var flat := false
+			for t in [Vector2i(i - 1, j - 1), Vector2i(i, j - 1), Vector2i(i - 1, j), Vector2i(i, j)]:
+				var g := get_t(t.x, t.y)
+				if _in_rect(cu, t.x, t.y):
+					flat = true
+				elif g == EMPTY:
+					if not is_wild(t.x, t.y):
+						flat = true # 성벽·건물 벽 옆은 평평하게
+				elif area_at(t.x, t.y) != A_OUT:
+					flat = true
+			if flat:
+				dist[j * CW + i] = 0
+				q.append(Vector2i(i, j))
+	var head := 0
+	while head < q.size():
+		var c: Vector2i = q[head]
+		head += 1
+		var dc := dist[c.y * CW + c.x]
+		for dv in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var n: Vector2i = c + dv
+			if n.x < 0 or n.y < 0 or n.x >= CW or n.y > H or dist[n.y * CW + n.x] >= 0:
+				continue
+			dist[n.y * CW + n.x] = dc + 1
+			q.append(n)
+	var noise := FastNoiseLite.new()
+	noise.seed = hash(map_id)
+	noise.frequency = 0.07
+	noise.fractal_octaves = 3
+	hv.resize(CW * (H + 1))
+	for j in H + 1:
+		for i in CW:
+			var dd := dist[j * CW + i]
+			var k := 1.0 if dd < 0 else clampf(dd / 3.0, 0.0, 1.0)
+			k = k * k * (3.0 - 2.0 * k) # 부드럽게
+			hv[j * CW + i] = (noise.get_noise_2d(i, j) * 0.5 + 0.35) * 2.0 * HILL_AMP * k
+
+
+# 실내 천장 높이 (성당은 높음)
+func ceiling_y(x: float, z: float) -> float:
+	if area_at(to_tile(x), to_tile(z)) == A_CATH:
+		return float(decor.get("wall_h", {}).get("cathedral", WALL_H))
+	return WALL_H
 
 
 func is_wild(x: int, z: int) -> bool:
@@ -651,9 +730,13 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 					else:
 						out_floors.append(fxf)
 					if g == TREE:
-						tree_x.append([Vector3(c.x + rng.randf_range(-0.3, 0.3), 0, c.z + rng.randf_range(-0.3, 0.3)), rng.randf_range(1.0, 1.45), rng.randi() % 3])
+						var tp := Vector3(c.x + rng.randf_range(-0.3, 0.3), 0, c.z + rng.randf_range(-0.3, 0.3))
+						tp.y = ground_y(tp.x, tp.z) - 0.15
+						tree_x.append([tp, rng.randf_range(1.0, 1.45), rng.randi() % 3])
 					elif g == ROOM and rng.randf() < 0.35 and not _in_rect(curtain, x, z):
-						bush_x.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * rng.randf_range(0.6, 1.2)), Vector3(c.x + rng.randf_range(-1.6, 1.6), 0.15, c.z + rng.randf_range(-1.6, 1.6))))
+						var bp := Vector3(c.x + rng.randf_range(-1.6, 1.6), 0, c.z + rng.randf_range(-1.6, 1.6))
+						bp.y = ground_y(bp.x, bp.z) + 0.15
+						bush_x.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * rng.randf_range(0.6, 1.2)), bp))
 				elif a == A_CATH:
 					cath_floors.append(fxf)
 					cath_ceils.append(Transform3D(Basis(Vector3.RIGHT, PI), Vector3(c.x, cath_h, c.z)))
@@ -676,7 +759,9 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 									near2 = true
 					if near2:
 						for k in 3:
-							tree_x.append([Vector3(c.x + rng.randf_range(-1.7, 1.7), 0, c.z + rng.randf_range(-1.7, 1.7)), rng.randf_range(1.1, 1.8), rng.randi() % 3])
+							var ep := Vector3(c.x + rng.randf_range(-1.7, 1.7), 0, c.z + rng.randf_range(-1.7, 1.7))
+							ep.y = ground_y(ep.x, ep.z) - 0.15
+							tree_x.append([ep, rng.randf_range(1.1, 1.8), rng.randi() % 3])
 					continue
 				if adj:
 					var h := _wall_h(x, z)
@@ -708,6 +793,9 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 	if floors.size():
 		root.add_child(_multimesh(plane, floors))
 	# 야외/성당 바닥
+	if out_floors.size() and not hv.is_empty():
+		_build_terrain(out_floors)
+		out_floors = []
 	for pair in [[out_floors, "grass", 2.0], [yard_floors, "gravel", 2.0], [cath_floors, "marble", 1.0]]:
 		if pair[0].size():
 			var pm := PlaneMesh.new()
@@ -829,7 +917,7 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		var sc := Vector3(ps[0], ps[1], ps[2])
 		var px := []
 		for t in pillar_x:
-			px.append(Transform3D(Basis().scaled(sc), Vector3(t.origin.x, 0.0, t.origin.z)))
+			px.append(Transform3D(Basis().scaled(sc), Vector3(t.origin.x, t.origin.y - WALL_H / 2.0, t.origin.z)))
 		root.add_child(_multimesh(tm.call("pillar"), px))
 	elif pillar_x.size() and AssetRegistry.mesh("dungeon", "pillar") != null:
 		root.add_child(_multimesh(AssetRegistry.mesh("dungeon", "pillar"), pillar_x))
@@ -997,6 +1085,46 @@ func _chunkify() -> void:
 			part.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
 			root.add_child(part)
 		mi.queue_free()
+
+
+# 숲 바닥: 높낮이를 따라 휘어진 지면 (32m 구역마다 하나의 메시, 타일당 2x2 칸)
+func _build_terrain(tiles: Array) -> void:
+	var mat := _mat(Textures.pick("grass", Textures.ground("grass")), Vector3(0.5, 0.5, 1))
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var chunks := {}
+	for xf in tiles:
+		var o: Vector3 = xf.origin
+		var key := Vector2i(floori(o.x / CHUNK), floori(o.z / CHUNK))
+		if not chunks.has(key):
+			chunks[key] = []
+		chunks[key].append(o)
+	const SUB := 2
+	for key in chunks:
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		for o in chunks[key]:
+			var x0: float = o.x - T / 2.0
+			var z0: float = o.z - T / 2.0
+			var s := T / SUB
+			for a in SUB:
+				for b in SUB:
+					var p := [Vector3(x0 + a * s, 0, z0 + b * s), Vector3(x0 + (a + 1) * s, 0, z0 + b * s),
+						Vector3(x0 + (a + 1) * s, 0, z0 + (b + 1) * s), Vector3(x0 + a * s, 0, z0 + (b + 1) * s)]
+					for k in 4:
+						p[k].y = ground_y(p[k].x, p[k].z)
+					for idx3 in [0, 1, 2, 0, 2, 3]:
+						var v: Vector3 = p[idx3]
+						var e := 0.5
+						var nrm := Vector3(ground_y(v.x - e, v.z) - ground_y(v.x + e, v.z), 2.0 * e, ground_y(v.x, v.z - e) - ground_y(v.x, v.z + e)).normalized()
+						st.set_normal(nrm)
+						st.set_uv(Vector2(v.x, v.z) / T)
+						st.add_vertex(v)
+		st.generate_tangents()
+		var mi := MeshInstance3D.new()
+		mi.mesh = st.commit()
+		mi.material_override = mat
+		mi.visibility_range_end = VIEW_RANGE + 10.0
+		root.add_child(mi)
 
 
 func _in_rect(r: Array, x: int, z: int) -> bool:
@@ -1515,6 +1643,7 @@ func random_point_in_room(room: Dictionary, margin: int = 1) -> Vector3:
 			var c := center(t.x, t.y)
 			c.x += rng.randf_range(-1.0, 1.0)
 			c.z += rng.randf_range(-1.0, 1.0)
+			c.y = ground_y(c.x, c.z)
 			return c
 		return center(int(room.cx), int(room.cz))
 	for k in 30:

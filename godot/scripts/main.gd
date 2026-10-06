@@ -148,7 +148,7 @@ func apply_quality(q: String) -> void:
 	if game and is_instance_valid(game):
 		game.quality = q
 		if game.player_light:
-			game.player_light.shadow_enabled = q != "low"
+			game.player_light.shadow_enabled = q == "high"
 		if game.moon != null and is_instance_valid(game.moon):
 			game.moon.shadow_enabled = q != "low"
 		if game.env:
@@ -1478,6 +1478,10 @@ func _inv_checks() -> Array:
 	var cath_in := cd.center(16, 58)
 	var s0 := cd.center(cd.marks.spawns[0].x, cd.marks.spawns[0].y)
 	var reach: bool = cd.path(s0, hall).size() > 0 and cd.path(s0, cath_in).size() > 0
+	var hmax := 0.0
+	for i in cd.hv.size():
+		hmax = maxf(hmax, cd.hv[i])
+	ok.call("성 지도 높낮이 (숲 언덕 최고 %.1fm, 성 안 %.1fm)" % [hmax, cd.ground_y(56 * 4.0, 31 * 4.0)], hmax > 1.0 and absf(cd.ground_y(56 * 4.0, 31 * 4.0)) < 0.01)
 	ok.call("성 지도 (야외 %s, 성당 %s, 시작 위치 %s, 나무 충돌 %s, 큰 홀·성당까지 길 %s)" % [cd.has_outdoor, cd.area_at(16, 58) == Dungeon.A_CATH, sp_ok, pushed.distance_to(tc) > 1.0, reach],
 		cd.has_outdoor and cd.area_at(16, 58) == Dungeon.A_CATH and sp_ok and pushed.distance_to(tc) > 1.0 and reach)
 	# 1세트 검/방패 · 2세트 장검: 가방의 방패 우클릭 → 1세트 보조 칸과 교체

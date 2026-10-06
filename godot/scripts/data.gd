@@ -4,7 +4,7 @@ extends Node
 
 # ------------------------------------------------------------------ 희귀도 (지도 범례: 일반/고급/희귀/영웅/전설)
 const RARITIES := [
-	{"name": "일반", "color": Color("#c8c8c8"), "value": 1.0},
+	{"name": "낡음", "color": Color("#8e8e8e"), "value": 1.0}, # 0등급 회색 (흰색보다 아래): 기본 장비·소모품
 	{"name": "고급", "color": Color("#4fd16a"), "value": 2.0},
 	{"name": "희귀", "color": Color("#4a9dff"), "value": 4.0},
 	{"name": "영웅", "color": Color("#b65cff"), "value": 8.0},

@@ -65,6 +65,8 @@ var cont_title: Label
 var cont_grid: GridView
 var menu: Control
 var fps_label: Label
+var perf_detail := false
+var f3_held := false
 var hurt_v := 0.0
 var sens_slider: HSlider
 var quality_opt: OptionButton
@@ -872,4 +874,22 @@ func update_hud(dt: float) -> void:
 	vig_mat.set_shader_parameter("frost", 1.0 if p.frozen > 0.0 else 0.0)
 	vig_mat.set_shader_parameter("stealth", 1.0 if p.stealth > 0.0 or p.channel_t > 0.0 or p.channel_ready else 0.0)
 
-	fps_label.text = "%d FPS" % Engine.get_frames_per_second()
+	if Input.is_key_pressed(KEY_F3) and not f3_held:
+		perf_detail = not perf_detail
+		var vrid := get_viewport().get_viewport_rid()
+		RenderingServer.viewport_set_measure_render_time(vrid, perf_detail)
+	f3_held = Input.is_key_pressed(KEY_F3)
+	if perf_detail:
+		# F3: 무엇이 느린지 (CPU 게임 로직 / CPU 그리기 준비 / GPU 그리기)
+		var vrid := get_viewport().get_viewport_rid()
+		var mode = ["끔", "켬", "적응형", "메일박스"][DisplayServer.window_get_vsync_mode()]
+		fps_label.text = "%d FPS · 프레임 %.1fms\n게임 로직(CPU) %.1fms · 그리기 준비(CPU) %.1fms · 그리기(GPU) %.1fms\n드로우콜 %d · 삼각형 %dK · 물체 %d · VSync %s · 최대 %s · 품질 %s%s" % [
+			Engine.get_frames_per_second(), 1000.0 / maxf(1.0, Engine.get_frames_per_second()),
+			Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
+			RenderingServer.viewport_get_measured_render_time_cpu(vrid) + RenderingServer.get_frame_setup_time_cpu(),
+			RenderingServer.viewport_get_measured_render_time_gpu(vrid),
+			Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME) / 1000,
+			Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME), mode, str(Engine.max_fps) if Engine.max_fps > 0 else "없음",
+			SaveData.setting("quality", "mid"), " · 디버그 실행(에디터)" if OS.is_debug_build() else ""]
+	else:
+		fps_label.text = "%d FPS (F3: 자세히)" % Engine.get_frames_per_second()

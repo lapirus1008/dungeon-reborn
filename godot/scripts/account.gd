@@ -28,20 +28,28 @@ static func default_skills(cls: String) -> Dictionary:
 
 
 # 새 캐릭터 기본 지급품: 직업 무기 + 직업 방어구(일반) + 물약
+# 기본 회색(0등급 '낡은') 장비로 빈 칸 채우기: 새 캐릭터, 그리고 던전에서 모두 잃었을 때
+static func fill_basic_gear(eq: Dictionary, cls: String) -> void:
+	var put := func(slot: String, base: String) -> void:
+		if base != "" and eq.get(slot) == null:
+			eq[slot] = Data.make_item(base)
+	put.call("w1", Data.STARTER_WEAPON[cls])
+	if not Inv._is_2h(eq.get("w1")):
+		put.call("w1o", Data.STARTER_OFFHAND.get(cls, ""))
+	# 두 번째 무기 세트 (2키): 파이터 양손검(소용돌이), 프리스트 지팡이(신의 계시/치료)
+	put.call("w2", {"fighter": "old_longsword", "priest": "old_staff"}.get(cls, ""))
+	var at: String = Data.STARTER_ARMOR[cls]
+	put.call("chest", "old_%s_chest" % at)
+	put.call("legs", "old_%s_legs" % at)
+	put.call("feet", "old_%s_feet" % at)
+	if cls == "swordmaster":
+		put.call("sw1", "old_sword")
+		put.call("sw2", "old_sword")
+
+
 static func new_character(name: String, cls: String) -> Dictionary:
 	var eq := empty_equipment()
-	eq.w1 = Data.make_item(Data.STARTER_WEAPON[cls])
-	var off: String = Data.STARTER_OFFHAND.get(cls, "")
-	if off != "":
-		eq.w1o = Data.make_item(off)
-	# 두 번째 무기 세트 (2키): 파이터 양손검(소용돌이), 프리스트 지팡이(신의 계시/치료)
-	var second: String = {"fighter": "old_longsword", "priest": "old_staff"}.get(cls, "")
-	if second != "":
-		eq.w2 = Data.make_item(second)
-	var at: String = Data.STARTER_ARMOR[cls]
-	eq.chest = Data.make_item("old_%s_chest" % at)
-	eq.legs = Data.make_item("old_%s_legs" % at)
-	eq.feet = Data.make_item("old_%s_feet" % at)
+	fill_basic_gear(eq, cls)
 	var pot := Data.make_item("health_potion")
 	pot.count = 2
 	eq.c3 = pot
@@ -51,10 +59,6 @@ static func new_character(name: String, cls: String) -> Dictionary:
 	var bag := []
 	eq.c5 = Data.make_item("fire_flask")
 	Inv.repack(bag, Inv.bag_size(cls))
-	# 소드마스터: 검 슬롯에 영검으로 쓸 검
-	if cls == "swordmaster":
-		eq.sw1 = Data.make_item("old_sword")
-		eq.sw2 = Data.make_item("old_sword")
 	return {
 		"id": "c%d_%d" % [Time.get_unix_time_from_system(), randi() % 100000],
 		"name": name, "cls": cls, "equipment": eq, "bag": bag, "skills": default_skills(cls), "wset": 1,
@@ -479,7 +483,10 @@ static func apply_result(s: Dictionary, r: Dictionary) -> String:
 	if not r.success:
 		s.stats.deaths += 1
 		c.stats.deaths = int(c.stats.get("deaths", 0)) + 1
-		return ""
+		# 모두 잃었어도 기본 회색 장비는 장착된 상태로
+		fill_basic_gear(c.equipment, c.cls)
+		select(s, s.active)
+		return "모든 소지품을 잃었습니다. 기본 장비(낡은 장비)가 지급되었습니다"
 	s.stats.extracts += 1
 	c.stats.extracts = int(c.stats.get("extracts", 0)) + 1
 	s.stats.best_haul = maxi(int(s.stats.best_haul), int(r.value))

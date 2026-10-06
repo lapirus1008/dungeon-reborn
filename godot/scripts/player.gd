@@ -339,7 +339,7 @@ func update(dt: float) -> void:
 			forced_t -= dt
 		elif Vector2(net_pos.x - pos.x, net_pos.z - pos.z).length() < 4.0:
 			var np = game.dungeon.resolve_circle(net_pos, radius)
-			pos = Vector3(np.x, maxf(0.0, net_pos.y), np.z)
+			pos = Vector3(np.x, maxf(game.dungeon.ground_y(np.x, np.z), net_pos.y), np.z)
 
 
 # 클라이언트 본인: 이동은 즉시 로컬에서 처리하고, 전투 결과/상태는 서버(me 패킷)에서 받음
@@ -415,11 +415,17 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 				Sfx.play("step", -1.0, 0.15)
 
 	# 점프
-	if can_act and inp.just_pressed("jump") and pos.y <= 0.001 and not locked and root <= 0.0:
+	# 바닥 높이(언덕)를 따라 걷고, 내리막에서는 중력으로 붙음
+	var gy: float = game.dungeon.ground_y(pos.x, pos.z)
+	if can_act and inp.just_pressed("jump") and pos.y <= gy + 0.05 and not locked and root <= 0.0:
 		vy = 6.2
 	vy -= 20.0 * dt
-	pos.y = maxf(0.0, pos.y + vy * dt)
-	if pos.y == 0.0:
+	pos.y = pos.y + vy * dt
+	if pos.y <= gy:
+		pos.y = gy
+		vy = 0.0
+	elif vy <= 0.0 and pos.y - gy < 0.35:
+		pos.y = gy # 완만한 내리막은 바로 붙어서 걸음
 		vy = 0.0
 
 	stamina = 100.0
@@ -777,7 +783,7 @@ func update_camera(cam: Camera3D, vm: Node3D, bubble: MeshInstance3D, dt: float)
 		cam.rotation.z = minf(0.8, cam.rotation.z + dt)
 		cam.rotation.x = pitch
 		return
-	var b := sin(bob) * 0.05 if pos.y == 0.0 and moving else 0.0
+	var b := sin(bob) * 0.05 if vy == 0.0 and moving else 0.0
 	var eye := eye_height()
 	cam.position = Vector3(pos.x, pos.y + eye + b, pos.z)
 	var sx := 0.0
