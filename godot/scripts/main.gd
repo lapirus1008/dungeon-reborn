@@ -13,6 +13,7 @@ var dedicated := false
 
 
 func _ready() -> void:
+	UI.touch = OS.has_feature("android") or OS.has_feature("mobile") or OS.get_cmdline_user_args().has("--touch")
 	_setup_input()
 	get_tree().root.theme = UI.build_theme()
 	ThemeDB.fallback_font = UI.font
@@ -53,6 +54,12 @@ func _ready() -> void:
 	drag.theme = UI.theme
 	overlay.add_child(drag)
 	overlay.move_child(drag, overlay.get_child_count() - 2)
+	if UI.touch:
+		var tc := TouchControls.new()
+		tc.main = self
+		tc.theme = UI.theme
+		overlay.add_child(tc)
+		overlay.move_child(tc, 0)
 	Net.prepare_received.connect(_on_net_prepare)
 	Net.begin_received.connect(_on_net_begin)
 	Net.server_begin.connect(_on_server_begin)
@@ -64,8 +71,8 @@ func _ready() -> void:
 	if args.has("--server"):
 		_run_dedicated(args)
 		return
-	apply_quality(SaveData.setting("quality", "mid"))
-	apply_fps(SaveData.setting("fps", "adaptive"))
+	apply_quality(SaveData.setting("quality", default_quality()))
+	apply_fps(SaveData.setting("fps", "60" if UI.touch else "adaptive"))
 	_build_results()
 	open_lobby()
 	if args.has("--mptest"):
@@ -82,6 +89,8 @@ func _ready() -> void:
 		_mapshots.call_deferred(args[args.find("--mapshots") + 1])
 	elif args.has("--invshots"):
 		_invshots.call_deferred(args[args.find("--invshots") + 1])
+	elif args.has("--touchtest"):
+		_touchtest.call_deferred()
 	elif args.has("--doortest"):
 		_doortest.call_deferred()
 	elif args.has("--invtest"):
@@ -113,6 +122,8 @@ func _setup_input() -> void:
 	for pair in [["attack", MOUSE_BUTTON_LEFT], ["secondary", MOUSE_BUTTON_RIGHT]]:
 		if not InputMap.has_action(pair[0]):
 			InputMap.add_action(pair[0])
+		if UI.touch:
+			continue # 터치: 화면을 누르는 것(마우스 흉내)이 공격이 되지 않게, 공격/방어는 화면 버튼으로만
 		var mb := InputEventMouseButton.new()
 		mb.button_index = pair[1]
 		InputMap.action_add_event(pair[0], mb)
@@ -134,6 +145,11 @@ func apply_fps(mode: String) -> void:
 		_:
 			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ADAPTIVE)
 			Engine.max_fps = 0
+
+
+# 휴대폰은 기본 낮음 (요철·달빛 그림자 끔, 3D 해상도 67%)
+static func default_quality() -> String:
+	return "low" if UI.touch else "mid"
 
 
 func apply_quality(q: String) -> void:
@@ -204,7 +220,7 @@ func start_raid(map := "") -> void:
 	loadout["map"] = map
 	_create_game()
 	game.start(loadout, hud)
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_capture_mouse()
 
 
 func _create_game() -> void:
@@ -216,7 +232,7 @@ func _create_game() -> void:
 		game.queue_free()
 	mode = "raid"
 	game = Game.new()
-	game.quality = SaveData.setting("quality", "mid")
+	game.quality = SaveData.setting("quality", default_quality())
 	game.sensitivity = 0.0022 * float(SaveData.setting("sensitivity", 1.0))
 	add_child(game)
 	hud = Hud.new()
@@ -243,7 +259,7 @@ func _on_net_begin(info: Dictionary) -> void:
 	pending_loadout = null
 	_create_game()
 	game.start_client(info, hud)
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_capture_mouse()
 
 
 # 서버(호스트/전용): 모인 장비로 레이드 생성
@@ -265,7 +281,7 @@ func _on_server_begin(loadouts: Dictionary) -> void:
 	pending_loadout = null
 	_create_game()
 	game.start_server("host", hs, Net.pvp, hud, Net.raid_map)
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_capture_mouse()
 
 
 func _on_raid_over(g) -> void:
@@ -351,11 +367,20 @@ func _close_menu() -> void:
 	_update_mouse()
 
 
+# 마우스 잡기 (터치 기기는 하지 않음: 화면 버튼과 인벤토리 터치가 계속 동작해야 함)
+func _capture_mouse() -> void:
+	if not UI.touch:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
 func _update_mouse() -> void:
 	if mode != "raid" or game == null:
 		return
 	var free: bool = game.menu_open or hud.is_panel_open() or game.result != null
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if free else Input.MOUSE_MODE_CAPTURED
+	if free or UI.touch:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	else:
+		_capture_mouse()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -378,7 +403,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("map"):
 		hud.toggle_map()
 	elif event is InputEventMouseButton and event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and not game.menu_open and not hud.is_panel_open():
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		_capture_mouse()
 
 
 func _process(_dt: float) -> void:
@@ -388,7 +413,7 @@ func _process(_dt: float) -> void:
 		if want_free and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		elif not want_free and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE and DisplayServer.window_is_focused():
-			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			_capture_mouse()
 	# 툴팁이 마우스를 따라다님
 	if UI.tooltip.visible:
 		var mp := get_viewport().get_mouse_position()
@@ -489,6 +514,107 @@ func _shot(dir: String, name: String) -> void:
 		await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(dir.path_join(name + ".png"))
 	print("[shot] ", name)
+
+
+# 터치 조작 (--touch 와 함께): 조이스틱 이동, 오른쪽 드래그 시점, 공격 버튼, 가방 버튼, 인벤토리 탭 = 빠른 장착
+func _touchtest() -> void:
+	await get_tree().create_timer(0.3).timeout
+	_test_char("fighter")
+	start_raid("sinners_end_1")
+	await _wait(1.0)
+	var g := game
+	var p := g.player
+	p.invuln = 999.0
+	for a in g.actors:
+		if a.kind == "monster" or a.kind == "bot":
+			a.stun = 999.0
+	var tc: TouchControls = null
+	for c in overlay.get_children():
+		if c is TouchControls:
+			tc = c
+	var vs := get_viewport().get_visible_rect().size
+	# 넣는 좌표는 화면(논리) 좌표 → 창 픽셀 좌표로 (헤드리스 창은 작아서 늘이기 배율이 큼)
+	var xf: Transform2D = get_viewport().get_final_transform()
+	var touch := func(idx: int, pos: Vector2, down: bool) -> void:
+		var ev := InputEventScreenTouch.new()
+		ev.index = idx
+		ev.position = xf * pos
+		ev.pressed = down
+		Input.parse_input_event(ev)
+	var drag := func(idx: int, pos: Vector2, rel: Vector2) -> void:
+		var ev := InputEventScreenDrag.new()
+		ev.index = idx
+		ev.position = xf * pos
+		ev.relative = xf.basis_xform(rel)
+		Input.parse_input_event(ev)
+	var out := []
+	out.append("터치 모드 %s, 조작 화면 %s, 공격 마우스 연결 없음 %s, 마우스 안 잡음 %s" % [UI.touch, tc != null and tc.visible,
+		InputMap.action_get_events("attack").filter(func(e): return e is InputEventMouseButton).is_empty(), Input.mouse_mode != Input.MOUSE_MODE_CAPTURED])
+	# 조이스틱: 왼쪽 아래를 누르고 위로 끌기 → 앞으로 이동
+	var p0: Vector3 = p.pos
+	var jo := Vector2(300, vs.y - 250)
+	touch.call(0, jo, true)
+	await get_tree().process_frame
+	drag.call(0, jo + Vector2(0, -110), Vector2(0, -110))
+	await _wait(0.8)
+	var moved: float = Vector2(p.pos.x - p0.x, p.pos.z - p0.z).length()
+	# 두 번째 손가락: 오른쪽 드래그로 시점 돌리기 (이동하면서)
+	var y0: float = p.yaw
+	touch.call(1, Vector2(vs.x * 0.7, vs.y * 0.4), true)
+	await get_tree().process_frame
+	for i in 5:
+		drag.call(1, Vector2(vs.x * 0.7 + 20 * (i + 1), vs.y * 0.4), Vector2(20, 0))
+		await get_tree().process_frame
+	touch.call(1, Vector2(vs.x * 0.7 + 100, vs.y * 0.4), false)
+	touch.call(0, jo, false)
+	await _wait(0.2)
+	var turned: float = absf(angle_difference(p.yaw, y0))
+	var stopped: bool = not Input.is_action_pressed("move_forward")
+	out.append("조이스틱 이동 %.1fm %s, 시점 회전 %.2frad %s, 손 떼면 멈춤 %s" % [moved, "O" if moved > 1.0 else "X", turned, "O" if turned > 0.1 else "X", "O" if stopped else "X"])
+	# 공격 버튼
+	p.cd.lmb = 0.0
+	p.draw_t = 0.0
+	var ab: Dictionary = tc.buttons.filter(func(b): return b.id == "attack")[0]
+	touch.call(2, ab.pos, true)
+	await _wait(0.1)
+	var swung: bool = p.swing != null
+	touch.call(2, ab.pos, false)
+	await _wait(0.6)
+	# 앉기 토글
+	var cb: Dictionary = tc.buttons.filter(func(b): return b.id == "crouch")[0]
+	touch.call(3, cb.pos, true)
+	touch.call(3, cb.pos, false)
+	await _wait(0.2)
+	var crouched: bool = p.crouch
+	touch.call(3, cb.pos, true)
+	touch.call(3, cb.pos, false)
+	await _wait(0.2)
+	out.append("공격 버튼 휘두르기 %s, 앉기 켜기 %s / 끄기 %s" % ["O" if swung else "X", "O" if crouched else "X", "O" if not p.crouch else "X"])
+	var sd: String = OS.get_cmdline_user_args()[OS.get_cmdline_user_args().find("--shots") + 1] if OS.get_cmdline_user_args().has("--shots") else ""
+	if sd != "":
+		touch.call(5, jo, true)
+		drag.call(5, jo + Vector2(40, -80), Vector2(40, -80))
+		await _wait(0.3)
+		await _shot(sd, "touch_1_game")
+		touch.call(5, jo, false)
+	# 가방 버튼 → 인벤토리 열림, 조작 버튼은 숨고 닫기만
+	var ib: Dictionary = tc.buttons.filter(func(b): return b.id == "inv")[0]
+	touch.call(4, ib.pos, true)
+	touch.call(4, ib.pos, false)
+	await _wait(0.2)
+	if sd != "":
+		await _wait(0.3)
+		await _shot(sd, "touch_2_inventory")
+	var inv_open: bool = hud.is_panel_open()
+	var panel_mode: bool = tc._mode == "panel"
+	var mb: Dictionary = tc.buttons.filter(func(b): return b.id == "menu")[0]
+	touch.call(4, mb.pos, true)
+	touch.call(4, mb.pos, false)
+	await _wait(0.2)
+	out.append("가방 버튼 → 인벤토리 %s (조작 숨김 %s), 닫기 버튼 → 닫힘 %s, 메뉴 안 열림 %s" % ["O" if inv_open else "X", "O" if panel_mode else "X", "O" if not hud.is_panel_open() else "X", "O" if not g.menu_open else "X"])
+	for l in out:
+		print("[touchtest] ", l)
+	get_tree().quit()
 
 
 # 문: 건물 입구마다 생성, F를 1초 눌러 열기(0.55초 닫기), 닫히면 이동/시야/투사체 막음, AI는 밀어서 엶

@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://b4g2obhhl1v20"
 path.s3tc="res://.godot/imported/medieval_wood_rough_1k.jpg-b0d817efd0126b15774374e77c0ad811.s3tc.ctex"
+path.etc2="res://.godot/imported/medieval_wood_rough_1k.jpg-b0d817efd0126b15774374e77c0ad811.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://assets/textures/wood/medieval_wood_rough_1k.jpg"
-dest_files=["res://.godot/imported/medieval_wood_rough_1k.jpg-b0d817efd0126b15774374e77c0ad811.s3tc.ctex"]
+dest_files=["res://.godot/imported/medieval_wood_rough_1k.jpg-b0d817efd0126b15774374e77c0ad811.s3tc.ctex", "res://.godot/imported/medieval_wood_rough_1k.jpg-b0d817efd0126b15774374e77c0ad811.etc2.ctex"]
 
 [params]
 

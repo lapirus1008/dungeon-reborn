@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://ggq3q7gl50nm"
 path.s3tc="res://.godot/imported/marble_tiles_rough_1k.jpg-cc44a2684560b9cb0621426301c98470.s3tc.ctex"
+path.etc2="res://.godot/imported/marble_tiles_rough_1k.jpg-cc44a2684560b9cb0621426301c98470.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://assets/textures/marble/marble_tiles_rough_1k.jpg"
-dest_files=["res://.godot/imported/marble_tiles_rough_1k.jpg-cc44a2684560b9cb0621426301c98470.s3tc.ctex"]
+dest_files=["res://.godot/imported/marble_tiles_rough_1k.jpg-cc44a2684560b9cb0621426301c98470.s3tc.ctex", "res://.godot/imported/marble_tiles_rough_1k.jpg-cc44a2684560b9cb0621426301c98470.etc2.ctex"]
 
 [params]
 

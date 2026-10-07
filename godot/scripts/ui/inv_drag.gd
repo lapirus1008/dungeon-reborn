@@ -14,6 +14,9 @@ var rot := false
 var grab := Vector2(0.5, 0.5) # 아이템 안에서 잡은 위치 (칸 단위)
 var cell := 40.0
 var icon_label: Label
+# 터치: 제자리에서 짧게 탭하면(드래그 없이) 우클릭과 같은 빠른 장착/사용, 두 번째 손가락 탭 = 회전
+var start_pos := Vector2.ZERO
+var start_t := 0
 
 
 func _ready() -> void:
@@ -51,6 +54,8 @@ static func begin(it: Dictionary, from: String, view, grab_cells: Vector2, cell_
 	inst.rot = bool(it.get("r", false))
 	inst.grab = grab_cells
 	inst.cell = cell_px
+	inst.start_pos = inst.get_global_mouse_position()
+	inst.start_t = Time.get_ticks_msec()
 	inst.icon_label.text = Data.base_of(it).icon
 	inst.icon_label.add_theme_font_size_override("font_size", int(cell_px * 0.6))
 	inst.icon_label.visible = true
@@ -91,6 +96,12 @@ func _draw() -> void:
 func _input(ev: InputEvent) -> void:
 	if not active:
 		return
+	if ev is InputEventScreenTouch and ev.pressed and ev.index > 0:
+		rot = not rot
+		grab = Vector2(grab.y, grab.x)
+		Sfx.play("ui")
+		get_viewport().set_input_as_handled()
+		return
 	if ev is InputEventKey and ev.pressed and not ev.echo:
 		if ev.physical_keycode == KEY_R:
 			# 회전: 잡은 위치도 함께 돌림
@@ -122,6 +133,10 @@ func _finish(mp: Vector2) -> void:
 	var view = src_view
 	var r := rot
 	cancel()
+	if UI.touch and mp.distance_to(start_pos) < 14.0 and Time.get_ticks_msec() - start_t < 350:
+		if view != null and is_instance_valid(view):
+			view.on_op.call("quick", [from, it.id])
+		return
 	for t in targets:
 		if not is_instance_valid(t) or not t.is_visible_in_tree():
 			continue

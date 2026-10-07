@@ -14,7 +14,8 @@ const TREE := 4 # 야외 나무 (지나갈 수 없음)
 const A_IN := 0
 const A_OUT := 1
 const A_CATH := 2
-const INDOOR_LAYER := 2 # 실내 바닥: 달빛(방향광)이 비추지 않는 렌더 레이어
+const INDOOR_LAYER := 2
+static var lite := false # 그래픽 낮음(휴대폰): 벽걸이 횃불 중 절반만 실제 광원 # 실내 바닥: 달빛(방향광)이 비추지 않는 렌더 레이어
 
 var depth := 1
 var W := 46
@@ -1087,6 +1088,9 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 			var b := Basis(Vector3.RIGHT, n.z * 0.4) * Basis(Vector3.BACK, -n.x * 0.4)
 			sx.append(Transform3D(b, t.pos + Vector3(0, -0.4, 0)))
 		fx.append(Transform3D(Basis(), t.pos + Vector3(-n.x * 0.12, 0.1, -n.z * 0.12)))
+		if lite and torches.find(t) % 2 == 1:
+			t["light"] = null
+			continue
 		var l := OmniLight3D.new()
 		l.light_color = Color(1.0, 0.55, 0.28) if deep else Color(1.0, 0.68, 0.38)
 		l.omni_range = 12.0
@@ -1503,9 +1507,10 @@ func animate_torches(time: float, cam_pos: Vector3) -> void:
 	for i in torches.size():
 		var t: Dictionary = torches[i]
 		var fl := sin(time * 11.0 + i * 3.7) * 0.5 + sin(time * 5.3 + i) * 0.4
-		var l: OmniLight3D = t.light
+		var l = t.light
 		if absf(t.pos.x - cam_pos.x) + absf(t.pos.z - cam_pos.z) < 40.0:
-			l.light_energy = 2.2 + fl * 0.35
+			if l != null:
+				l.light_energy = 2.2 + fl * 0.35
 			if flame_mm:
 				var n: Vector3 = t.n
 				var b := Basis().scaled(Vector3(1.0 + fl * 0.1, 1.0 + fl * 0.25, 1.0 + fl * 0.1))

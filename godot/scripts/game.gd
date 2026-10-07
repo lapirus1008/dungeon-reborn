@@ -204,6 +204,7 @@ func build_level(d: int) -> void:
 		seed(level_seed + d)
 	dungeon = Dungeon.new(d, level_seed + d if online() else 0, map_id)
 	Textures.relief = quality != "low"
+	Dungeon.lite = quality == "low"
 	dungeon.build(world, false)
 	_outdoor_env()
 	_reset_lists(d)
@@ -666,7 +667,7 @@ func nearest_adventurer_dist(p: Vector3) -> float:
 
 
 func can_act() -> bool:
-	return (force_act or Input.mouse_mode == Input.MOUSE_MODE_CAPTURED) and not hud.is_panel_open() and not menu_open
+	return (force_act or UI.touch or Input.mouse_mode == Input.MOUSE_MODE_CAPTURED) and not hud.is_panel_open() and not menu_open
 
 
 # ------------------------------------------------------------------ 전투
@@ -3167,6 +3168,7 @@ func start_client(info: Dictionary, hud_node) -> void:
 	map_id = info.get("map", map_id)
 	dungeon = Dungeon.new(depth, level_seed + depth, map_id)
 	Textures.relief = quality != "low"
+	Dungeon.lite = quality == "low"
 	dungeon.build(world, false)
 	_outdoor_env()
 	_reset_lists(depth)

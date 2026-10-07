@@ -427,7 +427,7 @@ func _build_inventory() -> void:
 	inv_bag.on_op = _inv_op
 	inv_bag.drop_outside = true
 	v.add_child(inv_bag)
-	var hint := UI.label("드래그 이동 (R 회전) · 우클릭: 장착/해제 · Shift+클릭: 바닥에 버리기 · 1/2: 무기 세트 · 3/4/5: 소모품 꺼내기 → 좌클릭 사용 · G: 횃불 · Tab/Esc 닫기 (게임은 계속 진행)", 12, UI.MUTED)
+	var hint := UI.label("탭: 장착/해제·사용 · 끌어서 이동 (끄는 중 다른 손가락으로 탭 = 회전) · 패널 밖에 놓기: 바닥에 버리기 · ✕ 닫기 (게임은 계속 진행)" if UI.touch else "드래그 이동 (R 회전) · 우클릭: 장착/해제 · Shift+클릭: 바닥에 버리기 · 1/2: 무기 세트 · 3/4/5: 소모품 꺼내기 → 좌클릭 사용 · G: 횃불 · Tab/Esc 닫기 (게임은 계속 진행)", 12, UI.MUTED)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(380, 0)
 	v.add_child(hint)
@@ -492,7 +492,7 @@ func _build_menu() -> void:
 	quality_opt.add_item("보통")
 	quality_opt.add_item("높음 (선명)")
 	quality_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	quality_opt.selected = ["low", "mid", "high"].find(SaveData.setting("quality", "mid"))
+	quality_opt.selected = ["low", "mid", "high"].find(SaveData.setting("quality", "low" if UI.touch else "mid"))
 	quality_opt.item_selected.connect(func(i): setting_changed.emit("quality", ["low", "mid", "high"][i]))
 	qh.add_child(quality_opt)
 	v.add_child(qh)
@@ -503,7 +503,7 @@ func _build_menu() -> void:
 	for t in FPS_MODES:
 		fps_opt.add_item(t[1])
 	fps_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	fps_opt.selected = maxi(0, FPS_MODES.map(func(t): return t[0]).find(SaveData.setting("fps", "adaptive")))
+	fps_opt.selected = maxi(0, FPS_MODES.map(func(t): return t[0]).find(SaveData.setting("fps", "60" if UI.touch else "adaptive")))
 	fps_opt.item_selected.connect(func(i): setting_changed.emit("fps", FPS_MODES[i][0]))
 	fh.add_child(fps_opt)
 	v.add_child(fh)
@@ -962,6 +962,6 @@ func update_hud(dt: float) -> void:
 			RenderingServer.viewport_get_measured_render_time_gpu(vrid),
 			Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME) / 1000,
 			Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME), mode, str(Engine.max_fps) if Engine.max_fps > 0 else "없음",
-			SaveData.setting("quality", "mid"), " · 디버그 실행(에디터)" if OS.is_debug_build() else ""]
+			SaveData.setting("quality", "low" if UI.touch else "mid"), " · 디버그 실행(에디터)" if OS.is_debug_build() else ""]
 	else:
 		fps_label.text = "%d FPS (F3: 자세히)" % Engine.get_frames_per_second()

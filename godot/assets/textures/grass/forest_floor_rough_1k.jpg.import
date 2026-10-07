@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://cbyexdrytemeh"
 path.s3tc="res://.godot/imported/forest_floor_rough_1k.jpg-b4728532a630f62b65585439f19122ca.s3tc.ctex"
+path.etc2="res://.godot/imported/forest_floor_rough_1k.jpg-b4728532a630f62b65585439f19122ca.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://assets/textures/grass/forest_floor_rough_1k.jpg"
-dest_files=["res://.godot/imported/forest_floor_rough_1k.jpg-b4728532a630f62b65585439f19122ca.s3tc.ctex"]
+dest_files=["res://.godot/imported/forest_floor_rough_1k.jpg-b4728532a630f62b65585439f19122ca.s3tc.ctex", "res://.godot/imported/forest_floor_rough_1k.jpg-b4728532a630f62b65585439f19122ca.etc2.ctex"]
 
 [params]
 

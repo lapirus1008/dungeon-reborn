@@ -12,6 +12,7 @@ static var tooltip: PanelContainer
 static var tooltip_label: RichTextLabel
 static var toast_box: VBoxContainer
 static var font: Font
+static var touch := false # 안드로이드(터치) 조작 — 마우스 잡기 없음, 화면 버튼으로 조작
 static var theme: Theme
 
 

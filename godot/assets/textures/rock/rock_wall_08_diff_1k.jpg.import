@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://bdfiojhl6meld"
 path.s3tc="res://.godot/imported/rock_wall_08_diff_1k.jpg-ec88c87bbc8dd8078ad9c0a0c02ddeee.s3tc.ctex"
+path.etc2="res://.godot/imported/rock_wall_08_diff_1k.jpg-ec88c87bbc8dd8078ad9c0a0c02ddeee.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://assets/textures/rock/rock_wall_08_diff_1k.jpg"
-dest_files=["res://.godot/imported/rock_wall_08_diff_1k.jpg-ec88c87bbc8dd8078ad9c0a0c02ddeee.s3tc.ctex"]
+dest_files=["res://.godot/imported/rock_wall_08_diff_1k.jpg-ec88c87bbc8dd8078ad9c0a0c02ddeee.s3tc.ctex", "res://.godot/imported/rock_wall_08_diff_1k.jpg-ec88c87bbc8dd8078ad9c0a0c02ddeee.etc2.ctex"]
 
 [params]
 

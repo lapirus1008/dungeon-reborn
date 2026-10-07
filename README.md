@@ -25,6 +25,18 @@
 
 처음 열 때 폰트와 텍스처를 가져오느라 몇 초 걸릴 수 있습니다.
 
+### 안드로이드 (APK)
+
+- 갤럭시 S21 기준으로 맞춘 터치 조작: 왼쪽 아무 곳을 누르고 끌기 = 이동(떠다니는 조이스틱), 오른쪽 끌기 = 시점,
+  오른쪽 버튼 = 공격·방어·F·Q·E·점프·앉기·걷기 (공격/방어/Q/E는 누른 채 끌면 시점도 돌아감), 아래 가운데 = 1~5·횃불·장전,
+  왼쪽 위 = 메뉴(☰)·가방·지도. 인벤토리는 탭 = 장착/해제·사용, 끌기 = 이동, 끄는 중 다른 손가락 탭 = 회전.
+- 휴대폰은 그래픽 품질 기본 "낮음"(요철·달빛 그림자 끔, 벽걸이 횃불 절반만 광원), 60fps 제한, 가로 화면.
+- PC에서 터치 조작을 시험하려면 실행 인자에 `--touch`.
+- 내보내기: 에디터에서 Android 내보내기 템플릿 + Android SDK(build-tools의 apksigner) + 서명 키 설정 후
+  **프로젝트 → 내보내기 → Android**. 명령줄은 키 정보를 환경 변수로 넘김:
+  `GODOT_ANDROID_KEYSTORE_RELEASE_PATH=... GODOT_ANDROID_KEYSTORE_RELEASE_USER=dungeonreborn GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=... godot --headless --path godot --export-release Android export/DungeonReborn.apk`
+- 앱을 업데이트할 때는 **처음과 같은 서명 키**로 만들어야 지우지 않고 덮어 설치됩니다 (키 파일은 저장소에 넣지 않음).
+
 ### 실행 파일(.exe)로 만들기
 
 1. 에디터 메뉴 **편집기 → 내보내기 템플릿 관리**에서 템플릿을 내려받습니다 (최초 1회).
