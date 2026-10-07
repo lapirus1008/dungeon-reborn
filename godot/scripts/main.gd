@@ -99,6 +99,8 @@ func _ready() -> void:
 		get_tree().quit()
 	elif args.has("--autotest"):
 		_autotest.call_deferred()
+	elif args.has("--swingshots"):
+		_swingshots.call_deferred(args[args.find("--swingshots") + 1])
 	elif args.has("--fpshots"):
 		_fpshots.call_deferred(args[args.find("--fpshots") + 1])
 	elif args.has("--screenshots"):
@@ -767,6 +769,41 @@ func _doortest() -> void:
 	out.append("나는 몬스터 %d마리 중 땅속 %d %s" % [fly_n, fly_bad, "O" if fly_n > 0 and fly_bad == 0 else "X"])
 	for l in out:
 		print("[doortest] ", l)
+	get_tree().quit()
+
+
+# 휘두르기 동작을 프레임별로 찍어 확인 (한손 정방향/역방향, 양손 장검)
+func _swingshots(dir: String) -> void:
+	await get_tree().create_timer(0.5).timeout
+	_test_char("fighter")
+	start_raid("sinners_end_1")
+	game.force_act = true
+	await get_tree().create_timer(1.0).timeout
+	var g := game
+	var p := g.player
+	p.invuln = 999.0
+	for a in g.actors:
+		if a.kind == "monster" or a.kind == "bot":
+			a.stun = 999.0
+	p.pitch = -0.05
+	for set in [["one", "old_sword"], ["two", "old_longsword"]]:
+		p.equipment.w1 = Data.make_item(set[1])
+		if set[0] == "two":
+			p.equipment.w1o = null
+		p.recalc()
+		g._rebuild_view_model()
+		await get_tree().create_timer(0.8).timeout
+		p.draw_t = 0.0
+		await _shot(dir, "sw_%s_0rest" % set[0])
+		for side in [1.0, -1.0]:
+			for k in [0.25, 0.45, 0.56, 0.68, 0.9]:
+				# 아주 긴 휘두르기로 두고 비율만 맞춤 (프레임이 느려도 자세가 거의 안 움직이게)
+				p.swing = {"t": 600.0 * k, "prof": {"dur": 600.0, "hit_at": 300.0, "view_only": true}, "done": true, "side": side, "bash": false}
+				p.draw_t = 0.0
+				await get_tree().process_frame
+				await get_tree().process_frame
+				await _shot(dir, "sw_%s_%s_%02d" % [set[0], "f" if side > 0 else "b", int(k * 100)])
+		p.swing = null
 	get_tree().quit()
 
 

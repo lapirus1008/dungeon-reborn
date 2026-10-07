@@ -86,15 +86,28 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 			if p.panther:
 				arm.rotation.x = -thrust * 1.5
 		else:
-			# 베기: 반대쪽으로 크게 젖혔다가 휘두름
-			var heavy := 1.3 if p.cls == "deathknight" else 1.0
-			var a := wind if k < hk else strike
-			var sweep := 1.4 if k < hk else (1.4 - 2.8 * (1.0 - strike))
-			R.rotation = Vector3(-0.6 * a * heavy, s * sweep * a, s * 0.6 * a)
-			R.position.x = R0.x - s * 0.1 * a
-			if p.cls in ["swordmaster", "deathknight"]:
-				# 양손 무기: 왼손이 따라감
-				L.position = R.position + Vector3(-0.08, -0.04, 0.08)
+			# 베기: 오른손 무기는 오른쪽 어깨 위로 들었다가(백핸드는 왼쪽 어깨) 화면 가운데를 가로질러 반대쪽 아래로.
+			# 양손 무기는 두 손이 몸 가운데에서 손잡이를 함께 잡고 같은 궤적으로 크게 휘두름
+			var two: bool = Skills.wcat(p) in Data.TWO_HANDED or p.cls in ["swordmaster", "deathknight"]
+			var fore := s > 0.0
+			var W: Array
+			var E: Array
+			# 회전값은 "팔뚝 방향(손→팔꿈치)과 칼날 방향"이 목표에 맞도록 미리 계산한 값
+			# (젖히기: 팔꿈치는 아래, 칼날은 어깨 위 뒤쪽 / 끝: 칼날이 반대쪽 앞 아래로 지나감)
+			if two:
+				W = [Vector3(0.28, 0.0, -0.62), Vector3(1.10, 0.50, -0.40)] if fore else [Vector3(-0.12, 0.0, -0.62), Vector3(1.00, 0.40, 0.60)]
+				E = [Vector3(-0.2, -0.3, -0.62), Vector3(0.40, 0.30, 1.80)] if fore else [Vector3(0.36, -0.42, -0.62), Vector3(0.10, 0.30, -1.80)]
+			else:
+				W = [Vector3(0.42, -0.02, -0.6), Vector3(1.20, 0.70, 0.20)] if fore else [Vector3(-0.05, -0.02, -0.6), Vector3(0.70, 0.50, 1.20)]
+				E = [Vector3(-0.12, -0.3, -0.6), Vector3(0.20, 0.40, 1.80)] if fore else [Vector3(0.48, -0.40, -0.62), Vector3(0.40, 0.10, -1.60)]
+			var rest := [R.position, R.rotation]
+			var pose := _swing_pose(k, hk, rest, W, E)
+			R.position = pose[0]
+			R.quaternion = pose[1]
+			if two:
+				# 왼손은 오른손 바로 아래에서 손잡이를 같이 잡음
+				L.position = R.position + R.basis * Vector3(-0.02, -0.11, 0.07)
+				L.rotation = R.rotation
 	# 방어 자세: 우클릭을 누르면 평소 자세에서 GUARD_RAISE에 걸쳐 자연스럽게 올라감 (떼면 다시 내려감)
 	var gk: float = vm.get_meta("gk", 0.0)
 	gk = move_toward(gk, 1.0 if p.blocking else 0.0, _dt / (Actor.GUARD_RAISE if p.blocking else 0.18))
@@ -148,3 +161,29 @@ static func _counter_glow(vm: Node3D, ct: float) -> void:
 	_glow_mat.albedo_color = Color(1, 1, 1, a)
 	for n in (w as Node3D).find_children("*", "GeometryInstance3D", true, false):
 		(n as GeometryInstance3D).material_overlay = _glow_mat if on else null
+
+
+# 휘두르기 자세 보간: 평소 → 젖히기(W, 타격 직전까지) → 빠르게 베어 끝 자세(E, 타격 순간 조금 뒤) → 평소로 회수
+static func _swing_pose(k: float, hk: float, rest: Array, W: Array, E: Array) -> Array:
+	var w_end := hk * 0.7
+	var e_end := hk + (1.0 - hk) * 0.2
+	var a: Array
+	var b: Array
+	var t: float
+	if k < w_end:
+		a = rest
+		b = W
+		t = k / w_end
+	elif k < e_end:
+		a = W
+		b = E
+		t = (k - w_end) / (e_end - w_end)
+	else:
+		a = E
+		b = rest
+		t = (k - e_end) / (1.0 - e_end)
+	t = clampf(t, 0.0, 1.0)
+	t = t * t * (3.0 - 2.0 * t)
+	var qa := Basis.from_euler(a[1]).get_rotation_quaternion()
+	var qb := Basis.from_euler(b[1]).get_rotation_quaternion()
+	return [(a[0] as Vector3).lerp(b[0], t), qa.slerp(qb, t)]

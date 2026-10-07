@@ -1231,13 +1231,17 @@ static func view_model(cls: String, wmodel: String, panther := false, off := "")
 				w.rotation = Vector3(-0.45, 0, 0.15)
 				w.scale = Vector3.ONE * 0.55
 				R.add_child(w)
-				L.position = Vector3(0.16, -0.41, -0.55)
+				# 양손 무기: 두 손을 몸 가운데 쪽으로 모아 손잡이를 위아래로 잡음
+				R.position = Vector3(0.2, -0.34, -0.58)
+				L.position = Vector3(0.18, -0.45, -0.51)
 			"greatsword":
 				w = weapon("greatsword")
 				w.position = Vector3(-0.08, 0.0, -0.12)
 				w.rotation = Vector3(-0.35, 0, 0.3)
 				w.scale = Vector3.ONE * 0.5
 				R.add_child(w)
+				R.position = Vector3(0.2, -0.34, -0.58)
+				L.position = Vector3(0.18, -0.45, -0.51)
 			"dagger":
 				w = weapon("dagger")
 				w.position = Vector3(0, 0, -0.14)
