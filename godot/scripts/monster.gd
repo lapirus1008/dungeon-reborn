@@ -133,15 +133,15 @@ func animate(dt: float) -> void:
 	var fly: float = def.get("fly", 0.0)
 	if fly > 0.0 and alive:
 		bob += dt * 3.0
-		r.node.position.y = fly + sin(bob) * 0.15
+		r.node.position.y = pos.y + fly + sin(bob) * 0.15 # 바닥 높이(언덕) 기준
 		var p: Dictionary = r.parts
 		if p.has("arm_l") and type == "giant_bat":
 			p.arm_l.rotation.z = sin(bob * 6.0) * 0.8
 			p.arm_r.rotation.z = -sin(bob * 6.0) * 0.8
 	elif hidden and ai == "emerge":
-		r.node.position.y = -1.6
+		r.node.position.y = pos.y - 1.6
 	elif emerge_t > 0.0:
-		r.node.position.y = -1.6 * (emerge_t / 0.9)
+		r.node.position.y = pos.y - 1.6 * (emerge_t / 0.9)
 	if type == "mimic" and r.parts.has("arm_r"):
 		# 미믹 뚜껑: 위장 중에는 닫힘, 공격할 때 크게 벌림
 		var open := 0.0 if hidden else (0.9 if windup > 0.0 or attack_anim > 0.0 else 0.35 + sin(bob * 4.0) * 0.1)

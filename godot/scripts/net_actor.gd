@@ -126,4 +126,4 @@ func animate(dt: float) -> void:
 	var fly: float = def.get("fly", 0.0)
 	if fly > 0.0 and alive:
 		var r := active_rig()
-		r.node.position.y = fly + sin(game.time * 3.0 + nid) * 0.15
+		r.node.position.y = pos.y + fly + sin(game.time * 3.0 + nid) * 0.15 # 바닥 높이(언덕) 기준

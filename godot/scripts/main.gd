@@ -754,6 +754,17 @@ func _doortest() -> void:
 	var r2: Array = await mv.call("crouch")
 	out.append("이동 0.6초: 보통 %.1fm(소리 %.1fm), 걷기 %.1fm(소리 %.1fm), 앉기 %.1fm(소리 %.1fm, 키 %.2f, 눈높이 %.2f) %s" % [r0[0], r0[1], r1[0], r1[1], r2[0], r2[1], r2[2], r2[3],
 		"O" if r1[0] < r0[0] * 0.7 and r2[0] < r0[0] * 0.6 and r1[1] < r0[1] and r2[1] < r1[1] and r2[2] < 1.5 and r2[3] < r0[3] * 0.8 else "X"])
+	# 나는 몬스터(박쥐 등)는 언덕 위에서도 땅 위에 떠 있어야 함 (땅속에서 공격하지 않게)
+	var fly_n := 0
+	var fly_bad := 0
+	for a in g.actors:
+		if a.kind == "monster" and a.alive and a.def.get("fly", 0.0) > 0.0:
+			a.stun = 999.0
+			a.animate(0.016)
+			fly_n += 1
+			if a.active_rig().node.position.y < g.dungeon.ground_y(a.pos.x, a.pos.z) + 0.3:
+				fly_bad += 1
+	out.append("나는 몬스터 %d마리 중 땅속 %d %s" % [fly_n, fly_bad, "O" if fly_n > 0 and fly_bad == 0 else "X"])
 	for l in out:
 		print("[doortest] ", l)
 	get_tree().quit()
