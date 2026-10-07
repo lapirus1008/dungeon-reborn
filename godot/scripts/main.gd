@@ -520,29 +520,55 @@ func _doortest() -> void:
 		w = g.dungeon.resolve_circle(w + inw * 0.1, 0.4)
 	var blocked: bool = (w - d.pos).dot(inw) < 0.0
 	var prompt: String = g._prompt_for(g.find_interactable(p))
-	Input.action_press("interact")
-	await _wait(0.5)
-	var half: bool = not d.open
+	# F는 한 번 누르면 시작 (누르고 있을 필요 없음)
+	var tap := func(act: String) -> void:
+		Input.action_press(act)
+		await _wait(0.06)
+		Input.action_release(act)
+	await tap.call("interact")
+	await _wait(0.45)
+	var half: bool = not d.open and p.interact_obj == d
 	await _wait(0.7)
-	var opened: bool = d.open
-	await _wait(0.3)
-	var still_open: bool = d.open # F를 계속 누르고 있어도 바로 닫히지 않음
-	Input.action_release("interact")
-	await _wait(0.1)
+	var opened: bool = d.open and p.interact_obj == null
 	var los_open: bool = g.dungeon.los(a0.x, a0.z, b0.x, b0.z)
 	w = d.pos - inw * 1.0
 	for i in 30:
 		w = g.dungeon.resolve_circle(w + inw * 0.1, 0.4)
 	var pass_ok: bool = (w - d.pos).dot(inw) > 0.5
-	Input.action_press("interact")
+	await tap.call("interact")
 	await _wait(0.75)
 	var closed: bool = not d.open
-	Input.action_release("interact")
-	await _wait(0.1)
-	out.append("문 %d개, 안내 '%s', 닫힘: 시야 막힘 %s 통과 막힘 %s · F 0.5초 그대로 %s, 1.2초 열림 %s, 계속 눌러도 유지 %s · 열림: 시야 %s 통과 %s · 닫기(0.75초) %s" % [
-		dn, prompt, "O" if los_closed else "X", "O" if blocked else "X", "O" if half else "X", "O" if opened else "X", "O" if still_open else "X",
-		"O" if los_open else "X", "O" if pass_ok else "X", "O" if closed else "X"])
-	# 상자: F 길게 (1.2초) 눌러야 열림
+	# 취소: 이동 / 화면 크게 돌리기 / 공격 / F 다시 누르기
+	var cancels := []
+	var yaw0: float = p.yaw
+	for how in ["move", "turn", "attack", "f"]:
+		p.pos = d.pos - inw * 1.6
+		p.yaw = yaw0
+		p.cd.lmb = 0.0
+		await _wait(0.6)
+		await tap.call("interact")
+		await _wait(0.2)
+		var started: bool = p.interact_obj != null
+		match how:
+			"move":
+				Input.action_press("move_back")
+				await _wait(0.15)
+				Input.action_release("move_back")
+			"turn":
+				p.yaw += 1.0
+			"attack":
+				await tap.call("attack")
+			"f":
+				await tap.call("interact")
+		await _wait(0.1)
+		cancels.append("O" if started and p.interact_obj == null else "X")
+		await _wait(1.1)
+		cancels[-1] = cancels[-1] if not d.open else "X"
+	p.yaw = yaw0
+	out.append("문 %d개, 안내 '%s', 닫힘: 시야 막힘 %s 통과 막힘 %s · F 한 번 → 0.5초 진행 중 %s, 1.2초 열림 %s · 열림: 시야 %s 통과 %s · 닫기 %s · 취소(이동 %s, 시점 %s, 공격 %s, F 다시 %s)" % [
+		dn, prompt, "O" if los_closed else "X", "O" if blocked else "X", "O" if half else "X", "O" if opened else "X",
+		"O" if los_open else "X", "O" if pass_ok else "X", "O" if closed else "X", cancels[0], cancels[1], cancels[2], cancels[3]])
+	# 상자: F 한 번 → 1.2초 뒤 열림
 	var ch = null
 	for c in g.chests:
 		if not c.opened:
@@ -552,13 +578,12 @@ func _doortest() -> void:
 	if ch != null:
 		p.pos = g.dungeon.resolve_circle(ch.pos + Vector3(1.2, 0, 0), 0.4)
 		p.yaw = Actor.yaw_to(ch.pos.x - p.pos.x, ch.pos.z - p.pos.z)
-		await get_tree().process_frame
-		Input.action_press("interact")
+		await _wait(0.3)
+		await tap.call("interact")
 		await _wait(0.6)
 		var early: bool = not ch.opened
 		await _wait(0.9)
 		chest_ok = early and ch.opened and p.container == ch
-		Input.action_release("interact")
 		await get_tree().process_frame
 		g.close_container_for(p)
 	# AI가 닫힌 문을 밀면 열림
@@ -576,7 +601,7 @@ func _doortest() -> void:
 			mon.move_amt = 1.0
 			g._ai_doors(0.25)
 		ai_ok = d2.open
-	out.append("상자 F 1.2초 길게 열기 %s, 몬스터가 문을 밀어 엶 %s" % ["O" if chest_ok else "X", "O" if ai_ok else "X"])
+	out.append("상자 F 한 번 → 1.2초 뒤 열기 %s, 몬스터가 문을 밀어 엶 %s" % ["O" if chest_ok else "X", "O" if ai_ok else "X"])
 	# 걷기(Shift)/앉기(Ctrl): 느려지고, 앉으면 키·시점이 낮아지고, 몬스터가 등 뒤에서 알아채는 거리가 줄어듦
 	var mv := func(act: String) -> Array:
 		var p0: Vector3 = p.pos
@@ -667,6 +692,7 @@ func _fpshots(dir: String) -> void:
 	await get_tree().create_timer(0.55).timeout
 	await _shot(dir, "fp_9_door_hold")
 	Input.action_release("interact")
+	g.cancel_interact(p)
 	g.toggle_door(d) # 소프트웨어 렌더링은 프레임이 낮아 길게 누르기가 오래 걸림
 	await get_tree().create_timer(1.2).timeout
 	await _shot(dir, "fp_10_door_open")

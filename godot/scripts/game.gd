@@ -1713,7 +1713,7 @@ func on_damage(target, dmg: float, src, blocked: bool, info: Dictionary) -> void
 	if is_human(target) and dmg > 0.0:
 		notify(target, "hurt", [dmg / target.max_hp])
 		notify(target, "sfx", ["hurt"])
-		target.interact_t = 0.0
+		cancel_interact(target) # 맞으면 상호작용 취소
 
 
 func on_death(actor, src) -> void:
@@ -2398,15 +2398,22 @@ func update_interact(dt: float) -> void:
 			_interact_for(p, dt)
 
 
+# F 한 번 = 상호작용 시작 (누르고 있을 필요 없음). [F] 칸이 차오르는 동안
+# 이동·점프·공격/스킬·무기 바꾸기·화면을 크게 돌리기·피격·F 다시 누르기 중 하나라도 하면 취소
+const INTERACT_TURN := 0.6 # 시작할 때 보던 방향에서 이만큼(라디안, 약 35°) 넘게 돌리면 취소
+const INTERACT_CANCEL_PRESS := ["attack", "secondary", "skill_q", "skill_e", "jump", "weapon1", "weapon2", "use3", "use4", "use5", "torch", "reload"]
+
+
 func _interact_for(p, dt: float) -> void:
 	var local: bool = p == player
-	# 서버의 원격 플레이어: F를 누르고 있지 않고 열린 창도 없으면 주변 물건을 찾을 필요가 없음
-	if not local and p.container == null and not p.inp.pressed("interact"):
-		p.interact_t = 0.0
-		p.f_lock = false
+	var busy: bool = p.interact_obj != null
+	# F를 새로 누른 순간 (눌림 상태의 변화로 판단: 원격 입력의 짧은 눌림도 그 프레임엔 눌림으로 들어옴)
+	var f_now: bool = p.inp.pressed("interact")
+	var f_edge: bool = f_now and not p.f_prev
+	p.f_prev = f_now
+	# 서버의 원격 플레이어: 진행 중인 상호작용도, 열린 창도, F 입력도 없으면 주변 물건을 찾을 필요가 없음
+	if not local and not busy and p.container == null and not f_edge:
 		return
-	if not p.inp.pressed("interact"):
-		p.f_lock = false # 상호작용이 끝난 뒤에는 F를 한 번 떼야 다음 것을 시작
 	var o = find_interactable(p)
 	if local:
 		interact_target = o
@@ -2414,41 +2421,70 @@ func _interact_for(p, dt: float) -> void:
 		close_container_for(p)
 	var panel: bool = (hud != null and hud.is_panel_open()) or menu_open if local else p.inp.panel
 	var menu: bool = menu_open if local else false
+	var f_new: bool = f_edge and not menu
 	# F: 열린 창이 있으면 닫기
-	if p.inp.just_pressed("interact") and p.container != null and not menu:
+	if f_new and p.container != null:
 		close_container_for(p)
-		p.interact_t = 0.0
-		p.f_lock = true
+		cancel_interact(p)
 		if local and hud != null:
 			hud.prompt(_prompt_for(o))
 		return
+	if busy:
+		_tick_interact(p, dt, f_new, panel, menu)
+		return
 	if o == null or not p.alive:
-		p.interact_t = 0.0
 		if local and hud != null:
 			hud.prompt("")
 		return
 	if local and hud != null:
 		hud.prompt(_prompt_for(o))
+	if not f_new or panel:
+		return
 	if o.kind == "stairs":
-		if p.inp.just_pressed("interact") and is_auth():
+		if is_auth():
 			_use_fixture(p, o)
 		return
 	if o.kind == "shrine" and o.get("used", false):
-		p.interact_t = 0.0
 		return
-	if p.inp.pressed("interact") and not panel and not menu and not p.f_lock and p.container == null:
-		if p.interact_obj != o:
-			p.interact_obj = o
-			p.interact_t = 0.0
-		p.interact_t += dt
-		var need := _hold_time(o)
-		channel_for(p, "F", p.interact_t / need)
-		if p.interact_t >= need:
-			p.interact_t = 0.0
-			p.f_lock = true
-			_finish_interact(p, o)
+	p.interact_obj = o
+	p.interact_t = 0.0
+	p.interact_yaw = p.yaw
+	p.interact_pitch = p.pitch
+
+
+func _tick_interact(p, dt: float, f_new: bool, panel: bool, menu: bool) -> void:
+	var o = p.interact_obj
+	var why := ""
+	if f_new:
+		why = "F"
+	elif not p.alive or panel or menu:
+		why = "-"
+	elif p.moving or p.vy != 0.0 or p.swing != null or p.drink_t > 0.0:
+		why = "이동"
+	elif absf(angle_difference(p.yaw, p.interact_yaw)) > INTERACT_TURN or absf(p.pitch - p.interact_pitch) > INTERACT_TURN:
+		why = "시점"
+	elif Vector2(o.pos.x - p.pos.x, o.pos.z - p.pos.z).length() > 3.0:
+		why = "거리"
 	else:
-		p.interact_t = 0.0
+		for a in INTERACT_CANCEL_PRESS:
+			if p.inp.just_pressed(a) or (a in ["attack", "secondary"] and p.inp.pressed(a)):
+				why = "행동"
+				break
+	if why != "":
+		cancel_interact(p)
+		return
+	p.interact_t += dt
+	var need := _hold_time(o)
+	channel_for(p, "F", p.interact_t / need)
+	if p.interact_t >= need:
+		cancel_interact(p)
+		_finish_interact(p, o)
+
+
+func cancel_interact(p) -> void:
+	p.interact_obj = null
+	p.interact_t = 0.0
+	channel_for(p, "F", 0.0)
 
 
 func _finish_interact(p, o) -> void:
