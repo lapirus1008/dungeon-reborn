@@ -543,7 +543,8 @@ func start(g) -> void:
 		box.custom_minimum_size = Vector2(56 if small else 84, 58)
 		var v := VBoxContainer.new()
 		v.add_theme_constant_override("separation", 0)
-		var key_text: String = {"rmb": "우클릭", "q": "Q", "e": "E", "w1": "1", "w2": "2", "c3": "3", "c4": "4", "c5": "5", "torch": "G 횃불"}[k]
+		var key_text: String = ({"rmb": "방어", "q": "1스킬", "e": "2스킬", "w1": "주무기", "w2": "보조", "c3": "소모1", "c4": "소모2", "c5": "소모3", "torch": "횃불"} if UI.touch else
+			{"rmb": "우클릭", "q": "Q", "e": "E", "w1": "1", "w2": "2", "c3": "3", "c4": "4", "c5": "5", "torch": "G 횃불"})[k]
 		v.add_child(_centered(UI.label(key_text, 11, UI.GOLD)))
 		var nm := _centered(UI.label("", 13 if not small else 15))
 		nm.clip_text = true

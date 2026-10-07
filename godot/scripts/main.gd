@@ -597,6 +597,11 @@ func _touchtest() -> void:
 		await _wait(0.3)
 		await _shot(sd, "touch_1_game")
 		touch.call(5, jo, false)
+		p.set_held("c3")
+		await _wait(0.4)
+		await _shot(sd, "touch_1b_potion")
+		p.set_held("")
+		await _wait(0.3)
 	# 가방 버튼 → 인벤토리 열림, 조작 버튼은 숨고 닫기만
 	var ib: Dictionary = tc.buttons.filter(func(b): return b.id == "inv")[0]
 	touch.call(4, ib.pos, true)

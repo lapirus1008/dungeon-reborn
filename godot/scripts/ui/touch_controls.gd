@@ -33,9 +33,9 @@ func _layout() -> void:
 		{"id": "attack", "action": "attack", "pos": Vector2(W - 170, H - 190), "r": 88.0, "label": "공격", "kind": "hold", "look": true, "group": "game"},
 		{"id": "block", "action": "secondary", "pos": Vector2(W - 345, H - 105), "r": 62.0, "label": "방어", "kind": "hold", "look": true, "group": "game"},
 		{"id": "jump", "action": "jump", "pos": Vector2(W - 110, H - 385), "r": 52.0, "label": "점프", "kind": "hold", "group": "game"},
-		{"id": "interact", "action": "interact", "pos": Vector2(W - 345, H - 270), "r": 56.0, "label": "F", "kind": "hold", "group": "game"},
-		{"id": "q", "action": "skill_q", "pos": Vector2(W - 490, H - 95), "r": 50.0, "label": "Q", "kind": "hold", "look": true, "group": "game"},
-		{"id": "e", "action": "skill_e", "pos": Vector2(W - 500, H - 230), "r": 50.0, "label": "E", "kind": "hold", "look": true, "group": "game"},
+		{"id": "interact", "action": "interact", "pos": Vector2(W - 345, H - 270), "r": 56.0, "label": "확인", "kind": "hold", "group": "game"},
+		{"id": "q", "action": "skill_q", "pos": Vector2(W - 490, H - 95), "r": 50.0, "label": "1스킬", "kind": "hold", "look": true, "group": "game"},
+		{"id": "e", "action": "skill_e", "pos": Vector2(W - 500, H - 230), "r": 50.0, "label": "2스킬", "kind": "hold", "look": true, "group": "game"},
 		{"id": "crouch", "action": "crouch", "pos": Vector2(W - 110, H - 530), "r": 44.0, "label": "앉기", "kind": "toggle", "group": "game"},
 		{"id": "walk", "action": "walk", "pos": Vector2(W - 250, H - 460), "r": 40.0, "label": "걷기", "kind": "toggle", "group": "game"},
 		{"id": "menu", "action": "menu", "pos": Vector2(60, 60), "r": 38.0, "label": "☰", "kind": "tap", "group": "top"},
@@ -43,7 +43,7 @@ func _layout() -> void:
 		{"id": "map", "action": "map", "pos": Vector2(240, 60), "r": 38.0, "label": "지도", "kind": "tap", "group": "game"},
 	]
 	# 아래 가운데 (HUD 단축칸 바로 위): 무기 1·2, 소모품 3·4·5, 횃불, 재장전
-	var row := [["weapon1", "1"], ["weapon2", "2"], ["use3", "3"], ["use4", "4"], ["use5", "5"], ["torch", "횃불"], ["reload", "장전"]]
+	var row := [["weapon1", "주무기"], ["weapon2", "보조"], ["use3", "소모1"], ["use4", "소모2"], ["use5", "소모3"], ["torch", "횃불"], ["reload", "장전"]]
 	var x0 := W * 0.5 - (row.size() - 1) * 40.0
 	for i in row.size():
 		buttons.append({"id": row[i][0], "action": row[i][0], "pos": Vector2(x0 + i * 80.0, H - 150), "r": 34.0, "label": row[i][1], "kind": "tap", "group": "game"})
@@ -218,7 +218,49 @@ func _draw() -> void:
 		var on: bool = held.has(b.id) or toggled.get(b.action, false)
 		draw_circle(b.pos, b.r, Color(0.9, 0.8, 0.6, 0.35) if on else Color(0.05, 0.05, 0.05, 0.4))
 		draw_arc(b.pos, b.r, 0.0, TAU, 40, Color(0.95, 0.88, 0.7, 0.75 if on else 0.45), 2.0)
-		var label: String = "✕" if b.id == "menu" and _mode == "panel" else b.label
+		var label: String = _label(b)
 		var fs := int(clampf(b.r * 0.5, 16.0, 34.0))
 		var w := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		while w > b.r * 1.7 and fs > 12:
+			fs -= 1
+			w = font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		draw_string(font, b.pos + Vector2(-w * 0.5, fs * 0.35), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 1, 1, 0.9))
+
+
+# 손에 든 것·바라보는 대상에 따라 버튼 이름이 바뀜 (처음 하는 사람도 알 수 있게)
+func _label(b: Dictionary) -> String:
+	if b.id == "menu" and _mode == "panel":
+		return "✕"
+	var g = main.game if main != null else null
+	var p = g.player if g != null else null
+	if p == null:
+		return b.label
+	match b.id:
+		"attack":
+			if p.held == "torch":
+				return "휘두름"
+			if p.held != "":
+				var it = p.equipment.get(p.held)
+				if it != null and Data.base_of(it).has("throw"):
+					return "던지기"
+				return "사용"
+		"block":
+			if p.held == "torch":
+				return "던지기"
+			if p.held != "":
+				return "넣기"
+		"interact":
+			var o = g.interact_target
+			if o != null:
+				match o.kind:
+					"door":
+						return "닫기" if o.open else "열기"
+					"chest":
+						return "열기" if not o.opened else "확인"
+					"item":
+						return "줍기"
+					"corpse":
+						return "뒤지기"
+					"shrine", "stone":
+						return "사용"
+	return b.label
