@@ -9,5 +9,22 @@ services:
       - "7777:7777/udp"
     volumes:
       - ./data:/data
+    # 보안: 권한 최소화 (시작할 때 /data 소유자만 맞추고 바로 일반 사용자로 내려감)
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/game:uid=10001,gid=10001,mode=700
+    pids_limit: 256
+    mem_limit: 1500m
+    # 로그가 디스크를 가득 채우지 않게
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # 개인전 서버로 열려면 아래 주석을 풀기
     # command: ["godot", "--headless", "--path", "/game", "--", "--server", "--port", "7777", "--accounts", "/data/accounts", "--pvp"]

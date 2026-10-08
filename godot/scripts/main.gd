@@ -756,6 +756,26 @@ func _doortest() -> void:
 	var r2: Array = await mv.call("crouch")
 	out.append("이동 0.6초: 보통 %.1fm(소리 %.1fm), 걷기 %.1fm(소리 %.1fm), 앉기 %.1fm(소리 %.1fm, 키 %.2f, 눈높이 %.2f) %s" % [r0[0], r0[1], r1[0], r1[1], r2[0], r2[1], r2[2], r2[3],
 		"O" if r1[0] < r0[0] * 0.7 and r2[0] < r0[0] * 0.6 and r1[1] < r0[1] and r2[1] < r1[1] and r2[2] < 1.5 and r2[3] < r0[3] * 0.8 else "X"])
+	# 스피드핵 방지: 원격 플레이어가 매번 3.9m 앞 위치를 보내도 서버는 이동 속도 한도까지만 따라감
+	p.pos = g.dungeon.marks.spawns[0] if g.dungeon.marks.spawns.size() and g.dungeon.marks.spawns[0] is Vector3 else p.pos
+	p.inp.remote = true
+	p.has_net = true
+	p.forced_t = 0.0
+	p.knock = Vector3.ZERO
+	var sp0: Vector3 = p.pos
+	var fwd3 := Actor.fwd(p.yaw)
+	var t0 := Time.get_ticks_msec()
+	var frames := 0
+	while Time.get_ticks_msec() - t0 < 1000:
+		p.net_pos = p.pos + fwd3 * 3.9 + Vector3(0, 5.0, 0)
+		await get_tree().process_frame
+		frames += 1
+	var cheat_d: float = Vector2(p.pos.x - sp0.x, p.pos.z - sp0.z).length()
+	var high: bool = p.pos.y > g.dungeon.ground_y(p.pos.x, p.pos.z) + 1.5
+	p.inp.remote = false
+	p.has_net = false
+	out.append("순간이동 시도 1초(%d번): %.1fm 이동 (정상 속도 %.1fm/s, 막지 않으면 %.0fm), 공중 띄우기 %s %s" % [frames, cheat_d, p.cur_speed, 3.9 * frames, "막힘" if not high else "뚫림",
+		"O" if cheat_d > 1.0 and cheat_d < p.cur_speed * 1.35 + 1.0 + 2.6 and not high else "X"])
 	# 나는 몬스터(박쥐 등)는 언덕 위에서도 땅 위에 떠 있어야 함 (땅속에서 공격하지 않게)
 	var fly_n := 0
 	var fly_bad := 0
@@ -1676,6 +1696,8 @@ func _mptest(role: String) -> void:
 		await _mptest_account(port)
 	elif role == "raidjoin":
 		await _mptest_raidjoin(port)
+	elif role == "sec":
+		await _mptest_sec(port)
 	else:
 		await _mptest_client(port)
 	print("[mptest] 완료")
@@ -1861,6 +1883,56 @@ func _mptest_client(port: int) -> void:
 	await _wait(1.0)
 
 
+# 보안 테스트 (전용 서버 상대): 암호화 연결 로그인, 재로그인 무시, 요청 폭주 → 끊김, 로그인 안 하면 10초 뒤 끊김
+func _mptest_sec(port: int) -> void:
+	if OS.get_cmdline_user_args().has("--port"):
+		port = int(OS.get_cmdline_user_args()[OS.get_cmdline_user_args().find("--port") + 1])
+	var nm := "보안%d" % (randi() % 100000)
+	Net.join("127.0.0.1", port, nm, "123456")
+	var t := 0.0
+	while not SaveData.online and Net.online() and t < 8.0:
+		await _wait(0.1)
+		t += 0.1
+	var mp = multiplayer.multiplayer_peer
+	var dtls: bool = mp is ENetMultiplayerPeer and mp.host.get_peers().size() > 0
+	print("[mptest] DTLS 암호화 연결로 로그인 %s" % [SaveData.online and dtls])
+	# 로그인한 연결에서 다른 계정으로 다시 hello → 무시되어야 함
+	Net.hello.rpc_id(1, "남의계정", "fighter", Net.version, "000000")
+	await _wait(0.5)
+	print("[mptest] 재로그인 시도 무시 (여전히 %s) %s" % [SaveData.account_name if "account_name" in SaveData else nm, Net.online()])
+	# 짧은 PIN으로 새 계정 → 거부 (별도 접속)
+	# 요청 폭주: 레이드 밖 입력을 초당 수천 번 → 서버가 끊음
+	var reason := ""
+	var cb := func(r): reason = r
+	Net.disconnected.connect(cb)
+	for i in 1200:
+		Net.c_inv.rpc_id(1, "close", [])
+	t = 0.0
+	while Net.online() and t < 5.0:
+		await _wait(0.1)
+		t += 0.1
+	print("[mptest] 요청 폭주 → 연결 끊김 %s (%s)" % [not Net.online(), reason])
+	# 로그인하지 않고 연결만 유지 → 10초 뒤 끊김
+	reason = ""
+	Net.test_skip_hello = true
+	Net.join("127.0.0.1", port, "무로그인", "")
+	t = 0.0
+	while Net.online() and t < 15.0:
+		await _wait(0.2)
+		t += 0.2
+	Net.test_skip_hello = false
+	print("[mptest] 로그인 없이 연결 유지 → %.0f초 뒤 끊김 %s (%s)" % [t, not Net.online() and t >= 9.0, reason])
+	# 짧은 PIN 새 계정 거부
+	reason = ""
+	Net.join("127.0.0.1", port, "짧은핀%d" % (randi() % 100000), "1234")
+	t = 0.0
+	while Net.online() and t < 6.0:
+		await _wait(0.1)
+		t += 0.1
+	print("[mptest] 4자리 PIN 새 계정 거부 %s (%s)" % [not SaveData.online or not Net.online(), reason])
+	Net.disconnected.disconnect(cb)
+
+
 # 온라인 서버 계정 테스트 (전용 서버: --server --port 7790 --accounts <폴더>)
 func _mptest_account(port: int) -> void:
 	if OS.get_cmdline_user_args().has("--port"):
@@ -1874,7 +1946,7 @@ func _mptest_account(port: int) -> void:
 			t += 0.1
 		return SaveData.online
 	var local_gold: int = SaveData.local_data.gold
-	var ok: bool = await login.call("1234")
+	var ok: bool = await login.call("123456")
 	print("[mptest] 로그인(새 계정) %s, 서버 골드 %d, 장비 무기 %s" % [ok, SaveData.data.gold, SaveData.data.equipment.w1 != null])
 	var g0: int = SaveData.data.gold
 	SaveData.op("buy", ["health_potion"])
@@ -1898,10 +1970,10 @@ func _mptest_account(port: int) -> void:
 		hud = null
 	open_lobby()
 	await _wait(1.0)
-	ok = await login.call("9999")
+	ok = await login.call("999999")
 	print("[mptest] 틀린 PIN 로그인 거부: %s (%s)" % [not ok, Net.status])
 	await _wait(0.5)
-	ok = await login.call("1234")
+	ok = await login.call("123456")
 	print("[mptest] 재로그인 %s: 사망 %d, 입장 %d, 무기 %s, 골드 %d" % [ok, SaveData.data.stats.deaths, SaveData.data.stats.raids, SaveData.data.equipment.w1, SaveData.data.gold])
 	Net.leave()
 	await _wait(0.5)
@@ -1913,7 +1985,7 @@ func _mptest_raidjoin(port: int) -> void:
 	if args.has("--port"):
 		port = int(args[args.find("--port") + 1])
 	var map: String = args[args.find("--map") + 1] if args.has("--map") else "sinners_end_1"
-	Net.join("127.0.0.1", port, "동시%d" % (randi() % 100000), "1234")
+	Net.join("127.0.0.1", port, "동시%d" % (randi() % 100000), "123456")
 	var t := 0.0
 	while not SaveData.online and t < 10.0:
 		await _wait(0.1)
@@ -2035,13 +2107,13 @@ func _inv_checks() -> Array:
 	# 공개 서버 보호: PIN 5번 틀리면 잠금, 같은 주소 새 계정 3개까지
 	var tmpd := OS.get_user_data_dir() + "/acct_test_%d" % randi()
 	var store := AccountStore.new(tmpd)
-	store.login("잠금시험", "1111", "1.2.3.4")
+	store.login("잠금시험", "111111", "1.2.3.4")
 	for i in 5:
-		store.login("잠금시험", "0000", "1.2.3.4")
-	var locked: bool = not store.login("잠금시험", "1111", "1.2.3.4").ok
-	store.login("새계정2", "1111", "1.2.3.4")
-	store.login("새계정3", "1111", "1.2.3.4")
-	var capped: bool = not store.login("새계정4", "1111", "1.2.3.4").ok and store.login("새계정5", "1111", "5.6.7.8").ok
+		store.login("잠금시험", "000000", "1.2.3.4")
+	var locked: bool = not store.login("잠금시험", "111111", "1.2.3.4").ok
+	store.login("새계정2", "111111", "1.2.3.4")
+	store.login("새계정3", "111111", "1.2.3.4")
+	var capped: bool = not store.login("새계정4", "111111", "1.2.3.4").ok and store.login("새계정5", "111111", "5.6.7.8").ok
 	ok.call("서버 계정 보호 (PIN 5회 실패 잠금 %s, 주소당 새 계정 3개 %s)" % [locked, capped], locked and capped)
 	# 1세트 검/방패 · 2세트 장검: 가방의 방패 우클릭 → 1세트 보조 칸과 교체
 	var seq := Account.empty_equipment()

@@ -128,6 +128,9 @@ func sfx(n: String, p: Vector3, v := 0.06) -> void:
 
 
 # 특정 플레이어의 HUD에 표시 (토스트, 피해 숫자, 피격 효과 등)
+const HUD_EVENTS := ["announce", "damage_number", "hit_marker", "hurt", "killfeed", "revived", "sfx", "shake", "swing", "toast", "channel"]
+
+
 func notify(a, m: String, args: Array = []) -> void:
 	if not is_human(a):
 		return
@@ -3374,7 +3377,8 @@ func net_event(n: String, args: Array) -> void:
 		return
 	match n:
 		"hud":
-			if hud != null and hud.has_method(args[0]):
+			# 서버가 보낸 이름으로 HUD 함수를 부르므로, 정해진 화면 알림 함수만 허용
+			if hud != null and args.size() == 2 and args[0] is String and args[1] is Array and args[0] in HUD_EVENTS and hud.has_method(args[0]):
 				hud.callv(args[0], args[1])
 		"sfx":
 			if player != null:

@@ -40,6 +40,10 @@ var peer_id := 0 # 0: 오프라인/호스트 본인, 그 외: 접속한 친구�
 var inp: InputState
 var container = null # 서버 측: 이 플레이어가 열어 둔 상자/전리품
 var net_pos := Vector3.ZERO
+var move_budget := 0.0
+var cur_speed := 0.0 # 지금 상태(장비·버프·표범·앉기 등)로 낼 수 있는 이동 속도 # 서버: 원격 플레이어가 이번에 더 움직일 수 있는 거리
+const MOVE_TOLERANCE := 1.35 # 지연·프레임 차이를 감안한 속도 여유 배율
+const MOVE_SLACK := 2.5
 var has_net := false
 var forced_t := 0.0 # 넉백/돌진 중에는 서버 위치를 우선
 var done := false # 탈출/사망으로 레이드 종료
@@ -343,9 +347,21 @@ func update(dt: float) -> void:
 			forced_t = 0.35
 		if forced_t > 0.0:
 			forced_t -= dt
-		elif Vector2(net_pos.x - pos.x, net_pos.z - pos.z).length() < 4.0:
-			var np = game.dungeon.resolve_circle(net_pos, radius)
-			pos = Vector3(np.x, maxf(game.dungeon.ground_y(np.x, np.z), net_pos.y), np.z)
+		else:
+			# 클라이언트가 보낸 위치는 이동 속도 한도 안에서만 따라감 (순간이동·스피드핵 방지).
+			# 이동 예산: 초당 (최대 속도 x 여유)만큼 쌓이고 최대 MOVE_SLACK m까지 모아 둘 수 있음 (네트워크 지연 흡수)
+			var rate: float = maxf(cur_speed, 1.0) * MOVE_TOLERANCE + 1.0
+			move_budget = minf(MOVE_SLACK, move_budget + rate * dt)
+			var d := Vector2(net_pos.x - pos.x, net_pos.z - pos.z)
+			var dl := d.length()
+			if dl < 6.0 and dl > 0.0001:
+				var step := minf(dl, move_budget)
+				move_budget -= step
+				var tgt := Vector3(pos.x + d.x / dl * step, 0.0, pos.z + d.y / dl * step)
+				var np = game.dungeon.resolve_circle(tgt, radius)
+				var gy: float = game.dungeon.ground_y(np.x, np.z)
+				# 높이: 땅 아래로는 못 가고, 점프 높이(약 1m)보다 높이 뜰 수 없음
+				pos = Vector3(np.x, clampf(net_pos.y, gy, gy + 1.4), np.z)
 
 
 # 클라이언트 본인: 이동은 즉시 로컬에서 처리하고, 전투 결과/상태는 서버(me 패킷)에서 받음
@@ -415,6 +431,7 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 	elif quiet:
 		speed *= 0.5
 	speed *= speed_factor()
+	cur_speed = speed
 	if iz < 0.0:
 		speed *= 0.8
 

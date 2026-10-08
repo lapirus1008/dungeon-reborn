@@ -35,6 +35,7 @@ static func valid_name(nm: String) -> bool:
 const FAIL_MAX := 5
 const LOCK_SEC := 300
 const NEW_PER_IP := 3
+const NEW_PIN_MIN := 6 # 새 계정 PIN 최소 길이 (기존 4자리 계정은 그대로 로그인 가능)
 var fails := {} # 계정 키 -> [실패 횟수, 잠금 해제 시각(초)]
 var new_by_ip := {} # IP -> [생성 시각들]
 
@@ -59,6 +60,8 @@ func login(nm: String, pin: String, ip := "") -> Dictionary:
 				return {"ok": false, "msg": "이 주소에서 새 계정을 너무 많이 만들었습니다. 잠시 후 다시 시도하세요"}
 			recent.append(now)
 			new_by_ip[ip] = recent
+		if pin.length() < NEW_PIN_MIN:
+			return {"ok": false, "msg": "새 계정의 PIN은 %d자 이상으로 정해 주세요" % NEW_PIN_MIN}
 		var crypto := Crypto.new()
 		var salt := crypto.generate_random_bytes(16).hex_encode()
 		rec = {"name": nm.strip_edges(), "salt": salt, "hash": hash_pin(salt, pin), "data": Account.fresh(), "created": Time.get_datetime_string_from_system(true)}

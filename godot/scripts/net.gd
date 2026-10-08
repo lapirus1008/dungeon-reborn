@@ -43,6 +43,13 @@ var raid_map := "" # 서버: 시작할 레이드의 맵
 var local_loadout_cb: Callable # 호스트: 내 장비 꺼내기 (main)
 var _room_push_t := 0.0
 var _prep_members: Array = []
+# 보안: 로그인(hello) 전 연결은 AUTH_TIMEOUT 초 안에 로그인하지 않으면 끊음, RPC 종류별 초당 허용 횟수
+const AUTH_TIMEOUT := 10.0
+const RATE := {"input": 90.0, "press": 30.0, "inv": 20.0, "account": 10.0, "lobby": 5.0, "hello": 1.0}
+const RATE_KICK := 300 # 허용량을 이만큼 넘겨 보내면 연결을 끊음 (악의적 폭주)
+var _pending_auth := {} # peer id -> 접속 시각
+var _rate := {} # peer id -> {종류: [남은 횟수, 마지막 시각]}
+var _over := {} # peer id -> 초과 횟수
 
 
 func _ready() -> void:
@@ -97,6 +104,11 @@ func host(port: int, pname: String, dedicated := false, accounts_dir := "") -> S
 	if err != OK:
 		return "포트 %d 을(를) 열 수 없습니다 (이미 사용 중?)" % port
 	peer.host.compress(ENetConnection.COMPRESS_RANGE_CODER)
+	# 통신 암호화(DTLS): PIN과 게임 데이터가 네트워크에 평문으로 흐르지 않게
+	var tls := _server_tls(accounts_dir)
+	if tls == null or peer.host.dtls_server_setup(tls) != OK:
+		peer.close()
+		return "통신 암호화(DTLS)를 준비하지 못했습니다"
 	multiplayer.multiplayer_peer = peer
 	mode = "server" if dedicated else "host"
 	my_name = pname
@@ -119,6 +131,10 @@ func join(address: String, port: int, pname: String, pin_code := "") -> String:
 	if err != OK:
 		return "접속을 시작할 수 없습니다"
 	peer.host.compress(ENetConnection.COMPRESS_RANGE_CODER)
+	# 서버와 암호화 연결(DTLS). 서버 인증서는 서버가 스스로 만든 것이라 검증은 하지 않음 (도청 방지 목적, SECURITY.md 참고)
+	if peer.host.dtls_client_setup("dungeon-reborn", TLSOptions.client_unsafe()) != OK:
+		peer.close()
+		return "통신 암호화(DTLS)를 준비하지 못했습니다"
 	multiplayer.multiplayer_peer = peer
 	mode = "client"
 	my_name = pname
@@ -147,9 +163,13 @@ func leave() -> void:
 		roster_changed.emit()
 
 
+var test_skip_hello := false # 보안 테스트: 로그인하지 않고 연결만 유지
+
+
 func _on_connected() -> void:
 	_set_status("접속 완료 - 던전 입장 → 맵 선택으로 대기방에 들어가세요")
-	hello.rpc_id(1, my_name, SaveData.data.cls, version, pin)
+	if not test_skip_hello:
+		hello.rpc_id(1, my_name, SaveData.data.cls, version, pin)
 
 
 func _on_failed() -> void:
@@ -164,8 +184,76 @@ func _on_server_lost() -> void:
 	disconnected.emit("호스트와 연결이 끊겼습니다")
 
 
-func _on_peer_connected(_id: int) -> void:
-	pass
+func _on_peer_connected(id: int) -> void:
+	if is_server():
+		_pending_auth[id] = Time.get_ticks_msec() / 1000.0
+
+
+# 서버 DTLS 키/인증서: 전용 서버는 계정 폴더에 한 번 만들어 계속 사용, 친구 호스트는 매번 새로 만듦
+func _server_tls(dir: String) -> TLSOptions:
+	var crypto := Crypto.new()
+	var key := CryptoKey.new()
+	var cert := X509Certificate.new()
+	var kp := dir.path_join("_server_tls.key") if dir != "" else ""
+	var cp := dir.path_join("_server_tls.crt") if dir != "" else ""
+	if kp != "" and FileAccess.file_exists(kp) and FileAccess.file_exists(cp) and key.load(kp) == OK and cert.load(cp) == OK:
+		return TLSOptions.server(key, cert)
+	key = crypto.generate_rsa(2048)
+	cert = crypto.generate_self_signed_certificate(key, "CN=dungeon-reborn,O=Dungeon Reborn,C=KR", "20250101000000", "20450101000000")
+	if kp != "":
+		DirAccess.make_dir_recursive_absolute(dir)
+		key.save(kp)
+		cert.save(cp)
+	return TLSOptions.server(key, cert)
+
+
+# 종류별 초당 허용 횟수 (토큰 버킷). 넘치면 그 메시지는 버리고, 계속 넘기면 연결을 끊음
+func _rate_ok(id: int, kind: String) -> bool:
+	var per: float = RATE[kind]
+	var now := Time.get_ticks_msec() / 1000.0
+	if not _rate.has(id):
+		_rate[id] = {}
+	var b: Array = _rate[id].get(kind, [per, now])
+	b[0] = minf(per, b[0] + (now - b[1]) * per)
+	b[1] = now
+	_rate[id][kind] = b
+	if _kicked.has(id):
+		return false
+	if b[0] >= 1.0:
+		b[0] -= 1.0
+		return true
+	_over[id] = _over.get(id, 0) + 1
+	if _over[id] >= RATE_KICK:
+		_kick_peer(id, "요청이 너무 많아 연결을 끊었습니다")
+	return false
+
+
+var _kicked := {} # 이미 끊은 피어 (끊긴 뒤 도착하는 남은 메시지는 조용히 무시)
+
+
+func _kick_peer(id: int, reason: String) -> void:
+	if _kicked.has(id):
+		return
+	_kicked[id] = true
+	_set_status("연결 끊음 (%d): %s" % [id, reason])
+	if _alive(id):
+		kicked.rpc_id(id, reason)
+	var mp = multiplayer.multiplayer_peer
+	if mp is ENetMultiplayerPeer:
+		mp.disconnect_peer(id)
+
+
+# 서버: 로그인하지 않은 채 연결만 잡고 있는 피어 정리
+func _tick_auth() -> void:
+	if _pending_auth.is_empty():
+		return
+	var now := Time.get_ticks_msec() / 1000.0
+	for id in _pending_auth.keys():
+		if roster.has(id):
+			_pending_auth.erase(id)
+		elif now - _pending_auth[id] > AUTH_TIMEOUT:
+			_pending_auth.erase(id)
+			_kick_peer(id, "로그인 시간이 지났습니다")
 
 
 func _on_peer_disconnected(id: int) -> void:
@@ -176,6 +264,10 @@ func _on_peer_disconnected(id: int) -> void:
 	if g != null and is_instance_valid(g):
 		g.on_peer_left(id) # 계정 결과(사망) 반영 후 정리
 	peer_game.erase(id)
+	_pending_auth.erase(id)
+	_rate.erase(id)
+	_over.erase(id)
+	_kicked.erase(id)
 	roster.erase(id)
 	loadouts.erase(id)
 	_room_remove(id)
@@ -192,6 +284,14 @@ func hello(pname: String, cls: String, ver: String, pin_code: String) -> void:
 	if not is_server():
 		return
 	var id := multiplayer.get_remote_sender_id()
+	if not _rate_ok(id, "hello"):
+		return
+	# 이미 로그인한 연결의 재로그인(다른 계정으로 바꿔치기)과 비정상적으로 긴 값은 거부
+	if roster.has(id) or peer_acct.has(id):
+		return
+	if pname.length() > 64 or cls.length() > 32 or ver.length() > 64 or pin_code.length() > 64:
+		_kick_peer(id, "잘못된 접속 정보")
+		return
 	if ver != version:
 		kicked.rpc_id(id, "게임 버전이 다릅니다 (서버 %s, 내 게임 %s). 최신 버전으로 업데이트하세요" % [version, ver])
 		return
@@ -264,7 +364,7 @@ func update_class(cls: String) -> void:
 @rpc("any_peer", "reliable")
 func set_class(cls: String) -> void:
 	var id := multiplayer.get_remote_sender_id()
-	if is_server() and accounts == null and roster.has(id) and Data.CLASSES.has(cls):
+	if is_server() and accounts == null and roster.has(id) and _rate_ok(id, "lobby") and Data.CLASSES.has(cls):
 		roster[id].cls = cls
 		push_roster()
 
@@ -287,7 +387,8 @@ func _game_of(id: int):
 	var g = peer_game.get(id)
 	if g != null and is_instance_valid(g):
 		return g
-	return game
+	# 전용 서버에서 레이드에 들어가 있지 않은 피어의 입력은 어느 레이드에도 전달하지 않음
+	return null if mode == "server" else game
 
 
 func register_raid(g, peers: Array) -> void:
@@ -340,13 +441,13 @@ func leave_room() -> void:
 
 @rpc("any_peer", "reliable")
 func c_join_room(map: String) -> void:
-	if is_server() and Data.MAPS.has(map):
+	if is_server() and _rate_ok(multiplayer.get_remote_sender_id(), "lobby") and Data.MAPS.has(map):
 		_room_join(multiplayer.get_remote_sender_id(), map)
 
 
 @rpc("any_peer", "reliable")
 func c_leave_room() -> void:
-	if is_server():
+	if is_server() and _rate_ok(multiplayer.get_remote_sender_id(), "lobby"):
 		_room_remove(multiplayer.get_remote_sender_id())
 		push_rooms()
 
@@ -470,7 +571,7 @@ func submit_loadout(lo: Dictionary) -> void:
 	if not is_server() or not preparing:
 		return
 	var id := multiplayer.get_remote_sender_id()
-	if not roster.has(id) or not (id in _prep_members) or not Data.CLASSES.has(lo.get("cls", "")):
+	if not roster.has(id) or not (id in _prep_members) or loadouts.has(id) or not Data.CLASSES.has(lo.get("cls", "")):
 		return
 	loadouts[id] = lo
 	_check_prepared()
@@ -490,6 +591,7 @@ func _process(dt: float) -> void:
 			_begin()
 	if is_server():
 		_tick_rooms(dt)
+		_tick_auth()
 
 
 func _begin() -> void:
@@ -539,7 +641,11 @@ func send_input(p: Vector3, yaw: float, pitch: float, bits: int, can_act: bool, 
 
 @rpc("any_peer", "unreliable_ordered", "call_remote", 1)
 func c_input(p: Vector3, yaw: float, pitch: float, bits: int, can_act: bool, panel: bool) -> void:
-	var g = _game_of(multiplayer.get_remote_sender_id()) if is_server() else null
+	if not is_server() or not _rate_ok(multiplayer.get_remote_sender_id(), "input"):
+		return
+	if not (is_finite(p.x) and is_finite(p.y) and is_finite(p.z) and is_finite(yaw) and is_finite(pitch)):
+		return
+	var g = _game_of(multiplayer.get_remote_sender_id())
 	if g != null and is_instance_valid(g):
 		g.net_input(multiplayer.get_remote_sender_id(), p, yaw, pitch, bits, can_act, panel)
 
@@ -550,7 +656,9 @@ func send_press(action: String) -> void:
 
 @rpc("any_peer", "reliable")
 func c_press(action: String) -> void:
-	var g = _game_of(multiplayer.get_remote_sender_id()) if is_server() else null
+	if not is_server() or action.length() > 16 or not _rate_ok(multiplayer.get_remote_sender_id(), "press"):
+		return
+	var g = _game_of(multiplayer.get_remote_sender_id())
 	if g != null and is_instance_valid(g):
 		g.net_press(multiplayer.get_remote_sender_id(), action)
 
@@ -561,7 +669,9 @@ func send_inv(op: String, args: Array) -> void:
 
 @rpc("any_peer", "reliable")
 func c_inv(op: String, args: Array) -> void:
-	var g = _game_of(multiplayer.get_remote_sender_id()) if is_server() else null
+	if not is_server() or op.length() > 32 or args.size() > 8 or not _rate_ok(multiplayer.get_remote_sender_id(), "inv"):
+		return
+	var g = _game_of(multiplayer.get_remote_sender_id())
 	if g != null and is_instance_valid(g):
 		g.net_inv(multiplayer.get_remote_sender_id(), op, args)
 
@@ -650,7 +760,7 @@ func c_account_op(op: String, args: Array) -> void:
 	var id := multiplayer.get_remote_sender_id()
 	if not is_server() or accounts == null or not peer_acct.has(id) or not roster.has(id):
 		return
-	if roster[id].state == "raid" or op.length() > 32 or args.size() > 4:
+	if roster[id].state == "raid" or op.length() > 32 or args.size() > 8 or not _rate_ok(id, "account"):
 		return
 	var nm: String = peer_acct[id]
 	var d: Dictionary = accounts.get_data(nm)
