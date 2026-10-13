@@ -1,9 +1,9 @@
 # Dungeon Reborn 실행 파일 (APK / Windows)
 
-게임 빌드: `20261008-083229` (온라인 서버도 같은 빌드여야 접속됨)
+게임 빌드: `20261013-160950` (온라인 서버도 같은 빌드여야 접속됨)
 
 ## 안드로이드
-- 파일: `DungeonReborn.apk` (arm64, 갤럭시 S21 기준, 앱 버전 0.5)
+- 파일: `DungeonReborn.apk` (arm64, 갤럭시 S21 기준, 앱 버전 0.6)
 - 받기: https://github.com/lapirus1008/dungeon-reborn/raw/apk/DungeonReborn.apk (폰은 크롬 권장)
 - 설치: "출처를 알 수 없는 앱" 허용, Play 프로텍트 경고는 "무시하고 설치"
 
