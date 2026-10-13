@@ -1,10 +1,15 @@
-# 코드로 합성한 효과음 (외부 오디오 파일 없음) (autoload: Sfx)
+# 효과음 (autoload: Sfx)
+# assets/sfx/<이름>[_번호].wav (tools/gen_sfx.py 로 만든 중세풍 소리)를 우선 쓰고, 없으면 코드로 합성한 소리
+# 같은 이름에 여러 파일(_1, _2 ...)이 있으면 매번 무작위로 골라 반복감을 줄임
 extends Node
 
 const RATE := 22050
 const POOL := 12
 
 var streams := {}
+var variants := {} # 이름 -> [AudioStream, ...] (파일)
+var _last := {} # 이름 -> 마지막 재생 시각 (같은 소리가 한꺼번에 겹치지 않게)
+const SAME_GAP := 0.06
 var players: Array[AudioStreamPlayer] = []
 var next := 0
 var master_volume := 0.8
@@ -16,6 +21,31 @@ func _ready() -> void:
 		add_child(p)
 		players.append(p)
 	_build()
+	_load_files()
+
+
+func _load_files() -> void:
+	var dir := "res://assets/sfx"
+	var da := DirAccess.open(dir)
+	if da == null:
+		return
+	var seen := {}
+	for f in da.get_files():
+		# 내보낸 게임에서는 원본 대신 .import/.remap 이름으로 보임 (에디터에서는 둘 다 보임)
+		var fn := f.trim_suffix(".import").trim_suffix(".remap")
+		if not fn.ends_with(".wav") or seen.has(fn):
+			continue
+		seen[fn] = true
+		var st = load(dir + "/" + fn)
+		if st == null:
+			continue
+		var base := fn.get_basename()
+		var parts := base.rsplit("_", true, 1)
+		if parts.size() == 2 and parts[1].is_valid_int():
+			base = parts[0]
+		if not variants.has(base):
+			variants[base] = []
+		variants[base].append(st)
 
 
 # 필터된 노이즈 버스트: freq는 저역통과 계수(0~1)로 근사
@@ -115,8 +145,13 @@ func _build() -> void:
 
 # dist: 청자(플레이어)와의 거리, -1이면 감쇠 없음
 func play(name: String, dist: float = -1.0, pitch_var := 0.06, vol := 1.0) -> void:
-	if not streams.has(name):
+	if not streams.has(name) and not variants.has(name):
 		return
+	# 같은 소리를 아주 짧은 간격으로 여러 번 부르면 (상자 아이템 여러 개 줍기 등) 한 번만
+	var now := Time.get_ticks_msec() / 1000.0
+	if now - float(_last.get(name, -1.0)) < SAME_GAP:
+		return
+	_last[name] = now
 	var v := master_volume * vol
 	if dist >= 0.0:
 		v *= maxf(0.0, 1.0 - dist / 35.0)
@@ -124,7 +159,7 @@ func play(name: String, dist: float = -1.0, pitch_var := 0.06, vol := 1.0) -> vo
 		return
 	var p := players[next]
 	next = (next + 1) % POOL
-	p.stream = streams[name]
+	p.stream = variants[name].pick_random() if variants.has(name) else streams[name]
 	p.volume_db = linear_to_db(v)
 	p.pitch_scale = 1.0 + randf_range(-pitch_var, pitch_var)
 	p.play()

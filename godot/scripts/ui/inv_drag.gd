@@ -1,5 +1,5 @@
 # 인벤토리 드래그 앤 드롭 (가방/보관함/상자/장비칸/판매대 공용)
-# 드래그 중 R: 회전, 우클릭/Esc: 취소, 패널 밖에 놓기: 버리기(던전)
+# 우클릭/Esc: 취소, 패널 밖에 놓기: 버리기(던전). 아이템 회전은 없음
 class_name InvDrag
 extends Control
 
@@ -14,7 +14,8 @@ var rot := false
 var grab := Vector2(0.5, 0.5) # 아이템 안에서 잡은 위치 (칸 단위)
 var cell := 40.0
 var icon_label: Label
-# 터치: 제자리에서 짧게 탭하면(드래그 없이) 우클릭과 같은 빠른 장착/사용, 두 번째 손가락 탭 = 회전
+var icon_tex: TextureRect
+# 터치: 제자리에서 짧게 탭하면(드래그 없이) 우클릭과 같은 빠른 장착/사용
 var start_pos := Vector2.ZERO
 var start_t := 0
 
@@ -29,6 +30,12 @@ func _ready() -> void:
 	icon_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	icon_label.visible = false
 	add_child(icon_label)
+	icon_tex = TextureRect.new()
+	icon_tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon_tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon_tex.visible = false
+	add_child(icon_tex)
 
 
 static func register(t: Control) -> void:
@@ -51,14 +58,17 @@ static func begin(it: Dictionary, from: String, view, grab_cells: Vector2, cell_
 	inst.item = it
 	inst.src = from
 	inst.src_view = view
-	inst.rot = bool(it.get("r", false))
+	inst.rot = false
 	inst.grab = grab_cells
 	inst.cell = cell_px
 	inst.start_pos = inst.get_global_mouse_position()
 	inst.start_t = Time.get_ticks_msec()
+	var tex := UI.item_icon(it)
+	inst.icon_tex.texture = tex
+	inst.icon_tex.visible = tex != null
 	inst.icon_label.text = Data.base_of(it).icon
 	inst.icon_label.add_theme_font_size_override("font_size", int(cell_px * 0.6))
-	inst.icon_label.visible = true
+	inst.icon_label.visible = tex == null
 	UI.hide_tip()
 	inst.queue_redraw()
 
@@ -91,25 +101,15 @@ func _draw() -> void:
 	draw_rect(r, col, false, 2.0)
 	icon_label.position = r.position
 	icon_label.size = r.size
+	icon_tex.position = r.position + Vector2(2, 2)
+	icon_tex.size = r.size - Vector2(4, 4)
 
 
 func _input(ev: InputEvent) -> void:
 	if not active:
 		return
-	if ev is InputEventScreenTouch and ev.pressed and ev.index > 0:
-		rot = not rot
-		grab = Vector2(grab.y, grab.x)
-		Sfx.play("ui")
-		get_viewport().set_input_as_handled()
-		return
 	if ev is InputEventKey and ev.pressed and not ev.echo:
-		if ev.physical_keycode == KEY_R:
-			# 회전: 잡은 위치도 함께 돌림
-			rot = not rot
-			grab = Vector2(grab.y, grab.x)
-			Sfx.play("ui")
-			get_viewport().set_input_as_handled()
-		elif ev.physical_keycode == KEY_ESCAPE:
+		if ev.physical_keycode == KEY_ESCAPE:
 			cancel()
 			get_viewport().set_input_as_handled()
 	elif ev is InputEventMouseButton:
@@ -124,6 +124,7 @@ func _input(ev: InputEvent) -> void:
 func cancel() -> void:
 	active = false
 	icon_label.visible = false
+	icon_tex.visible = false
 	queue_redraw()
 
 

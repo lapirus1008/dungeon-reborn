@@ -1,10 +1,11 @@
 # 격자 인벤토리 화면 (가방/보관함/상자)
-# 왼쪽 드래그: 옮기기 · 드래그 중 R: 회전 · 우클릭: 장착/해제/사용 · Shift+클릭: 빠른 이동 · Ctrl+클릭: 판매(로비)
+# 왼쪽 드래그: 옮기기 · 우클릭: 장착/해제/사용 · Shift+클릭: 빠른 이동 · Ctrl+클릭: 판매(로비)
 class_name GridView
 extends Control
 
 const BG := Color(0.05, 0.04, 0.03, 0.92)
 const LINE := Color(0.23, 0.19, 0.13)
+const CELL := Color(0.09, 0.075, 0.055, 1.0)
 
 var store := "bag"
 var grid := Vector2i(9, 5)
@@ -39,16 +40,7 @@ func set_items(list: Array, g: Vector2i) -> void:
 	for c in get_children():
 		c.queue_free()
 	for it in items:
-		var r := _rect(it)
-		var l := Label.new()
-		l.text = Data.base_of(it).icon
-		l.add_theme_font_size_override("font_size", int(minf(r.size.x, r.size.y) * 0.55))
-		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		l.position = r.position
-		l.size = r.size
-		l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		add_child(l)
+		UI.add_item_visual(self, it, _rect(it))
 	queue_redraw()
 
 
@@ -66,16 +58,17 @@ func item_at(local: Vector2):
 
 func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), BG)
+	for x in grid.x:
+		for y in grid.y:
+			draw_rect(Rect2(Vector2(x, y) * cell + Vector2(2, 2), Vector2(cell, cell) - Vector2(4, 4)), CELL)
 	for x in grid.x + 1:
 		draw_line(Vector2(x * cell, 0), Vector2(x * cell, grid.y * cell), LINE)
 	for y in grid.y + 1:
 		draw_line(Vector2(0, y * cell), Vector2(grid.x * cell, y * cell), LINE)
 	for it in items:
 		var r := _rect(it).grow(-2)
-		var col: Color = Data.RARITIES[int(it.get("rarity", 0))].color
 		var dragging: bool = InvDrag.is_active() and InvDrag.inst.item.id == it.id
-		draw_rect(r, Color(col.r, col.g, col.b, 0.06 if dragging else (0.22 if it.id == _hover_id else 0.13)))
-		draw_rect(r, Color(col.r, col.g, col.b, 0.35 if dragging else 0.95), false, 2.0)
+		UI.draw_item_slot(self, r, int(it.get("rarity", 0)), it.id == _hover_id, dragging)
 	# 드래그 중: 놓일 자리 미리 보기 (초록 = 가능, 빨강 = 불가)
 	if InvDrag.is_active() and get_global_rect().has_point(get_global_mouse_position()):
 		var d := InvDrag.inst

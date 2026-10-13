@@ -89,6 +89,17 @@ func _ready() -> void:
 		_mapshots.call_deferred(args[args.find("--mapshots") + 1])
 	elif args.has("--invshots"):
 		_invshots.call_deferred(args[args.find("--invshots") + 1])
+	elif args.has("--dumpitems"):
+		# 아이콘 생성기(tools/gen_icons.py)용 아이템 목록
+		var out := {}
+		for k in Data.ITEM_BASES:
+			var b: Dictionary = Data.ITEM_BASES[k]
+			out[k] = {"slot": b.get("slot", ""), "cat": b.get("cat", ""), "size": b.get("size", [1, 1]), "model": b.get("model", ""),
+				"name": b.get("name", ""), "atype": b.get("atype", b.get("armor", "")), "rarity": b.get("rarity", 0), "throw": b.get("throw", ""), "drink": b.get("drink", "")}
+		var f := FileAccess.open(args[args.find("--dumpitems") + 1], FileAccess.WRITE)
+		f.store_string(JSON.stringify(out, "\t"))
+		f.close()
+		get_tree().quit()
 	elif args.has("--touchtest"):
 		_touchtest.call_deferred()
 	elif args.has("--doortest"):
@@ -1263,6 +1274,9 @@ func _arrow_checks(pl, out: Array) -> void:
 const PSI_WAIT := 1.25 # 검 2자루 소환 시간 (0.55초씩)
 
 
+const BANDAGE_WAIT := 3.2
+
+
 func _autotest() -> void:
 	print("[autotest] 시작")
 	var out := []
@@ -1398,6 +1412,52 @@ func _autotest() -> void:
 	await _wait(1.1)
 	var pots2: int = pl.equipment.c3.count if pl.equipment.c3 != null else 0
 	out.append("물약: 마시는 동작 중엔 그대로 %s, 동작 후 적용 %s" % ["O" if pots_mid == pots else "X", "O" if pots2 == pots - 1 else "X"])
+	# 물약은 다 마신 뒤 몇 초에 걸쳐 차오름 (아래 대기 시간 동안 플라스크 재사용 대기가 줄지 않게 보관)
+	var flask_cd: float = pl.cd.flask
+	var hp_a: float = pl.hp
+	await _wait(1.0)
+	var hot_ok: bool = pl.hp > hp_a + 5.0 and pl.heal > 0.0 # 아직 남은 회복량이 있음 = 한 번에 다 차지 않음
+	# 붕대: 누르면 감기 시작 → 클릭하면 취소(그대로 남음) → 다시 감아 끝까지 → 회복
+	pl.hp = pl.max_hp * 0.4
+	pl.cd.potion = 0.0
+	pl.equipment.c5 = Data.make_item("bandage")
+	pl.equipment.c5.count = 2
+	pl.drink_t = 0.0
+	pl.set_held("c5") # 헤드리스에서 숫자키 just_pressed가 가끔 빠짐
+	await _wait(0.3)
+	# 실제 마우스 입력처럼 입력 이벤트로 눌렀다 뗌 (Input.action_press는 헤드리스에서 프레임이 어긋나 가끔 빠짐)
+	var click := func() -> void:
+		for down in [true, false]:
+			var ev := InputEventAction.new()
+			ev.action = "attack"
+			ev.pressed = down
+			Input.parse_input_event(ev)
+			for _f in 3:
+				await get_tree().process_frame
+	await click.call()
+	var b_start: bool = pl.drink_t > 0.0 and pl.drink_kind == "bandage"
+	await _wait(0.4)
+	await click.call()
+	var b_cancel: bool = pl.drink_t <= 0.0 and pl.equipment.c5 != null and pl.equipment.c5.count == 2
+	await click.call()
+	var b_hp: float = pl.hp
+	var b_mid: bool = pl.drink_t > 0.0
+	await _wait(BANDAGE_WAIT)
+	var b_done: bool = b_mid and pl.equipment.c5 != null and pl.equipment.c5.count == 1 and pl.hp > b_hp + 10.0
+	# 가방에서 우클릭(사용)해도 감는 동작을 거침
+	await press.call("weapon1")
+	pl.cd.potion = 0.0
+	pl.hp = pl.max_hp * 0.4
+	var bb := Data.make_item("bandage")
+	Inv.add_auto(pl.bag, Inv.bag_size(pl.cls), bb)
+	game.inv_op(pl, "use", [bb.id])
+	var bag_ok: bool = pl.drink_t > 0.0 and pl.drink_slot == "" and Inv.index_of(pl.bag, bb.id) >= 0
+	await _wait(BANDAGE_WAIT)
+	bag_ok = bag_ok and Inv.index_of(pl.bag, bb.id) < 0
+	pl.cd.flask = flask_cd
+	pl.hp = pl.max_hp
+	out.append("붕대·물약: 물약 지속 회복 %s, 붕대 감기 시작 %s · 클릭 취소(안 줄어듦) %s · 끝까지 감으면 회복 %s · 가방에서 써도 감기 %s" % [
+		"O" if hot_ok else "X", "O" if b_start else "X", "O" if b_cancel else "X", "O" if b_done else "X", "O" if bag_ok else "X"])
 	# G: 횃불 (입장 시 2개) → 1개 남고 불붙은 횃불을 듦
 	var torches: int = pl.equipment.torch.count if pl.equipment.torch != null else 0
 	await press.call("torch")
@@ -2042,8 +2102,17 @@ func _inv_checks() -> Array:
 	var r3 := Account.apply(d, "move", ["stash", helm.id, "bag", 2, 0, false])
 	var ls := Data.make_item("traveler_longsword")
 	Inv.add_auto(d.stash, Inv.STASH, ls)
-	var r4 := Account.apply(d, "move", ["stash", ls.id, "bag", 2, 2, true]) # 2x4 를 눕혀서 4x2
-	ok.call("4칸 투구 배치 + 양손검 회전(2x4→4x2)", r3.ok and r4.ok and Data.item_size(ls) == Vector2i(4, 2))
+	var r4 := Account.apply(d, "move", ["stash", ls.id, "bag", 4, 0, true]) # 회전을 요청해도 원래 방향(2x4) 그대로
+	# 예전 세이브의 돌려 둔 아이템은 불러올 때 원래 방향으로 다시 배치
+	var old_save := Account.fresh()
+	var rot_it := Data.make_item("traveler_longsword")
+	rot_it.x = 0
+	rot_it.y = 0
+	rot_it.r = true
+	old_save.stash = [rot_it]
+	var re := Account.normalize(JSON.parse_string(JSON.stringify(Account.serial(old_save))))
+	var re_ok: bool = re.stash.size() == 1 and not bool(re.stash[0].get("r", false))
+	ok.call("4칸 투구 배치 + 회전 없음 (돌리기 요청 무시 %s, 옛 세이브 원래 방향 %s)" % [Data.item_size(ls) == Vector2i(2, 4), re_ok], r3.ok and r4.ok and Data.item_size(ls) == Vector2i(2, 4) and re_ok)
 	# 우클릭 장착: 기존 상의(낡은 판금 상의)는 가방으로
 	var r5 := Account.apply(d, "quick", ["bag", chest.id])
 	var old_in_bag = d.bag.any(func(it): return it.base == "old_plate_chest")
@@ -2104,6 +2173,16 @@ func _inv_checks() -> Array:
 	ok.call("성 지도 높낮이 (숲 언덕 최고 %.1fm, 성 안 %.1fm)" % [hmax, cd.ground_y(56 * 4.0, 31 * 4.0)], hmax > 1.0 and absf(cd.ground_y(56 * 4.0, 31 * 4.0)) < 0.01)
 	ok.call("성 지도 (야외 %s, 성당 %s, 시작 위치 %s, 나무 충돌 %s, 큰 홀·성당까지 길 %s)" % [cd.has_outdoor, cd.area_at(16, 58) == Dungeon.A_CATH, sp_ok, pushed.distance_to(tc) > 1.0, reach],
 		cd.has_outdoor and cd.area_at(16, 58) == Dungeon.A_CATH and sp_ok and pushed.distance_to(tc) > 1.0 and reach)
+	# 효과음: 중세풍 파일(변형 포함)을 쓰고, 같은 소리를 순간에 여러 번 부르면 한 번만
+	var nv := 0
+	for k in Sfx.variants:
+		nv += Sfx.variants[k].size()
+	Sfx._last.clear()
+	Sfx.play("pickup")
+	var t_dup: float = Sfx._last.get("pickup", -1.0)
+	Sfx.play("pickup")
+	ok.call("효과음 파일 %d종 %d개 (발소리 %d가지), 같은 소리 겹침 방지 %s" % [Sfx.variants.size(), nv, Sfx.variants.get("step", []).size(), Sfx._last.get("pickup", -1.0) == t_dup],
+		Sfx.variants.size() >= 25 and Sfx.variants.get("step", []).size() >= 3 and Sfx._last.get("pickup", -1.0) == t_dup)
 	# 공개 서버 보호: PIN 5번 틀리면 잠금, 같은 주소 새 계정 3개까지
 	var tmpd := OS.get_user_data_dir() + "/acct_test_%d" % randi()
 	var store := AccountStore.new(tmpd)
@@ -2454,7 +2533,7 @@ func _invshots(dir: String) -> void:
 	for it in d.stash:
 		if it.base == "the_17th_key":
 			leg = it
-	UI.show_tip(UI.item_tip(leg, "드래그: 이동 (R 회전) · 우클릭: 장착"))
+	UI.show_tip(UI.item_tip(leg, "드래그: 이동 · 우클릭: 장착"))
 	UI.tooltip.position = Vector2(820, 160)
 	await _wait(0.2)
 	await _shot(dir, "inv_2_tooltip")

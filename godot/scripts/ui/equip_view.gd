@@ -18,6 +18,14 @@ const LAYOUT := {
 	"c3": Rect2i(7, 5, 1, 1), "c4": Rect2i(7, 6, 1, 1), "c5": Rect2i(7, 7, 1, 1),
 	"sw1": Rect2i(2, 8, 1, 1), "sw2": Rect2i(3, 8, 1, 1), "sw3": Rect2i(4, 8, 1, 1), "sw4": Rect2i(5, 8, 1, 1),
 }
+# 빈 칸에 흐리게 보여 줄 대표 그림 (무엇을 끼우는 칸인지)
+const GHOST := {
+	"head": "old_plate_head", "chest": "old_plate_chest", "legs": "old_plate_legs", "hands": "old_plate_hands", "feet": "old_plate_feet",
+	"necklace": "bone_necklace", "ring1": "copper_ring", "ring2": "copper_ring", "torch": "torch",
+	"w1": "old_sword", "w1o": "old_shield", "w2": "old_sword", "w2o": "old_shield",
+	"c3": "health_potion", "c4": "health_potion", "c5": "health_potion",
+	"sw1": "old_sword", "sw2": "old_sword", "sw3": "old_sword", "sw4": "old_sword",
+}
 const GRID_W := 8
 const GRID_H := 8
 
@@ -75,32 +83,29 @@ func set_equipment(eq: Dictionary, c: String, ws := 1) -> void:
 	for s in _slots():
 		var r := _rect(s)
 		var it = equipment.get(s)
+		if it != null:
+			UI.add_item_visual(self, it, r)
+			continue
+		var ghost := UI.item_icon({"base": GHOST.get(s, "")})
+		if ghost != null:
+			var tr := TextureRect.new()
+			tr.texture = ghost
+			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			tr.modulate = Color(0.05, 0.04, 0.03, 0.55)
+			tr.position = r.position + r.size * 0.12
+			tr.size = r.size * 0.76
+			add_child(tr)
 		var l := Label.new()
 		l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		l.position = r.position
 		l.size = r.size
-		if it != null:
-			l.text = Data.base_of(it).icon
-			l.add_theme_font_size_override("font_size", int(minf(r.size.x, r.size.y) * 0.5))
-			if int(it.get("count", 1)) > 1:
-				# 수량은 칸 오른쪽 아래 작게
-				var n := Label.new()
-				n.mouse_filter = Control.MOUSE_FILTER_IGNORE
-				n.text = str(int(it.count))
-				n.add_theme_font_size_override("font_size", 10)
-				n.add_theme_color_override("font_outline_color", Color.BLACK)
-				n.add_theme_constant_override("outline_size", 4)
-				n.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-				n.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
-				n.position = r.position
-				n.size = r.size - Vector2(2, 0)
-				add_child(n)
-		else:
-			l.text = _short_name(s, r)
-			l.add_theme_font_size_override("font_size", 10)
-			l.add_theme_color_override("font_color", UI.MUTED)
+		l.text = _short_name(s, r)
+		l.add_theme_font_size_override("font_size", 10)
+		l.add_theme_color_override("font_color", UI.MUTED)
 		add_child(l)
 	queue_redraw()
 
@@ -149,11 +154,12 @@ func _draw() -> void:
 		var it = equipment.get(s)
 		draw_rect(r, Color(0.05, 0.04, 0.03, 0.92))
 		if it != null:
-			var col: Color = Data.RARITIES[int(it.get("rarity", 0))].color
-			draw_rect(r, Color(col.r, col.g, col.b, 0.22 if s == _hover else 0.13))
-			draw_rect(r, col, false, 2.0)
+			var dragging: bool = InvDrag.is_active() and InvDrag.inst.item.id == it.id
+			UI.draw_item_slot(self, r, int(it.get("rarity", 0)), s == _hover, dragging)
 		else:
+			draw_rect(r.grow(-2), Color(0.09, 0.075, 0.055))
 			draw_rect(r, Color("#3a3022"), false, 1.0)
+			draw_rect(r.grow(-2), Color(0, 0, 0, 0.5), false, 1.0)
 		if s in drag_ok:
 			draw_rect(r, Color(1.0, 0.82, 0.3, 0.9 if get_global_rect().has_point(get_global_mouse_position()) and slot_at(get_local_mouse_position()) == s else 0.5), false, 2.0)
 

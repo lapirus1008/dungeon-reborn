@@ -546,8 +546,9 @@ func _build_items() -> void:
 		_add(a[0], {"name": a[1], "slot": a[2], "cat": a[2], "rarity": a[3], "lvl": a[3] + 1, "icon": a[4], "size": [1, 1], "fixed": [], "mods": m, "value": a[5]})
 	# ---- 소모품 / 투척 / 보물
 	_add("health_potion", {"name": "체력 물약", "slot": "consumable", "heal": 60, "drink": "heal", "value": 15, "icon": "🧪", "size": [1, 1], "rarity": 1, "stack": 3,
-		"desc": "좌클릭으로 마시면 마시는 동작이 끝난 뒤 3초에 걸쳐 체력을 회복합니다."})
-	_add("bandage", {"name": "붕대", "slot": "consumable", "heal": 30, "value": 6, "icon": "🩹", "size": [1, 1], "rarity": 0, "stack": 3})
+		"desc": "좌클릭으로 마심 (마시는 동안 조금 느려짐). 다 마시면 5초 동안 초당 12씩 체력을 회복합니다."})
+	_add("bandage", {"name": "붕대", "slot": "consumable", "heal": 30, "drink": "bandage", "value": 6, "icon": "🩹", "size": [1, 1], "rarity": 0, "stack": 3,
+		"desc": "좌클릭으로 감기 시작 (약 2.5초, 그동안 느리게 이동). 다시 클릭하거나 우클릭하면 취소. 다 감으면 체력 30 회복."})
 	_add("bolts", {"name": "석궁 볼트", "slot": "ammo", "value": 1, "icon": "➶", "size": [1, 2], "rarity": 0, "stack": 30,
 		"desc": "석궁에 장전하는 볼트. 가방에 들고 다니면 R키로 1개씩 석궁에 끼웁니다."})
 	_add("torch", {"name": "횃불", "slot": "torch", "value": 3, "icon": "🕯", "size": [1, 2], "rarity": 0, "stack": 3, "burn": 120.0,
@@ -882,7 +883,8 @@ func _weighted_treasure(luck: float) -> String:
 	return TREASURE_POOL[0][0]
 
 
-func roll_loot(count: int, luck: float = 0.0) -> Array:
+# no_torch: 몬스터 시체에는 횃불이 나오지 않음 (상자·시체 가방에서만)
+func roll_loot(count: int, luck: float = 0.0, no_torch := false) -> Array:
 	var items := []
 	for i in count:
 		var r := randf()
@@ -904,7 +906,10 @@ func roll_loot(count: int, luck: float = 0.0) -> Array:
 				pool = _gear_by_rarity(2)
 			items.append(make_item(pool.pick_random()))
 		elif r < 0.65:
-			var c = ["health_potion", "health_potion", "bandage", "bandage", "fire_flask", "rock_flask", "lightning_flask", "mimic_flask", "protection_flask", "torch"].pick_random()
+			var pool := ["health_potion", "health_potion", "bandage", "bandage", "fire_flask", "rock_flask", "lightning_flask", "mimic_flask", "protection_flask"]
+			if not no_torch:
+				pool.append("torch")
+			var c = pool.pick_random()
 			var it := make_item(c)
 			it.count = randi_range(1, 2)
 			items.append(it)

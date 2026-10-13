@@ -134,7 +134,7 @@ static func _fix_item(it: Dictionary) -> void:
 	if it.has("x"):
 		it["x"] = int(it["x"])
 		it["y"] = int(it["y"])
-		it["r"] = bool(it.get("r", false))
+		it["r"] = false # 회전 기능 제거: 예전에 돌려 둔 아이템은 원래 방향으로 다시 배치됨
 	if Data.LEGACY_ITEM.has(it["base"]):
 		it["base"] = Data.LEGACY_ITEM[it["base"]]
 		it["affixes"] = []

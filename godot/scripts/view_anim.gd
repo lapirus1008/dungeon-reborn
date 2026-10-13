@@ -24,6 +24,16 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 		R.position = R0 + Vector3(-sin(a) * 0.15, 0.05, 0)
 		return
 	# 마시기: 병을 든 오른손을 입으로 가져가 기울임
+	# 붕대 감기: 두 손을 몸 앞 가운데로 모으고 오른손이 왼팔을 빙빙 감음
+	if p.get("drink_t") != null and p.drink_t > 0.0 and p.get("drink_kind") == "bandage":
+		var bk: float = 1.0 - clampf(p.drink_t / maxf(0.01, p.drink_max), 0.0, 1.0)
+		var inn := clampf(bk / 0.15, 0.0, 1.0) * (1.0 - clampf((bk - 0.9) / 0.1, 0.0, 1.0))
+		var ph: float = t * 9.0
+		L.position = L0.lerp(Vector3(-0.05, -0.34, -0.46), inn)
+		L.rotation = Vector3(0.5, 0.0, -0.9) * inn
+		R.position = R0.lerp(Vector3(0.02 + cos(ph) * 0.06, -0.3 + sin(ph) * 0.05, -0.42), inn)
+		R.rotation = Vector3(0.6, 0.0, 0.8) * inn
+		return
 	if p.get("drink_t") != null and p.drink_t > 0.0:
 		var dk: float = 1.0 - clampf(p.drink_t / maxf(0.01, p.drink_max), 0.0, 1.0)
 		var up := clampf(dk / 0.35, 0.0, 1.0) * (1.0 - clampf((dk - 0.85) / 0.15, 0.0, 1.0))

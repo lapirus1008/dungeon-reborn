@@ -1746,9 +1746,9 @@ func on_death(actor, src) -> void:
 		if is_boss:
 			boss_dead = true
 			notify_all("announce", ["%s 처치!" % actor.name, "보스의 전리품이 떨어졌습니다"])
-			drop_monster_corpse(actor, Data.roll_loot(5, luck))
+			drop_monster_corpse(actor, Data.roll_loot(5, luck, true))
 		elif randf() < 0.45 and actor.def.get("ai", "") != "harmless":
-			drop_monster_corpse(actor, Data.roll_loot(randi_range(1, 2), luck))
+			drop_monster_corpse(actor, Data.roll_loot(randi_range(1, 2), luck, true))
 	elif actor.kind == "bot":
 		if is_human(src):
 			src.pvp_kills += 1
@@ -2128,7 +2128,14 @@ func inv_op(p, op: String, args: Array) -> void:
 
 
 func _use_item(p, it: Dictionary) -> void:
-	if not Data.base_of(it).has("heal"):
+	var b: Dictionary = Data.base_of(it)
+	if b.has("drink"):
+		# 붕대·물약은 인벤토리에서 써도 감기/마시기 동작을 거침
+		if p.alive:
+			var slot := Inv.slot_of(p.equipment, it.id)
+			p.start_drink(slot, it.id if slot == "" else "")
+		return
+	if not b.has("heal"):
 		return
 	if p.hp >= p.max_hp:
 		notify(p, "toast", ["체력이 가득 찼습니다"])

@@ -65,6 +65,8 @@ var drink_t := 0.0 # 마시는 중 (끝나면 효과)
 var drink_max := 1.0
 var drink_slot := ""
 var drink_id := ""
+var drink_kind := "" # 마시는/감는 것의 종류 (heal / bandage / shield / mimic)
+const BANDAGE_TIME := 2.5
 var mimic_rmb := true
 var swing_log = null # 자동 테스트용: 휘두를 때마다 [방향, 시각]
 var reload_item = null
@@ -423,7 +425,7 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 	if stealth > 0.0:
 		speed *= 1.1
 	if drink_t > 0.0:
-		speed *= 0.5
+		speed *= 0.45 if drink_kind == "bandage" else 0.8 # 붕대 감는 동안은 느리게, 물약은 아주 약간만
 	if mimic_form:
 		speed *= 0.18 # 상자: 아주 느리게
 	if crouch:
@@ -483,7 +485,7 @@ func _combat(dt: float, act: bool) -> void:
 	var rmb_pressed := act and inp.just_pressed("secondary")
 	var rmb_held := act and inp.pressed("secondary")
 	var lmb_held := act and inp.pressed("attack")
-	var free := swing == null and spin_t <= 0.0 and dash == null
+	var free := swing == null and spin_t <= 0.0 and dash == null and not (drink_t > 0.0 and drink_slot == "") # 가방에서 쓴 붕대·물약 중엔 공격 대신 취소
 
 	# 우클릭: 방패/무기 방어, 패링, 단검 투척, 지팡이 치기, 표범 포효
 	blocking = false
@@ -520,6 +522,9 @@ func _combat(dt: float, act: bool) -> void:
 	psi_lmb = lmb_held
 	var rmb_edge := rmb_held and not psi_rmb
 	psi_rmb = rmb_held
+	# 가방에서 쓴 붕대·물약: 클릭/우클릭으로 취소
+	if drink_t > 0.0 and drink_slot == "" and act and (inp.just_pressed("attack") or rmb_pressed):
+		cancel_drink()
 	# 소모품을 들고 있으면: 좌클릭 = 사용, 우클릭 = 내려놓기
 	if held == "torch":
 		blocking = false
@@ -535,6 +540,8 @@ func _combat(dt: float, act: bool) -> void:
 		blocking = false
 		if equipment.get(held) == null:
 			set_held("")
+		elif drink_t > 0.0 and act and (inp.just_pressed("attack") or rmb_pressed):
+			cancel_drink()
 		elif act and inp.just_pressed("attack") and drink_t <= 0.0:
 			use_held()
 		elif rmb_pressed:
@@ -623,6 +630,8 @@ func _combat(dt: float, act: bool) -> void:
 func set_held(k: String) -> void:
 	if held == k:
 		return
+	if drink_t > 0.0 and k != drink_slot:
+		cancel_drink() # 다른 것을 꺼내면 마시기/붕대 감기 취소
 	held = k
 	if k == "":
 		draw_weapon()
@@ -731,12 +740,13 @@ const DRINK_TIME := 0.9
 
 
 # 좌클릭으로 마시기 시작 → 마시는 동작이 끝나면 효과 (체력 물약 / 미믹 / 방어 플라스크)
-func start_drink(slot: String) -> bool:
-	var it = equipment.get(slot)
+# slot이 ""이면 가방 속 아이템(id)을 사용 (인벤토리 우클릭)
+func start_drink(slot: String, bag_id := "") -> bool:
+	var it = equipment.get(slot) if slot != "" else _bag_item(bag_id)
 	if it == null or drink_t > 0.0 or mimic_form:
 		return false
 	var b: Dictionary = Data.base_of(it)
-	if b.drink == "heal":
+	if b.drink in ["heal", "bandage"]:
 		if cd.potion > 0.0:
 			return false
 		if hp >= max_hp:
@@ -747,31 +757,53 @@ func start_drink(slot: String) -> bool:
 		return false
 	drink_slot = slot
 	drink_id = it.id
-	drink_max = DRINK_TIME / stats.get("act_mul", 1.0)
+	drink_kind = b.drink
+	drink_max = (BANDAGE_TIME if b.drink == "bandage" else DRINK_TIME) / stats.get("act_mul", 1.0)
 	drink_t = drink_max
-	game.sfx("draw_soft", pos, 0.05)
+	game.sfx("bandage" if b.drink == "bandage" else "potion_open", pos, 0.05)
 	return true
+
+
+# 마시기/붕대 감기 취소 (다시 클릭·우클릭·무기 바꾸기). 아이템은 그대로 남음
+func cancel_drink() -> void:
+	if drink_t <= 0.0:
+		return
+	drink_t = 0.0
+	game.notify(self, "toast", ["붕대 감기 취소" if drink_kind == "bandage" else "마시기 취소"])
+
+
+func _bag_item(id: String):
+	var i := Inv.index_of(bag, id)
+	return bag[i] if i >= 0 else null
 
 
 func _tick_drink(dt: float) -> void:
 	if drink_t <= 0.0:
 		return
-	var it = equipment.get(drink_slot)
+	var it = equipment.get(drink_slot) if drink_slot != "" else _bag_item(drink_id)
 	if incapacitated() or it == null or it.id != drink_id:
 		drink_t = 0.0
 		return
 	drink_t -= dt
-	game.channel_for(self, "%s 마시는 중..." % Data.base_of(it).name, 1.0 - drink_t / drink_max)
+	game.channel_for(self, ("붕대 감는 중... (클릭/우클릭: 취소)" if drink_kind == "bandage" else "%s 마시는 중..." % Data.base_of(it).name), 1.0 - drink_t / drink_max)
 	if drink_t > 0.0:
 		return
 	drink_t = 0.0
 	var b: Dictionary = Data.base_of(it)
 	it.count = int(it.get("count", 1)) - 1
 	if it.count <= 0:
-		equipment[drink_slot] = null
+		if drink_slot != "":
+			equipment[drink_slot] = null
+		else:
+			bag.remove_at(Inv.index_of(bag, drink_id))
 	match b.drink:
 		"heal":
-			apply_heal(b.heal * stats.get("heal_mul", 1.0), 3.0)
+			# 다 마신 뒤 5초 동안 초당 일정량씩 회복
+			apply_heal(b.heal * stats.get("heal_mul", 1.0), 5.0)
+			cd.potion = 1.2
+			game.sfx("heal", pos)
+		"bandage":
+			apply_heal(b.heal * stats.get("heal_mul", 1.0), 0.6)
 			cd.potion = 1.2
 			game.sfx("heal", pos)
 		"shield":
@@ -788,7 +820,7 @@ func _tick_drink(dt: float) -> void:
 			game.notify(self, "toast", ["상자로 변신! (우클릭: 해제)"])
 	game.notify(self, "toast", ["%s 사용" % b.name])
 	game.inv_changed(self)
-	if equipment.get(drink_slot) == null and held == drink_slot:
+	if drink_slot != "" and equipment.get(drink_slot) == null and held == drink_slot:
 		set_held("")
 
 
@@ -886,7 +918,7 @@ func net_state() -> Dictionary:
 		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion, cd.util, cd.flask],
 		"chg": charges, "hold": [hold_q, hold_e],
 		"s": [stun, slow, root, stealth, frozen, parry, immune, dr, spin_t, channel_t, charge_t, cast],
-		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "chr": channel_ready, "dw": draw_t, "ld": active_crossbow() != null and active_crossbow().get("loaded", false), "rl": reload_t, "ct": counter_t, "dk": drink_t, "dkm": drink_max, "mf": mimic_form,
+		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "chr": channel_ready, "dw": draw_t, "ld": active_crossbow() != null and active_crossbow().get("loaded", false), "rl": reload_t, "ct": counter_t, "dk": drink_t, "dkm": drink_max, "dkk": drink_kind, "mf": mimic_form,
 		"k": [kills, pvp_kills], "ch": ch,
 	}
 
@@ -944,6 +976,7 @@ func apply_net_state(d: Dictionary) -> void:
 	drink_t = d.get("dk", 0.0)
 	counter_t = d.get("ct", 0.0)
 	drink_max = d.get("dkm", 1.0)
+	drink_kind = d.get("dkk", "")
 	mimic_form = d.get("mf", false)
 	var cbw = active_crossbow()
 	if cbw != null:

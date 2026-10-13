@@ -169,9 +169,9 @@ func _ready() -> void:
 	bag_view = GridView.new("bag", 34.0)
 	bag_view.on_op = _inv_op
 	bag_view.allow_sell = true
-	bag_view.hint = "드래그: 이동 (R 회전) · 우클릭: 장착 · Shift+클릭: 보관함으로 · Ctrl+클릭: 판매"
+	bag_view.hint = "드래그: 이동 · 우클릭: 장착 · Shift+클릭: 보관함으로 · Ctrl+클릭: 판매"
 	cv.add_child(bag_view)
-	cv.add_child(UI.label("드래그로 옮기기 · 드래그 중 R 회전 · 우클릭 장착/해제 · Shift+클릭 빠른 이동 · Ctrl+클릭 판매 · 판금/가죽/천 방어구는 모든 직업 착용 가능", 12, UI.MUTED))
+	cv.add_child(UI.label("드래그로 옮기기 · 우클릭 장착/해제 · Shift+클릭 빠른 이동 · Ctrl+클릭 판매 · 판금/가죽/천 방어구는 모든 직업 착용 가능", 12, UI.MUTED))
 	relief_btn = UI.button("🎁 구호 물자 받기 (기본 무기 + 물약)", _on_relief)
 	cv.add_child(relief_btn)
 	body.add_child(center)
@@ -560,7 +560,7 @@ func _render_stash() -> void:
 	var gv := GridView.new("stash", 32.0)
 	gv.on_op = _inv_op
 	gv.allow_sell = true
-	gv.hint = "드래그: 이동 (R 회전) · 우클릭: 장착 · Shift+클릭: 가방으로 · Ctrl+클릭: 판매"
+	gv.hint = "드래그: 이동 · 우클릭: 장착 · Shift+클릭: 가방으로 · Ctrl+클릭: 판매"
 	right_box.add_child(gv)
 	gv.set_items(s.stash, Inv.STASH)
 	var row := HBoxContainer.new()

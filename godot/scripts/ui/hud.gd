@@ -427,7 +427,7 @@ func _build_inventory() -> void:
 	inv_bag.on_op = _inv_op
 	inv_bag.drop_outside = true
 	v.add_child(inv_bag)
-	var hint := UI.label("탭: 장착/해제·사용 · 끌어서 이동 (끄는 중 다른 손가락으로 탭 = 회전) · 패널 밖에 놓기: 바닥에 버리기 · ✕ 닫기 (게임은 계속 진행)" if UI.touch else "드래그 이동 (R 회전) · 우클릭: 장착/해제 · Shift+클릭: 바닥에 버리기 · 1/2: 무기 세트 · 3/4/5: 소모품 꺼내기 → 좌클릭 사용 · G: 횃불 · Tab/Esc 닫기 (게임은 계속 진행)", 12, UI.MUTED)
+	var hint := UI.label("탭: 장착/해제·사용 · 끌어서 이동 · 패널 밖에 놓기: 바닥에 버리기 · ✕ 닫기 (게임은 계속 진행)" if UI.touch else "드래그 이동 · 우클릭: 장착/해제 · Shift+클릭: 바닥에 버리기 · 1/2: 무기 세트 · 3/4/5: 소모품 꺼내기 → 좌클릭 사용 · G: 횃불 · Tab/Esc 닫기 (게임은 계속 진행)", 12, UI.MUTED)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(380, 0)
 	v.add_child(hint)
@@ -546,7 +546,19 @@ func start(g) -> void:
 		var key_text: String = ({"rmb": "방어", "q": "1스킬", "e": "2스킬", "w1": "주무기", "w2": "보조", "c3": "소모1", "c4": "소모2", "c5": "소모3", "torch": "횃불"} if UI.touch else
 			{"rmb": "우클릭", "q": "Q", "e": "E", "w1": "1", "w2": "2", "c3": "3", "c4": "4", "c5": "5", "torch": "G 횃불"})[k]
 		v.add_child(_centered(UI.label(key_text, 11, UI.GOLD)))
-		var nm := _centered(UI.label("", 13 if not small else 15))
+		var icons := HBoxContainer.new()
+		icons.alignment = BoxContainer.ALIGNMENT_CENTER
+		icons.add_theme_constant_override("separation", 0)
+		icons.visible = small
+		for i in 2:
+			var tr := TextureRect.new()
+			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			tr.custom_minimum_size = Vector2(24, 26)
+			tr.visible = false
+			icons.add_child(tr)
+		v.add_child(icons)
+		var nm := _centered(UI.label("", 13 if not small else 12))
 		nm.clip_text = true
 		nm.custom_minimum_size = Vector2(48 if small else 76, 0)
 		v.add_child(nm)
@@ -555,7 +567,7 @@ func start(g) -> void:
 		box.add_child(v)
 		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		skills_row.add_child(box)
-		skill_boxes[k] = {"box": box, "style": sb, "name": nm, "cd": cd_bar, "sid": ""}
+		skill_boxes[k] = {"box": box, "style": sb, "name": nm, "cd": cd_bar, "sid": "", "icons": icons}
 	var rt: String = g.player.res_type()
 	mana_bar.get_parent().visible = rt != ""
 	if rt != "":
@@ -598,7 +610,9 @@ func open_container(c: Dictionary) -> void:
 	inv_open = true
 	inv_panel.visible = true
 	refresh_panels()
-	Sfx.play("chest")
+	# 상자는 뚜껑 여는 소리를 월드에서 이미 냄 (겹치지 않게). 시체·가방·열린 상자는 뒤지는 소리
+	if c.get("kind", "") != "chest":
+		Sfx.play("rummage")
 
 
 func close_container(send := true) -> void:
@@ -646,7 +660,7 @@ func render_inventory() -> void:
 	for sl in ["q", "e"]:
 		var sk: Dictionary = Data.SKILLS[Skills.skill_id(p, sl)]
 		inv_skills.add_child(UI.label("%s %s %s" % [sl.to_upper(), sk.get("icon", ""), sk.name], 13))
-	inv_bag.hint = "우클릭: 장착/사용 · Shift+클릭: 바닥에 버리기" + " · R: 회전"
+	inv_bag.hint = "우클릭: 장착/사용 · Shift+클릭: 바닥에 버리기"
 	inv_bag.set_items(p.bag, Inv.bag_size(p.cls))
 	var items := []
 	for s in Data.ALL_SLOTS:
@@ -882,10 +896,11 @@ func update_hud(dt: float) -> void:
 		var sbx: Dictionary = skill_boxes[k]
 		var n := int(k.right(1))
 		var w = p.equipment.get(k)
-		var txt = Data.base_of(w).icon if w != null else "✊"
 		var o = p.equipment.get(k + "o")
-		if o != null:
-			txt += Data.base_of(o).icon
+		var txt := ""
+		_set_icons(sbx, [w, o])
+		if w == null and o == null:
+			txt = "맨손"
 		if sbx.name.text != txt:
 			sbx.name.text = txt
 		var st2: StyleBoxFlat = sbx.style
@@ -897,22 +912,26 @@ func update_hud(dt: float) -> void:
 		var it = p.equipment.get(k)
 		var txt := "-"
 		var flask := false
+		_set_icons(sbx, [it])
 		if it != null:
-			txt = Data.base_of(it).icon + str(int(it.get("count", 1)))
+			txt = "×%d" % int(it.get("count", 1))
 			# 체력 물약을 뺀 플라스크는 20초 공유 재사용 대기
-			flask = Data.base_of(it).has("throw") or (Data.base_of(it).has("drink") and Data.base_of(it).drink != "heal")
+			flask = Data.base_of(it).has("throw") or (Data.base_of(it).has("drink") and not Data.base_of(it).drink in ["heal", "bandage"])
 		if k == "torch" and p.torch_t > 0.0:
-			txt = "🔥%d초" % ceili(p.torch_t)
+			if it == null:
+				_set_icons(sbx, [{"base": "torch"}])
+			txt = "%d초" % ceili(p.torch_t)
 		if sbx.name.text != txt:
 			sbx.name.text = txt
 		var c2: float = p.cd.flask if flask else (p.cd.potion if k != "torch" else 0.0)
 		(sbx.cd as ProgressBar).value = clampf(c2 / Skills.FLASK_CD if flask else c2, 0.0, 1.0)
 		if flask and c2 > 0.0 and it != null:
-			txt = "%s%d초" % [Data.base_of(it).icon, ceili(c2)]
+			txt = "%d초" % ceili(c2)
 			if sbx.name.text != txt:
 				sbx.name.text = txt
 		var usable: bool = it != null or (k == "torch" and p.torch_t > 0.0)
 		sbx.name.modulate = Color(0.5, 0.5, 0.5) if not usable or c2 > 0.0 else Color.WHITE
+		sbx.icons.modulate = sbx.name.modulate
 		var st3: StyleBoxFlat = sbx.style
 		st3.border_color = Color("#ffd060") if p.held == k else Color("#5a4a32")
 		st3.set_border_width_all(2 if p.held == k else 1)
@@ -966,3 +985,14 @@ func update_hud(dt: float) -> void:
 			SaveData.setting("quality", "low" if UI.touch else "mid"), " · 디버그 실행(에디터)" if OS.is_debug_build() else ""]
 	else:
 		fps_label.text = "%d FPS (F3: 자세히)" % Engine.get_frames_per_second()
+
+
+# 단축칸 컬러 그림 (무기 세트는 주/보조 2개). 그림이 없는 아이템은 이름 칸에 이모지
+func _set_icons(sbx: Dictionary, list: Array) -> void:
+	var trs: Array = sbx.icons.get_children()
+	for i in trs.size():
+		var it = list[i] if i < list.size() else null
+		var tex: Texture2D = UI.item_icon(it) if it != null else null
+		trs[i].texture = tex
+		trs[i].visible = tex != null
+		trs[i].custom_minimum_size = Vector2(24 if list.size() > 1 and list[1] != null else 44, 26)

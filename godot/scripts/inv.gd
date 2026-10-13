@@ -47,13 +47,12 @@ static func fits(list: Array, grid: Vector2i, it: Dictionary, x: int, y: int, r:
 	return true
 
 
-# 빈 자리 찾기 (위에서부터, 안 들어가면 회전해서). 없으면 {}
-static func find_space(list: Array, grid: Vector2i, it: Dictionary, prefer_r := false) -> Dictionary:
-	for r in ([prefer_r, not prefer_r] if Data.base_of(it).get("size", [1, 1])[0] != Data.base_of(it).get("size", [1, 1])[1] else [false]):
-		for y in grid.y:
-			for x in grid.x:
-				if fits(list, grid, it, x, y, r):
-					return {"x": x, "y": y, "r": r}
+# 빈 자리 찾기 (위에서부터). 아이템 회전은 쓰지 않음 (항상 원래 방향). 없으면 {}
+static func find_space(list: Array, grid: Vector2i, it: Dictionary, _prefer_r := false) -> Dictionary:
+	for y in grid.y:
+		for x in grid.x:
+			if fits(list, grid, it, x, y, false):
+				return {"x": x, "y": y, "r": false}
 	return {}
 
 
@@ -128,7 +127,8 @@ static func pack_container(items: Array) -> Dictionary:
 # ctx: {cls, equipment, stores: {이름: {list, grid}}}
 # src/dst: 저장소 이름("bag", "stash", "cont") 또는 "equip" (장비 칸은 slot 인자)
 # x < 0 이면 빈 자리 자동 탐색. 같은 종류의 겹치는 아이템 위에 놓으면 합쳐짐
-static func move(ctx: Dictionary, src: String, id: String, dst: String, x: int, y: int, r: bool, slot := "") -> Dictionary:
+static func move(ctx: Dictionary, src: String, id: String, dst: String, x: int, y: int, _r: bool, slot := "") -> Dictionary:
+	var r := false # 회전 없음
 	var it = _peek(ctx, src, id)
 	if it == null:
 		return {"ok": false}
@@ -369,8 +369,6 @@ static func _equip(ctx: Dictionary, src: String, it: Dictionary, slot: String) -
 		var oy := int(it.get("y", 0))
 		if fits(others, st.grid, prev, ox, oy, false):
 			pos = {"x": ox, "y": oy, "r": false}
-		elif fits(others, st.grid, prev, ox, oy, true):
-			pos = {"x": ox, "y": oy, "r": true}
 		else:
 			pos = find_space(others, st.grid, prev)
 		if pos.is_empty():

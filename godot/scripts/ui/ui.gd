@@ -16,6 +16,69 @@ static var touch := false # 안드로이드(터치) 조작 — 마우스 잡기 
 static var theme: Theme
 
 
+static var _icons := {}
+
+
+# 컬러 아이템 그림 (assets/icons/<기본 아이템 id>.png, tools/gen_icons.py 로 생성). 없으면 null
+static func item_icon(it: Dictionary) -> Texture2D:
+	var id: String = str(it.get("base", ""))
+	if _icons.has(id):
+		return _icons[id]
+	var path := "res://assets/icons/%s.png" % id
+	var tex: Texture2D = load(path) if id != "" and ResourceLoader.exists(path) else null
+	_icons[id] = tex
+	return tex
+
+
+# 아이템 칸 그림: 칸(rect)을 꽉 채우는 컬러 그림 + 수량 표시. 그림이 없으면 기존 이모지
+static func add_item_visual(parent: Control, it: Dictionary, r: Rect2, show_count := true) -> void:
+	var tex := item_icon(it)
+	if tex != null:
+		var tr := TextureRect.new()
+		tr.texture = tex
+		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tr.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		tr.position = r.position + Vector2(2, 2)
+		tr.size = r.size - Vector2(4, 4)
+		parent.add_child(tr)
+	else:
+		var l := Label.new()
+		l.text = Data.base_of(it).icon
+		l.add_theme_font_size_override("font_size", int(minf(r.size.x, r.size.y) * 0.55))
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		l.position = r.position
+		l.size = r.size
+		l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		parent.add_child(l)
+	if show_count and int(it.get("count", 1)) > 1:
+		var n := Label.new()
+		n.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		n.text = str(int(it.count))
+		n.add_theme_font_size_override("font_size", 12)
+		n.add_theme_color_override("font_outline_color", Color.BLACK)
+		n.add_theme_constant_override("outline_size", 5)
+		n.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		n.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+		n.position = r.position
+		n.size = r.size - Vector2(3, 0)
+		parent.add_child(n)
+
+
+# 아이템 칸 배경: 등급 색이 아래에서 위로 옅어지는 그라데이션 + 테두리 (가방·장비창 공용)
+static func draw_item_slot(ci: CanvasItem, r: Rect2, rarity: int, hover := false, faded := false) -> void:
+	var col: Color = Data.RARITIES[rarity].color
+	var a := 0.35 if faded else 1.0
+	var top := Color(col.r, col.g, col.b, (0.10 if not hover else 0.2) * a)
+	var bot := Color(col.r, col.g, col.b, (0.38 if not hover else 0.55) * a)
+	ci.draw_polygon(PackedVector2Array([r.position, Vector2(r.end.x, r.position.y), r.end, Vector2(r.position.x, r.end.y)]),
+		PackedColorArray([top, top, bot, bot]))
+	ci.draw_rect(r, Color(col.r * 0.6, col.g * 0.6, col.b * 0.6, 0.9 * a), false, 3.0)
+	ci.draw_rect(r.grow(-1), Color(col.r, col.g, col.b, 0.95 * a), false, 1.0)
+
+
 static func build_theme() -> Theme:
 	# 가변 폰트 기본값은 가장 얇은 굵기이므로 굵기(wght)를 지정
 	var kr: FontFile = load("res://fonts/NotoSansKR.ttf")
