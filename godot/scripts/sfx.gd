@@ -24,16 +24,30 @@ func _ready() -> void:
 	_load_files()
 
 
+# 효과음 파일: assets/sfx (합성해서 만든 기본 소리) → assets/sfx_recorded (직접 받은 녹음 소리, 같은 이름이면 이쪽이 우선)
+# 이름 규칙: <소리이름>.wav / <소리이름>_2.ogg ... (wav·ogg·mp3)
+const SFX_EXT := ["wav", "ogg", "mp3"]
+
+
 func _load_files() -> void:
-	var dir := "res://assets/sfx"
+	var base_set := _scan("res://assets/sfx")
+	var rec := _scan("res://assets/sfx_recorded")
+	for k in base_set:
+		variants[k] = base_set[k]
+	for k in rec:
+		variants[k] = rec[k]
+
+
+func _scan(dir: String) -> Dictionary:
+	var out := {}
 	var da := DirAccess.open(dir)
 	if da == null:
-		return
+		return out
 	var seen := {}
 	for f in da.get_files():
 		# 내보낸 게임에서는 원본 대신 .import/.remap 이름으로 보임 (에디터에서는 둘 다 보임)
 		var fn := f.trim_suffix(".import").trim_suffix(".remap")
-		if not fn.ends_with(".wav") or seen.has(fn):
+		if not (fn.get_extension().to_lower() in SFX_EXT) or seen.has(fn):
 			continue
 		seen[fn] = true
 		var st = load(dir + "/" + fn)
@@ -43,9 +57,10 @@ func _load_files() -> void:
 		var parts := base.rsplit("_", true, 1)
 		if parts.size() == 2 and parts[1].is_valid_int():
 			base = parts[0]
-		if not variants.has(base):
-			variants[base] = []
-		variants[base].append(st)
+		if not out.has(base):
+			out[base] = []
+		out[base].append(st)
+	return out
 
 
 # 필터된 노이즈 버스트: freq는 저역통과 계수(0~1)로 근사

@@ -2,22 +2,20 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bbw8xn48ebmbn"
-path.s3tc="res://.godot/imported/castle_brick_07_diff_1k.jpg-13daca14631eadc3ce9149a9f87f8a73.s3tc.ctex"
-path.etc2="res://.godot/imported/castle_brick_07_diff_1k.jpg-13daca14631eadc3ce9149a9f87f8a73.etc2.ctex"
+uid="uid://csrix8culvffu"
+path="res://.godot/imported/castle_wall_slates_rough_2k.jpg-6d51fcab41e5bc824d33f422adaae7c0.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc", "etc2_astc"],
-"vram_texture": true
+"vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/textures/wall/castle_brick_07_diff_1k.jpg"
-dest_files=["res://.godot/imported/castle_brick_07_diff_1k.jpg-13daca14631eadc3ce9149a9f87f8a73.s3tc.ctex", "res://.godot/imported/castle_brick_07_diff_1k.jpg-13daca14631eadc3ce9149a9f87f8a73.etc2.ctex"]
+source_file="res://assets/textures/wall/castle_wall_slates_rough_2k.jpg"
+dest_files=["res://.godot/imported/castle_wall_slates_rough_2k.jpg-6d51fcab41e5bc824d33f422adaae7c0.ctex"]
 
 [params]
 
-compress/mode=2
+compress/mode=0
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0
@@ -25,7 +23,7 @@ compress/rdo_quality_loss=0.0
 compress/hdr_compression=1
 compress/normal_map=0
 compress/channel_pack=0
-mipmaps/generate=true
+mipmaps/generate=false
 mipmaps/limit=-1
 roughness/mode=0
 roughness/src_normal=""
