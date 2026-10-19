@@ -209,6 +209,7 @@ func build_level(d: int) -> void:
 	Textures.relief = quality != "low"
 	Dungeon.lite = quality == "low"
 	dungeon.build(world, false)
+	dungeon.dyn_shadows = quality == "high"
 	_outdoor_env()
 	_reset_lists(d)
 	_spawn_fixtures()
@@ -380,6 +381,7 @@ func _make_view() -> void:
 	player_light.omni_attenuation = 1.3
 	player_light.shadow_enabled = shadows_enabled()
 	player_light.shadow_bias = 0.08
+	player_light.light_cull_mask = 0xFFFFF & ~Models.VIEW_LAYER
 	world.add_child(player_light)
 	view_model = Models.view_model(player.cls, Data.weapon_model(player.cls, player.equipment, player.wset), player.panther, Data.offhand_cat(player.equipment, player.wset))
 	camera.add_child(view_model)
@@ -410,11 +412,12 @@ func _outdoor_env() -> void:
 	e.fog_light_color = Color(0.06, 0.07, 0.1)
 	e.fog_sky_affect = 0.35
 	# 주변광을 낮춰 횃불·달빛이 닿지 않는 곳(건물 안)은 거의 어둡게
-	e.ambient_light_color = Color(0.2, 0.22, 0.3)
-	e.ambient_light_energy = 0.16
+	e.ambient_light_color = Color(0.2, 0.24, 0.34)
+	e.ambient_light_energy = 0.22
 	moon = DirectionalLight3D.new()
-	moon.light_color = Color(0.62, 0.7, 0.95)
-	moon.light_energy = 0.55
+	moon.light_color = Color(0.55, 0.65, 0.95)
+	moon.light_energy = 0.5
+	moon.light_volumetric_fog_energy = 0.6
 	# 실내 바닥은 달빛을 받지 않음 (그림자를 끈 낮음 품질에서도 실내가 어두움)
 	moon.light_cull_mask = 0xFFFFF & ~Dungeon.INDOOR_LAYER
 	moon.rotation = Vector3(deg_to_rad(-38.0), deg_to_rad(35.0), 0.0)
@@ -426,29 +429,73 @@ func _outdoor_env() -> void:
 
 
 func _make_env(deep: bool) -> void:
-	# 환경: 어두운 배경, 안개, 글로우, 톤매핑
+	# 환경: 거의 칠흑 같은 어둠 + 횃불 중심 조명, 공기 중 먼지(체적 안개), 필름 톤
 	env = WorldEnvironment.new()
 	var e := Environment.new()
 	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.01, 0.005, 0.004) if deep else Color(0.008, 0.008, 0.01)
+	e.background_color = Color(0.006, 0.004, 0.003) if deep else Color(0.004, 0.004, 0.006)
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.32, 0.18, 0.16) if deep else Color(0.24, 0.22, 0.26)
-	e.ambient_light_energy = 0.42
+	e.ambient_light_color = Color(0.3, 0.2, 0.18) if deep else Color(0.22, 0.22, 0.28)
+	e.ambient_light_energy = 0.3
 	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	e.tonemap_exposure = 1.1
+	e.tonemap_exposure = 1.15
+	e.tonemap_white = 5.0
 	e.fog_enabled = true
-	e.fog_light_color = Color(0.09, 0.03, 0.02) if deep else Color(0.04, 0.035, 0.03)
+	e.fog_light_color = Color(0.07, 0.03, 0.02) if deep else Color(0.03, 0.028, 0.026)
 	e.fog_density = base_fog
 	e.fog_sky_affect = 0.0
 	e.glow_enabled = quality != "low"
-	e.glow_intensity = 0.7
-	e.glow_bloom = 0.05
-	e.glow_hdr_threshold = 1.0
-	e.ssao_enabled = quality == "high"
-	e.ssao_radius = 1.2
-	e.ssao_intensity = 1.5
+	e.glow_intensity = 0.8
+	e.glow_strength = 1.1
+	e.glow_bloom = 0.08
+	e.glow_hdr_threshold = 0.9
+	e.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
+	e.ssao_enabled = quality != "low"
+	e.ssao_radius = 1.4
+	e.ssao_intensity = 2.2
+	e.ssao_power = 1.8
+	e.ssil_enabled = quality == "high"
+	e.ssil_radius = 4.0
+	e.ssil_intensity = 0.8
+	# 체적 안개: 횃불 빛이 공기 중 먼지에 번져 보임 (PC)
+	e.volumetric_fog_enabled = quality != "low"
+	e.volumetric_fog_density = 0.028
+	e.volumetric_fog_albedo = Color(0.75, 0.7, 0.65)
+	e.volumetric_fog_anisotropy = 0.55
+	e.volumetric_fog_length = 48.0
+	e.volumetric_fog_detail_spread = 2.0
+	e.volumetric_fog_gi_inject = 0.0
+	e.volumetric_fog_ambient_inject = 0.15
+	e.volumetric_fog_sky_affect = 0.0
+	e.volumetric_fog_temporal_reprojection_enabled = true
+	# 색보정: 채도를 낮추고 대비를 높여 무거운 중세 분위기
+	e.adjustment_enabled = true
+	e.adjustment_brightness = 0.97
+	e.adjustment_contrast = 1.12
+	e.adjustment_saturation = 0.78
 	env.environment = e
 	world.add_child(env)
+	_make_film()
+
+
+# 화면 후처리 (비네트·그레인·색감) — HUD 아래, 3D 화면 위
+var film: CanvasLayer
+
+
+func _make_film() -> void:
+	if film != null and is_instance_valid(film):
+		film.queue_free()
+	film = CanvasLayer.new()
+	film.layer = -1
+	var rect := ColorRect.new()
+	rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var m := ShaderMaterial.new()
+	m.shader = load("res://shaders/film.gdshader")
+	rect.material = m
+	film.add_child(rect)
+	film.visible = quality != "low"
+	add_child(film)
 
 
 # ------------------------------------------------------------------ 지도 고정 물체
@@ -2793,7 +2840,11 @@ func _update_view(dt: float) -> void:
 	if player == null or camera == null or hud == null:
 		return
 	player.update_camera(camera, view_model, shield_bubble, dt)
-	player_light.position = camera.position + Vector3(0, 0.6, 0) - Actor.fwd(player.yaw) * 0.5
+	# 횃불을 들면 빛이 오른손 횃불 불꽃 위치에서 나옴 (그림자가 움직이는 방향이 자연스러움)
+	if player.held == "torch":
+		player_light.position = camera.global_transform * Vector3(0.3, 0.12, -0.7)
+	else:
+		player_light.position = camera.position + Vector3(0, 0.6, 0) - Actor.fwd(player.yaw) * 0.5
 	# 번개 지팡이: 번개가 떨어질 자리를 조준점 바닥에 동그랗게 표시
 	var show_ring: bool = player.alive and player.held == "" and Skills.staff_mode(player) == "lightning"
 	if show_ring and (aim_ring == null or not is_instance_valid(aim_ring)):
@@ -2816,8 +2867,13 @@ func _update_view(dt: float) -> void:
 	_update_throw_arc()
 		# 횃불을 들면 훨씬 밝고 넓게
 	var lit: bool = player.held == "torch"
-	player_light.omni_range = 26.0 if lit else 16.0
-	player_light.light_energy = (2.6 if lit else 1.3) + sin(time * 13.0) * 0.08 + sin(time * 7.3) * 0.1
+	# 횃불 없이는 주변만 겨우 보임 (던전본처럼 횃불이 중요), 횃불은 불규칙하게 일렁임
+	var fl := sin(time * 13.0) * 0.5 + sin(time * 7.3 + 1.3) * 0.35 + sin(time * 23.0) * 0.15
+	player_light.omni_range = 20.0 if lit else 11.0
+	player_light.light_energy = (1.9 + fl * 0.2) if lit else 1.0
+	player_light.light_volumetric_fog_energy = 1.4 if lit else 0.2
+	player_light.light_color = Color(1.0, 0.62, 0.32) if lit else Color(0.75, 0.72, 0.7)
+	player_light.shadow_enabled = lit and quality != "low"
 	dungeon.animate_torches(time, camera.global_position)
 	update_explored()
 	hud.update_hud(dt)
@@ -3180,6 +3236,7 @@ func start_client(info: Dictionary, hud_node) -> void:
 	Textures.relief = quality != "low"
 	Dungeon.lite = quality == "low"
 	dungeon.build(world, false)
+	dungeon.dyn_shadows = quality == "high"
 	_outdoor_env()
 	_reset_lists(depth)
 	_spawn_fixtures()

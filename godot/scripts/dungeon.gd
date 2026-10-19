@@ -1101,8 +1101,16 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		l.distance_fade_enabled = true
 		l.distance_fade_begin = 35.0
 		l.distance_fade_length = 10.0
+		l.light_volumetric_fog_energy = 1.6
 		root.add_child(l)
 		t["light"] = l
+		if not lite and DisplayServer.get_name() != "headless":
+			# 벽 횃불 불꽃 입자 (멀리 있으면 그리지 않음)
+			var fp := Models.fire_particles(1.15)
+			fp.position = t.pos + Vector3(-n.x * 0.12, 0.05, -n.z * 0.12)
+			for gp in fp.get_children():
+				(gp as GPUParticles3D).visibility_range_end = 40.0
+			root.add_child(fp)
 	if torches.size():
 		root.add_child(_multimesh(torch_mesh if torch_mesh != null else sconce, sx))
 		var fmi := _multimesh(flame, fx)
@@ -1503,14 +1511,30 @@ func _build_outdoor(tree_x: Array, bush_x: Array, wall_tex: Array) -> void:
 		root.add_child(al)
 
 
+var dyn_shadows := false # 고품질: 가까운 횃불 몇 개만 그림자 (모든 횃불에 그림자를 켜면 너무 무거움)
+var _shadow_tick := 0
+const SHADOW_TORCHES := 6
+
+
 func animate_torches(time: float, cam_pos: Vector3) -> void:
+	_shadow_tick += 1
+	if dyn_shadows and _shadow_tick % 20 == 0:
+		var near := []
+		for t in torches:
+			if t.get("light") != null:
+				near.append([absf(t.pos.x - cam_pos.x) + absf(t.pos.z - cam_pos.z), t.light])
+		near.sort_custom(func(a, b): return a[0] < b[0])
+		for k in near.size():
+			near[k][1].shadow_enabled = k < SHADOW_TORCHES and near[k][0] < 30.0
 	for i in torches.size():
 		var t: Dictionary = torches[i]
 		var fl := sin(time * 11.0 + i * 3.7) * 0.5 + sin(time * 5.3 + i) * 0.4
 		var l = t.light
 		if absf(t.pos.x - cam_pos.x) + absf(t.pos.z - cam_pos.z) < 40.0:
 			if l != null:
-				l.light_energy = 2.2 + fl * 0.35
+				# 불규칙하게 일렁이는 횃불 (빛 세기와 위치가 함께 흔들림)
+				var fl2 := sin(time * 17.0 + i * 1.3) * 0.3
+				l.light_energy = 2.0 + fl * 0.4 + fl2 * 0.2
 			if flame_mm:
 				var n: Vector3 = t.n
 				var b := Basis().scaled(Vector3(1.0 + fl * 0.1, 1.0 + fl * 0.25, 1.0 + fl * 0.1))

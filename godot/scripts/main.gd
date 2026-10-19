@@ -112,6 +112,8 @@ func _ready() -> void:
 		_autotest.call_deferred()
 	elif args.has("--swingshots"):
 		_swingshots.call_deferred(args[args.find("--swingshots") + 1])
+	elif args.has("--moodshots"):
+		_moodshots.call_deferred(args[args.find("--moodshots") + 1])
 	elif args.has("--fpshots"):
 		_fpshots.call_deferred(args[args.find("--fpshots") + 1])
 	elif args.has("--screenshots"):
@@ -162,7 +164,7 @@ func apply_fps(mode: String) -> void:
 
 # 휴대폰은 기본 낮음 (요철·달빛 그림자 끔, 3D 해상도 67%)
 static func default_quality() -> String:
-	return "low" if UI.touch else "mid"
+	return "low" if UI.touch else "high"
 
 
 func apply_quality(q: String) -> void:
@@ -188,7 +190,13 @@ func apply_quality(q: String) -> void:
 			game.moon.shadow_enabled = q != "low"
 		if game.env:
 			game.env.environment.glow_enabled = q != "low"
-			game.env.environment.ssao_enabled = q == "high"
+			game.env.environment.ssao_enabled = q != "low"
+			game.env.environment.ssil_enabled = q == "high"
+			game.env.environment.volumetric_fog_enabled = q != "low"
+		if game.film != null and is_instance_valid(game.film):
+			game.film.visible = q != "low"
+		if game.dungeon != null:
+			game.dungeon.dyn_shadows = q == "high"
 
 
 func open_lobby() -> void:
@@ -839,6 +847,34 @@ func _swingshots(dir: String) -> void:
 
 
 # 1인칭 손/방어/반격 빛/투척 포물선/횃불 화면 확인용
+# 분위기 확인용 스크린샷 (고품질): 실내 던전·성 외곽, 네 방향, 횃불을 든 모습
+func _moodshots(dir: String) -> void:
+	await get_tree().create_timer(0.5).timeout
+	SaveData.data.settings["quality"] = "high"
+	apply_quality("high")
+	for map in ["sinners_end_1", "clouseau_castle"]:
+		_test_char("fighter")
+		start_raid(map)
+		game.force_act = true
+		await get_tree().create_timer(1.5).timeout
+		var g := game
+		var p := g.player
+		p.invuln = 999.0
+		for a in g.actors:
+			if a.kind == "monster" or a.kind == "bot":
+				a.stun = 999.0
+		p.pitch = -0.05
+		for i in 4:
+			p.yaw = i * TAU / 4.0
+			await get_tree().create_timer(0.4).timeout
+			await _shot(dir, "mood_%s_%d" % [map, i])
+		p.toggle_torch()
+		await get_tree().create_timer(0.8).timeout
+		await _shot(dir, "mood_%s_torch" % map)
+		await get_tree().create_timer(0.3).timeout
+	get_tree().quit()
+
+
 func _fpshots(dir: String) -> void:
 	await get_tree().create_timer(0.5).timeout
 	_test_char("fighter")

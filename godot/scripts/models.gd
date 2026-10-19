@@ -560,29 +560,144 @@ static func held_item_view(base_id: String) -> Node3D:
 	return root
 
 
-# 1인칭: 불붙은 횃불
+# 불꽃 입자 (횃불·화로): 아래는 하얀 노랑, 위로 갈수록 주황→검붉게 사라짐 + 작은 불티
+static var _fire_mat: StandardMaterial3D
+static var _spark_mat: StandardMaterial3D
+
+
+static func _fire_tex(soft: float) -> GradientTexture2D:
+	var g := Gradient.new()
+	g.set_color(0, Color(1, 1, 1, 1))
+	g.set_color(1, Color(1, 1, 1, 0))
+	g.add_point(soft, Color(1, 1, 1, 0.55))
+	var t := GradientTexture2D.new()
+	t.gradient = g
+	t.fill = GradientTexture2D.FILL_RADIAL
+	t.fill_from = Vector2(0.5, 0.5)
+	t.fill_to = Vector2(1.0, 0.5)
+	t.width = 64
+	t.height = 64
+	return t
+
+
+static func fire_particles(size := 1.0, sparks := true) -> Node3D:
+	var root := Node3D.new()
+	if _fire_mat == null:
+		_fire_mat = StandardMaterial3D.new()
+		_fire_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_fire_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_fire_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		_fire_mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+		_fire_mat.vertex_color_use_as_albedo = true
+		_fire_mat.albedo_texture = _fire_tex(0.35)
+		_fire_mat.no_depth_test = false
+		_spark_mat = _fire_mat.duplicate()
+		_spark_mat.albedo_texture = _fire_tex(0.15)
+	var ramp := Gradient.new()
+	ramp.set_color(0, Color(1.0, 0.95, 0.7, 0.0))
+	ramp.add_point(0.12, Color(1.0, 0.7, 0.3, 0.42))
+	ramp.add_point(0.45, Color(0.95, 0.35, 0.08, 0.3))
+	ramp.set_color(ramp.get_point_count() - 1, Color(0.4, 0.05, 0.0, 0.0))
+	var rt := GradientTexture1D.new()
+	rt.gradient = ramp
+	var curve := Curve.new()
+	curve.add_point(Vector2(0.0, 0.6))
+	curve.add_point(Vector2(0.3, 1.0))
+	curve.add_point(Vector2(1.0, 0.15))
+	var ct := CurveTexture.new()
+	ct.curve = curve
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = 0.025 * size
+	pm.direction = Vector3(0, 1, 0)
+	pm.spread = 12.0
+	pm.initial_velocity_min = 0.35 * size
+	pm.initial_velocity_max = 0.7 * size
+	pm.gravity = Vector3(0, 0.9 * size, 0)
+	pm.damping_min = 0.6
+	pm.damping_max = 1.2
+	pm.scale_min = 0.8
+	pm.scale_max = 1.3
+	pm.scale_curve = ct
+	pm.color_ramp = rt
+	pm.turbulence_enabled = true
+	pm.turbulence_noise_strength = 0.4
+	pm.turbulence_noise_scale = 3.0
+	var fire := GPUParticles3D.new()
+	fire.amount = 20
+	fire.lifetime = 0.55
+	fire.process_material = pm
+	fire.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var q := QuadMesh.new()
+	q.size = Vector2(0.075, 0.15) * size
+	q.material = _fire_mat
+	fire.draw_pass_1 = q
+	fire.visibility_aabb = AABB(Vector3(-0.5, -0.2, -0.5) * size, Vector3(1, 1.4, 1) * size)
+	root.add_child(fire)
+	if sparks:
+		var sp := ParticleProcessMaterial.new()
+		sp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+		sp.emission_sphere_radius = 0.04 * size
+		sp.direction = Vector3(0, 1, 0)
+		sp.spread = 25.0
+		sp.initial_velocity_min = 0.5 * size
+		sp.initial_velocity_max = 1.3 * size
+		sp.gravity = Vector3(0, 0.3, 0)
+		sp.turbulence_enabled = true
+		sp.turbulence_noise_strength = 1.2
+		sp.color = Color(1.0, 0.6, 0.25, 1.0)
+		sp.scale_min = 0.6
+		sp.scale_max = 1.0
+		var sparks_n := GPUParticles3D.new()
+		sparks_n.amount = 6
+		sparks_n.lifetime = 1.1
+		sparks_n.process_material = sp
+		sparks_n.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var sq := QuadMesh.new()
+		sq.size = Vector2(0.008, 0.008) * size
+		sq.material = _spark_mat
+		sparks_n.draw_pass_1 = sq
+		sparks_n.visibility_aabb = AABB(Vector3(-1, -0.2, -1) * size, Vector3(2, 2.5, 2) * size)
+		root.add_child(sparks_n)
+	return root
+
+
+# 1인칭: 불붙은 횃불 (천을 감은 머리 + 입자 불꽃)
 static func torch_view() -> Node3D:
 	var root := Node3D.new()
 	var r := Node3D.new()
 	root.add_child(r)
-	var stick := cyl(0.025, 0.035, 0.5, mat(Color(0.35, 0.22, 0.1)), 6)
+	var stick := cyl(0.022, 0.03, 0.5, mat(Color(0.16, 0.1, 0.055)), 8)
 	stick.rotation.x = -0.35
 	stick.position = Vector3(0, 0.1, -0.05)
 	r.add_child(stick)
-	var flame := cyl(0.0, 0.07, 0.18, glow_mat(Color(1.0, 0.6, 0.2), 4.0), 6)
-	flame.position = Vector3(0, 0.38, -0.15)
+	var head := cyl(0.04, 0.034, 0.12, mat(Color(0.07, 0.05, 0.035)), 8)
+	head.rotation.x = -0.35
+	head.position = Vector3(0, 0.33, -0.13)
+	r.add_child(head)
+	var ember := cyl(0.038, 0.04, 0.03, glow_mat(Color(1.0, 0.35, 0.08), 2.5), 8)
+	ember.rotation.x = -0.35
+	ember.position = Vector3(0, 0.39, -0.15)
+	r.add_child(ember)
+	var flame := fire_particles(1.0)
+	flame.position = Vector3(0, 0.4, -0.16)
 	r.add_child(flame)
 	var hand := box(Vector3(0.09, 0.09, 0.26), mat(Color(0.85, 0.66, 0.51)))
 	hand.position = Vector3(0.0, -0.06, 0.16)
 	r.add_child(hand)
 	for n in root.find_children("*", "GeometryInstance3D", true, false):
 		(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		# 손에 든 횃불 자신의 불빛에는 비치지 않게 (바로 옆이라 하얗게 타 버림)
+		(n as VisualInstance3D).layers = VIEW_LAYER
 	var l := Node3D.new()
 	root.add_child(l)
 	root.set_meta("R", r)
 	root.set_meta("L", l)
 	root.set_meta("R0", Vector3(0.34, -0.3, -0.6))
 	return root
+
+
+const VIEW_LAYER := 1 << 19
 
 
 # 던진 횃불 / 바닥에 떨어진 횃불 (lying=true: 누운 채로 주변을 밝히는 불빛)
@@ -595,8 +710,8 @@ static func ground_torch(lying: bool) -> Node3D:
 	var head := cyl(0.045, 0.04, 0.1, mat(Color(0.18, 0.12, 0.08)), 6)
 	head.position.y = 0.25
 	t.add_child(head)
-	var flame := cyl(0.0, 0.07, 0.2, glow_mat(Color(1.0, 0.6, 0.2), 4.0), 6)
-	flame.position.y = 0.38
+	var flame := fire_particles(0.9)
+	flame.position.y = 0.33
 	t.add_child(flame)
 	var l := OmniLight3D.new()
 	l.light_color = Color(1.0, 0.62, 0.3)
