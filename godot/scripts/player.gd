@@ -34,6 +34,18 @@ var sprinting := false
 var crouch_k := 0.0 # 앉는 동작 (0 서 있음 → 1 앉음, 카메라가 부드럽게 내려감)
 var moving := false
 var shake := 0.0
+# 무게감: 이동 관성, 타격 순간 멈춤, 무기 흔들림(시선을 늦게 따라옴), 피격 움찔
+var vel_xz := Vector3.ZERO
+var hitstop := 0.0
+var sway := Vector2.ZERO
+var _last_yaw := 0.0
+var _last_pitch := 0.0
+var flinch := 0.0
+var _last_hp := -1.0
+var land_dip := 0.0
+var _was_air := false
+const ACCEL := 26.0 # m/s² (약 0.15~0.2초에 최고 속도)
+const DECEL := 34.0
 var zoom := false
 # 멀티플레이
 var peer_id := 0 # 0: 오프라인/호스트 본인, 그 외: 접속한 친구의 피어 ID
@@ -407,7 +419,10 @@ func update_client(dt: float) -> void:
 	if cast > 0.0:
 		cast -= dt
 	if swing != null:
-		swing.t += dt
+		if hitstop > 0.0:
+			hitstop -= dt
+		else:
+			swing.t += dt
 		if swing.t >= swing.prof.dur:
 			swing = null
 	swinging = swing != null or spin_t > 0.0
@@ -470,9 +485,14 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 		speed *= 0.8
 
 	var dashing := forced_t > 0.0 if game.net == "client" else Skills.tick_dash(self, dt)
+	# 관성: 바로 최고 속도가 되지 않고, 멈출 때도 조금 미끄러짐
+	var target := wish * speed
+	vel_xz = vel_xz.move_toward(target, (ACCEL if target.length() >= vel_xz.length() else DECEL) * dt)
+	if dashing:
+		vel_xz = Vector3.ZERO
 	if not dashing:
-		move(wish.x * speed, wish.z * speed, dt)
-	last_vel = wish * speed
+		move(vel_xz.x, vel_xz.z, dt)
+	last_vel = vel_xz
 	moving = wl > 0.0 and dash == null and root <= 0.0 and not locked
 	hear_r = (1.5 if crouch else (2.5 if quiet else 6.0)) if moving else 2.0
 	if moving:
@@ -663,10 +683,17 @@ func _combat(dt: float, act: bool) -> void:
 
 	swinging = swing != null or spin_t > 0.0
 	if swing != null:
-		swing.t += dt
+		# 타격 순간 멈춤 (맞힌 순간 무기가 아주 잠깐 걸림)
+		if hitstop > 0.0:
+			hitstop -= dt
+		else:
+			swing.t += dt
 		if not swing.done and swing.t >= swing.prof.hit_at:
 			swing.done = true
-			Skills.melee_strike(self, swing.prof)
+			if Skills.melee_strike(self, swing.prof) > 0.0:
+				var heavy: bool = swing.prof.get("power", false) or swing.prof.get("backstab", false)
+				hitstop = 0.11 if heavy else 0.06
+				shake = maxf(shake, 0.5 if heavy else 0.25)
 		if swing.t >= swing.prof.dur:
 			swing = null
 
@@ -911,9 +938,23 @@ func update_camera(cam: Camera3D, vm: Node3D, bubble: MeshInstance3D, dt: float)
 		cam.rotation.z = minf(0.8, cam.rotation.z + dt)
 		cam.rotation.x = pitch
 		return
-	var b := sin(bob) * 0.05 if vy == 0.0 and moving else 0.0
+	# 걸음 흔들림: 속도에 비례해 위아래 + 좌우로 살짝 기울어짐
+	var spd_k := clampf(Vector2(last_vel.x, last_vel.z).length() / 4.5, 0.0, 1.3)
+	var b := sin(bob) * 0.045 * spd_k if vy == 0.0 else 0.0
+	var roll := sin(bob * 0.5) * 0.008 * spd_k if vy == 0.0 else 0.0
+	# 착지하면 살짝 주저앉음
+	var air := vy != 0.0
+	if _was_air and not air:
+		land_dip = 0.09
+	_was_air = air
+	land_dip = move_toward(land_dip, 0.0, dt * 0.5)
+	# 맞으면 움찔 (체력이 줄어든 만큼 시선이 튐) — 서버가 보내는 체력으로도 동작
+	if _last_hp >= 0.0 and hp < _last_hp - 0.5:
+		flinch = minf(0.09, flinch + (_last_hp - hp) / max_hp * 0.5 + 0.02)
+	_last_hp = hp
+	flinch = move_toward(flinch, 0.0, dt * 0.35)
 	var eye := eye_height()
-	cam.position = Vector3(pos.x, pos.y + eye + b, pos.z)
+	cam.position = Vector3(pos.x, pos.y + eye + b - land_dip * 0.6, pos.z)
 	var sx := 0.0
 	var sy := 0.0
 	if shake > 0.0:
@@ -921,7 +962,12 @@ func update_camera(cam: Camera3D, vm: Node3D, bubble: MeshInstance3D, dt: float)
 		sx = randf_range(-0.5, 0.5) * shake * 0.15
 		sy = randf_range(-0.5, 0.5) * shake * 0.15
 	var spin_roll := sin(spin_t * 18.0) * 0.03 if spin_t > 0.0 else 0.0
-	cam.rotation = Vector3(pitch + sx, yaw + sy, spin_roll)
+	# 휘두르는 방향으로 화면이 아주 살짝 따라 돔 (몸통을 쓰는 느낌)
+	var swing_roll := 0.0
+	if swing != null and swing.prof.has("dur"):
+		var sk: float = clampf(swing.t / swing.prof.dur, 0.0, 1.0)
+		swing_roll = sin(sk * PI) * 0.025 * signf(swing.side) * (1.6 if swing.prof.get("power", false) else 1.0)
+	cam.rotation = Vector3(pitch + sx + flinch, yaw + sy, spin_roll + roll + swing_roll)
 	var target_fov := 82.0 if (sprinting and moving) or panther else 75.0
 	cam.fov = lerpf(cam.fov, target_fov, minf(1.0, dt * 10.0))
 
@@ -943,6 +989,17 @@ func update_camera(cam: Camera3D, vm: Node3D, bubble: MeshInstance3D, dt: float)
 		for n in vm.find_children("*", "GeometryInstance3D", true, false):
 			(n as GeometryInstance3D).transparency = tr
 	ViewAnim.animate(self, vm, b, dt)
+	# 무기 흔들림: 시선을 돌리면 무기가 살짝 늦게 따라옴 (무게감), 걸을 때 좌우로 흔들림
+	var dyaw := angle_difference(_last_yaw, yaw)
+	var dpitch := pitch - _last_pitch
+	_last_yaw = yaw
+	_last_pitch = pitch
+	if dt > 0.0:
+		sway = sway.lerp(Vector2(clampf(dyaw / dt * 0.012, -0.08, 0.08), clampf(dpitch / dt * 0.012, -0.06, 0.06)), minf(1.0, dt * 8.0))
+	vm.rotation = Vector3(-sway.y - flinch * 0.6, sway.x, sway.x * 0.6)
+	vm.position += Vector3(-sway.x * 0.25, -land_dip * 0.4 + sway.y * 0.15, 0.0)
+	if hitstop > 0.0:
+		vm.position += Vector3(randf_range(-1, 1), randf_range(-1, 1), 0) * 0.006
 	if game.dungeon.has_outdoor:
 		Dungeon.set_indoor(vm, game.dungeon.indoor_at(pos))
 

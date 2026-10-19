@@ -787,6 +787,9 @@ func hit_marker(kill: bool, crit := false) -> void:
 	hitmarker.pivot_offset = hitmarker.size * 0.5
 	var tw := hitmarker.create_tween()
 	tw.tween_property(hitmarker, "modulate:a", 0.0, 0.3 if crit else 0.22)
+	# 온라인(클라이언트): 서버가 맞았다고 알려 주면 내 화면의 휘두르기도 잠깐 멈춤
+	if game != null and game.net == "client" and game.player != null and game.player.swing != null:
+		game.player.hitstop = 0.09 if crit else 0.06
 
 
 func shake(v: float) -> void:
