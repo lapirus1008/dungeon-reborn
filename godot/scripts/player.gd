@@ -56,9 +56,11 @@ var psi_lmb := true
 var counter_rmb := true
 var last_guard := -10.0
 var psi_rmb := true
-var combo_i := 0 # 로그 단검 콤보 단계
+var combo_i := 0 # 로그 단검: 다음 찌르기 손 (0 = 오른손, 1 = 왼손)
+var heavy_t := -1.0 # 근접 좌클릭을 누르고 있는 시간 (강공격 준비, -1 = 안 누름)
+var staff_charging := false # R을 누르고 있어 지팡이 에너지 충전 중
 var combo_t := 0.0
-var mana_item = null # 마나가 장전된 지금 무기
+var mana_item = null # 지팡이 에너지가 들어 있는 지금 무기 (에너지는 무기마다 따로 저장)
 var reload_t := 0.0 # 석궁 재장전 남은 시간
 var reload_key := false
 var drink_t := 0.0 # 마시는 중 (끝나면 효과)
@@ -92,11 +94,11 @@ func _init(g, p: Vector3, c: String, eq: Dictionary, b: Array, pname := "당신"
 	stats = st
 	res = st.res_max if st.res == "mana" else st.res_max * 0.4
 	if st.res == "mana":
-		# 마나는 지팡이/오브에 장전된 것: 던전에 가지고 들어간 무기는 가득 찬 상태
+		# 지팡이 에너지는 지팡이/오브에 들어 있음: 던전에 가지고 들어간 무기는 가득 찬 상태
 		for s in ["w1", "w1o", "w2", "w2o"]:
 			var w = equipment.get(s)
 			if w != null and Data.base_of(w).get("cat", "") in ["staff", "orb"]:
-				w["mana"] = st.res_max
+				w["mana"] = float(Data.base_of(w).get("energy", Skills.STAFF_ENERGY.get(Data.base_of(w).cat, 100.0)))
 		mana_item = _caster_weapon()
 	# 던전에 가지고 들어간 석궁은 모두 장전된 상태
 	for s2 in ["w1", "w2"]:
@@ -125,7 +127,8 @@ func recalc() -> void:
 	max_hp = st.max_hp
 	hp = clampf(ratio * max_hp, 1.0, max_hp)
 	armor = st.armor
-	res = minf(res, st.res_max)
+	if st.res != "mana":
+		res = minf(res, st.res_max) # 지팡이 에너지는 _sync_weapon_mana에서
 	_sync_weapon_mana()
 	block_mul = 1.0 - st.block_pct / 100.0 if st.block_pct > 0.0 else 0.4
 	game.on_weapon_changed(self)
@@ -195,7 +198,25 @@ func _tick_reload(dt: float) -> void:
 		game.inv_changed(self)
 
 
-# 지금 손에 든 세트의 마나 무기 (지팡이 또는 오브)
+# 지팡이 에너지는 직업 자원이 아니라 지팡이/오브에 들어 있음: 그런 무기를 들었을 때만 보이고, 최대치는 무기 종류별
+func res_type() -> String:
+	var t: String = stats.get("res", "")
+	if t == "mana":
+		return "mana" if _caster_weapon() != null else ""
+	return t
+
+
+func res_max() -> float:
+	if stats.get("res", "") == "mana":
+		var w = _caster_weapon()
+		if w == null:
+			return 0.0
+		var b: Dictionary = Data.base_of(w)
+		return float(b.get("energy", Skills.STAFF_ENERGY.get(b.get("cat", ""), 100.0)))
+	return stats.get("res_max", 0.0)
+
+
+# 지금 손에 든 세트의 에너지 무기 (지팡이 또는 오브)
 func _caster_weapon():
 	for s in ["w%d" % wset, "w%do" % wset]:
 		var w = equipment.get(s)
@@ -204,7 +225,7 @@ func _caster_weapon():
 	return null
 
 
-# 무기를 바꾸면 그 무기에 남은 마나로 (던전 안에서 새로 낀 무기는 0부터 재생)
+# 무기를 바꾸면 그 무기에 남은 에너지로 (던전 안에서 새로 낀 무기는 0부터 재생)
 func _sync_weapon_mana() -> void:
 	if res_type() != "mana":
 		return
@@ -333,9 +354,16 @@ func update(dt: float) -> void:
 			toggle_torch()
 		# R: 누른 순간 재장전 (원격 입력도 한 프레임 눌림으로 들어옴)
 		var r_now := inp.pressed("reload")
-		if r_now and not reload_key:
+		if r_now and not reload_key and res_type() != "mana":
 			start_reload()
 		reload_key = r_now
+		# 지팡이·오브: R을 누르고 있으면 에너지 충전 (느리게 걸음, 공격 불가)
+		var was := staff_charging
+		staff_charging = r_now and res_type() == "mana" and held == "" and swing == null and not beam_on and res < res_max()
+		if staff_charging and not was:
+			game.sfx("magic", pos, 0.1)
+	else:
+		staff_charging = false
 	if held == "torch":
 		torch_t -= dt
 		if torch_t <= 0.0:
@@ -424,6 +452,10 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 		speed *= 1.7
 	if stealth > 0.0:
 		speed *= 1.1
+	if staff_charging:
+		speed *= 0.5
+	if heavy_t >= Skills.HEAVY_MIN:
+		speed *= 0.7 # 강공격 준비 중
 	if drink_t > 0.0:
 		speed *= 0.45 if drink_kind == "bandage" else 0.8 # 붕대 감는 동안은 느리게, 물약은 아주 약간만
 	if mimic_form:
@@ -549,8 +581,8 @@ func _combat(dt: float, act: bool) -> void:
 	# 지팡이 (화염: 누르는 동안 레이저 / 번개: 조준점 번개)
 	elif Skills.staff_mode(self) != "":
 		if Skills.staff_mode(self) == "fire":
-			Skills.tick_beam(self, dt, lmb_held and draw_t <= 0.0, aim())
-		elif lmb_edge and draw_t <= 0.0:
+			Skills.tick_beam(self, dt, lmb_held and draw_t <= 0.0 and not staff_charging, aim())
+		elif lmb_edge and draw_t <= 0.0 and not staff_charging:
 			Skills.lightning_strike(self, aim())
 	# 은신 집중 중: 우클릭 = 취소, 준비 완료 후 좌클릭 = 은신 (좌클릭 안 하면 준비 상태 유지)
 	elif channel_t > 0.0 or channel_ready:
@@ -569,24 +601,36 @@ func _combat(dt: float, act: bool) -> void:
 		elif rmb_pressed or rmb_edge:
 			Skills.cancel_psionic(self)
 			game.notify(self, "toast", ["심령의 검 취소"])
-	elif lmb_held and free and not blocking and cd.lmb <= 0.0 and draw_t <= 0.0:
-		if melee:
-			var prof: Dictionary
-			if cls == "rogue" and not panther and Skills.wcat(self) == "dagger":
-				var bt = Skills.backstab_target(self)
+	# 근접: 짧게 누르면 일반 공격, 누르고 있다가 떼면 강공격 (던전본)
+	elif melee and not panther and not staff_charging and (heavy_t >= 0.0 or ((lmb_held or (act and inp.just_pressed("attack"))) and free and not blocking and cd.lmb <= 0.0 and draw_t <= 0.0)):
+		if blocking or not free:
+			heavy_t = -1.0
+		elif lmb_held:
+			heavy_t = maxf(heavy_t, 0.0) + dt
+		else:
+			var ht := heavy_t
+			heavy_t = -1.0
+			if ht >= Skills.HEAVY_MIN:
+				var hk := clampf((ht - Skills.HEAVY_MIN) / (Skills.HEAVY_FULL - Skills.HEAVY_MIN), 0.0, 1.0)
+				var prof: Dictionary
+				var bt = Skills.backstab_target(self) if cls == "rogue" and Skills.wcat(self) == "dagger" else null
 				if bt != null:
-					# 뒤를 잡으면 양손 내려찍기 (패시브처럼 자동)
+					# 로그: 등 뒤에서 넣은 강공격 = 기습 (양손 내려찍기)
 					prof = Skills.backstab_profile(self)
-					combo_i = 0
 				else:
-					if combo_t <= 0.0:
-						combo_i = 0
-					prof = Skills.rogue_combo_profile(self, combo_i)
-					combo_i = (combo_i + 1) % Skills.ROGUE_COMBO.size()
-					combo_t = 1.0
+					prof = Skills.heavy_profile(self, hk)
+				_start_swing(prof)
+				if prof.has("lunge"):
+					dash = {"dir": Actor.fwd(yaw), "speed": prof.lunge / 0.18, "t": 0.18, "hit_done": true, "stop_near": true}
+			elif cls == "rogue" and Skills.wcat(self) == "dagger":
+				# 로그 단검: 오른손·왼손 번갈아 빠르게 찌름
+				_start_swing(Skills.rogue_stab_profile(self, 1.0 if combo_i == 0 else -1.0))
+				combo_i = 1 - combo_i
 			else:
-				prof = Skills.melee_profile(self)
-			_start_swing(prof)
+				_start_swing(Skills.melee_profile(self))
+	elif lmb_held and free and not blocking and cd.lmb <= 0.0 and draw_t <= 0.0 and not staff_charging:
+		if melee:
+			_start_swing(Skills.melee_profile(self))
 		elif Skills.fire_basic(self, aim()):
 			cast = 0.2
 

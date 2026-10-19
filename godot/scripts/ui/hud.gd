@@ -285,7 +285,7 @@ func _ready() -> void:
 	res_label.add_theme_color_override("font_shadow_color", Color.BLACK)
 	res_label.add_theme_constant_override("shadow_outline_size", 4)
 	res_stack.add_child(mana_bar)
-	# 마나는 칸으로 표시 (1칸 = 화염 지팡이 레이저 4타 + 폭발 한 번)
+	# 지팡이 에너지는 칸으로 표시 (1칸 = 화염 지팡이 레이저 4타 + 폭발 한 번)
 	var cells := Control.new()
 	cells.name = "Cells"
 	cells.custom_minimum_size = Vector2(340, 14)

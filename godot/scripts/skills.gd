@@ -111,7 +111,7 @@ static func ranged_profile(c) -> Dictionary:
 static func pay(c, cost: float) -> bool:
 	if cost <= 0.0:
 		return true
-	# Q/E 스킬은 마나를 쓰지 않음 (마나는 지팡이 기본 공격용 장전량)
+	# Q/E 스킬은 지팡이 에너지를 쓰지 않음 (지팡이 에너지는 지팡이 기본 공격용)
 	if c.skill_casting and c.res_type() == "mana":
 		return true
 	if c.res < cost:
@@ -154,10 +154,14 @@ static func tick_resource(c, dt: float) -> void:
 	var rm: float = c.stats.get("regen_mul", 1.0)
 	match c.res_type():
 		"mana":
-			# 마나: 쓰지 않을 때만 천천히 재생 (마지막 사용 후 1.5초부터)
+			# 지팡이 에너지: 지팡이마다 따로 장전됨. 쓰지 않으면 아주 천천히 차고, R을 누르고 있으면 빠르게 충전
 			c.res_idle += dt
-			if c.res_idle >= 1.5:
-				c.res = minf(c.res_max(), c.res + dt * 2.5 * rm)
+			var rate := 0.0
+			if c.get("staff_charging") == true:
+				rate = STAFF_CHARGE_RATE
+			elif c.res_idle >= 1.5:
+				rate = 1.2
+			c.res = minf(c.res_max(), c.res + dt * rate * rm)
 		"soul":
 			# 영혼 에너지는 쓰러진 적의 영혼을 흡수해서 얻음 (아주 느린 자연 회복)
 			c.res = minf(c.res_max(), c.res + dt * 0.4 * rm)
@@ -224,7 +228,9 @@ static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 		var dmg: float = prof.dmg * c.dmg_mul() * mult
 		var nd := maxf(d, 0.001)
 		var k: float = prof.knock
-		var dealt: float = g.hit(c, a, dmg, {"knock": Vector3(dx / nd * k, 0, dz / nd * k), "from": c.pos, "melee": true, "weapon": true, "dtype": c.stats.get("dtype", "phys"), "backstab": prof.get("backstab", false) or prof.get("power", false)})
+		var dealt: float = g.hit(c, a, dmg, {"knock": Vector3(dx / nd * k, 0, dz / nd * k), "from": c.pos, "melee": true, "weapon": true, "dtype": c.stats.get("dtype", "phys"), "backstab": prof.get("backstab", false) or prof.get("power", false), "pierce": prof.get("pierce", false)})
+		if prof.has("stun") and dealt > 0.0 and a.alive:
+			a.add_stun(prof.stun)
 		total += dealt
 		hits += 1
 		hit_list.append(a)
@@ -246,29 +252,31 @@ static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 	return total
 
 
-# 로그 단검 콤보: 1페이즈 우·좌·우 / 2페이즈 우·좌·우·좌·우 / 3페이즈 양손 X자 베기
-const ROGUE_COMBO := [
-	{"side": 1.0}, {"side": -1.0}, {"side": 1.0, "end": true},
-	{"side": 1.0, "p2": true}, {"side": -1.0, "p2": true}, {"side": 1.0, "p2": true}, {"side": -1.0, "p2": true}, {"side": 1.0, "end": true, "p2": true},
-	{"side": 0.0, "x": true, "end": true},
-]
+# 근접 강공격 (던전본): 좌클릭을 누르고 있다가 떼면 앞으로 짧게 파고들며 강하게 공격.
+# 방어를 뚫고 잠깐 기절시킴. 오래 누를수록(HEAVY_FULL까지) 강해짐
+const HEAVY_MIN := 0.3 # 이보다 짧게 누르면 일반 공격
+const HEAVY_FULL := 0.9
 
 
-static func rogue_combo_profile(c, i: int) -> Dictionary:
-	var st: Dictionary = ROGUE_COMBO[i % ROGUE_COMBO.size()]
-	var spd: float = c.stats.get("act_mul", 1.0)
-	var p := {"dmg": 15.0, "range": 2.5, "arc": 1.1, "cd": 0.22, "knock": 0.5, "hit_at": 0.11, "dur": 0.22}
-	if st.get("x", false):
-		p = {"dmg": 42.0, "range": 2.7, "arc": 1.9, "cd": 0.9, "knock": 5.0, "hit_at": 0.24, "dur": 0.55, "xslash": true}
-	elif st.get("p2", false):
-		# 2페이즈: 5타를 1페이즈 3타와 같은 시간 안에 (한 타 0.22 x 3/5)
-		p.dur = 0.132
-		p.cd = 0.132
-		p.hit_at = 0.066
-	if st.get("end", false) and not st.get("x", false):
-		p.cd = 0.5 # 페이즈 사이 짧은 숨 고르기
-	p.cd /= spd
-	p["side"] = st.side
+static func heavy_profile(c, k: float) -> Dictionary:
+	var p := melee_profile(c)
+	p.dmg *= 1.6 + 0.6 * k
+	p.range += 0.5
+	p.knock *= 1.8
+	p.hit_at = 0.14
+	p.dur = maxf(p.dur, 0.45) + 0.1
+	p.cd *= 1.25
+	p["pierce"] = true # 방어 무시
+	p["stun"] = 0.4 + 0.4 * k
+	p["power"] = true
+	p["lunge"] = 2.0 + 1.5 * k # 앞으로 파고드는 거리(m)
+	return p
+
+
+# 로그 단검: 짧게 누르면 빠른 찌르기(오른손·왼손 번갈아). 강공격을 적의 등 뒤에서 넣으면 기습(큰 피해, 반드시 치명타)
+static func rogue_stab_profile(c, side: float) -> Dictionary:
+	var p := melee_profile(c)
+	p["side"] = side
 	return p
 
 
@@ -295,7 +303,7 @@ static func backstab_target(c):
 
 
 static func backstab_profile(c) -> Dictionary:
-	return {"dmg": 21.0 * 3.2, "range": 2.6, "arc": 0.9, "cd": 1.0 / c.stats.get("act_mul", 1.0), "knock": 3.0, "hit_at": 0.3, "dur": 0.62, "backstab": true, "side": 2.0}
+	return {"dmg": 21.0 * 3.2, "range": 2.6, "arc": 0.9, "cd": 1.0 / c.stats.get("act_mul", 1.0), "knock": 3.0, "hit_at": 0.3, "dur": 0.62, "backstab": true, "side": 2.0, "pierce": true, "stun": 0.6}
 
 
 # ------------------------------------------------------------------ 기본 원거리 / 우클릭
@@ -355,7 +363,9 @@ static func ray_hit(c, aim: Dictionary, max_d := 18.0) -> Dictionary:
 
 const BEAM_TICK := 0.32
 const BEAM_TICKS := 4
-const MANA_CELL := 20.0 # 마나 바 1칸
+const MANA_CELL := 20.0 # 지팡이 에너지 바 1칸
+const STAFF_CHARGE_RATE := 16.0 # R을 누르고 있을 때 초당 충전량
+const STAFF_ENERGY := {"staff": 100.0, "orb": 80.0} # 무기 종류별 기본 에너지 최대치
 # 레이저 한 번은 아주 조금, 마지막 폭발까지 쓰면 합쳐서 정확히 1칸
 const BEAM_TICK_COST := 1.0
 const BEAM_BLAST_COST := MANA_CELL - BEAM_TICK_COST * BEAM_TICKS
@@ -388,7 +398,7 @@ static func tick_beam(c, dt: float, holding: bool, aim: Dictionary) -> void:
 			g.hit(c, h.actor, 13.0 * c.dmg_mul(), {"from": c.pos, "ranged": true, "dtype": "fire", "weapon": true})
 		g.sfx("fire", c.pos, 0.1)
 	elif c.beam_n >= BEAM_TICKS and c.beam_t >= BEAM_TICK * (BEAM_TICKS + 1):
-		# 마지막: 조준한 곳에 큰 폭발 (마나가 모자라면 폭발 없이 끝)
+		# 마지막: 조준한 곳에 큰 폭발 (에너지가 모자라면 폭발 없이 끝)
 		if not pay(c, BEAM_BLAST_COST):
 			c.beam_on = false
 			c.cd.lmb = 0.5
@@ -1156,6 +1166,11 @@ static func tick_dash(c, dt: float) -> bool:
 		return false
 	var dash: Dictionary = c.dash
 	dash.t -= dt
+	# 강공격 파고들기: 앞에 적이 붙으면 멈춤 (밀고 지나가지 않게)
+	if dash.get("stop_near", false):
+		for a in c.game.actors:
+			if a.alive and a != c and c.game.hostile(c, a) and Vector2(a.pos.x - c.pos.x, a.pos.z - c.pos.z).length() < 1.1 + a.radius:
+				dash.t = 0.0
 	c.move(dash.dir.x * dash.speed, dash.dir.z * dash.speed, dt)
 	if dash.t <= 0.0:
 		# 그림자 돌격: 착지 지점 주변 피해

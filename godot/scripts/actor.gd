@@ -314,7 +314,10 @@ func take_damage(amount: float, src, info: Dictionary = {}) -> float:
 		return 0.0
 	var dmg := amount
 	var blocked := false
-	if blocking and from != null:
+	# 강공격·기습은 방어를 뚫음
+	if blocking and from != null and info.get("pierce", false):
+		game.sfx("shield_break", pos, 0.1)
+	elif blocking and from != null:
 		var y := yaw_to(from.x - pos.x, from.z - pos.z)
 		# 완전 방어: 평소 자세에서 방어 자세로 올리는 도중(GUARD_RAISE 안)에 맞으면 피해 0.
 		# 양손 근접 무기(장검/지팡이)는 무기가 하얗게 빛나는 동안 다시 우클릭하면 강한 반격

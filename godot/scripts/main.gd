@@ -1312,7 +1312,11 @@ func _autotest() -> void:
 			p.yaw = Actor.yaw_to(dx, dz)
 			var c: Vector3 = m.center()
 			p.pitch = atan2(c.y - (p.pos.y + Player.EYE), sqrt(dx * dx + dz * dz))
-			Input.action_press("attack")
+			# 근접은 누르고 있으면 강공격 준비라 짧게 연타, 원거리(지팡이 레이저 등)는 누르고 있음
+			if Skills.is_melee(p) and not p.panther and i % 6 >= 3:
+				Input.action_release("attack")
+			else:
+				Input.action_press("attack")
 			await get_tree().process_frame
 		Input.action_release("attack")
 		var line := "%s: 기본 공격 %s 체력 %.0f -> %.0f" % [Data.CLASSES[cls].name, m.name, hp0, m.hp]
@@ -1501,34 +1505,43 @@ func _autotest() -> void:
 			q.yaw = Actor.yaw_to(mon.pos.x - q.pos.x, mon.pos.z - q.pos.z)
 			q.draw_t = 0.0
 			q.cd.lmb = 0.0
+			# 등 뒤에서 좌클릭을 누르고 있다가 떼면(강공격) 기습
 			Input.action_press("attack")
-			await get_tree().process_frame
-			await get_tree().process_frame
+			await _wait(0.6)
 			Input.action_release("attack")
+			for _f in 3:
+				await get_tree().process_frame
 			var back_ok: bool = q.swing != null and q.swing.prof.get("backstab", false)
 			await _wait(1.2)
-			# 정면: 콤보 9타 (우좌우 / 우좌우좌우 / X)
+			# 정면: 짧게 누르면 오른손·왼손 번갈아 찌르기 (기습 아님)
 			mon.yaw = Actor.yaw_to(q.pos.x - mon.pos.x, q.pos.z - mon.pos.z)
 			q.swing_log = []
 			q.combo_i = 0
-			Input.action_press("attack")
 			var guard := 0.0
-			while q.swing_log.size() < 9 and guard < 8.0:
-				await get_tree().process_frame
-				guard += get_process_delta_time()
-			Input.action_release("attack")
+			while q.swing_log.size() < 4 and guard < 6.0:
+				Input.action_press("attack")
+				for _f in 2:
+					await get_tree().process_frame
+				Input.action_release("attack")
+				for _f in 2:
+					await get_tree().process_frame
+				guard += 0.1
+				await _wait(0.1)
 			var sides := []
-			for e in q.swing_log.slice(0, 9):
+			for e in q.swing_log.slice(0, 4):
 				sides.append(int(e[0]))
-			var lg: Array = q.swing_log
-			# 페이즈 길이: 1페이즈 3타(0→3번째 타 시작) vs 2페이즈 5타(3→7번째 타 시작) 간격 비교
-			var p1 := 0.0
-			var p2 := 0.0
-			if lg.size() >= 9:
-				p1 = (lg[2][1] - lg[0][1]) / 2.0 * 3.0
-				p2 = (lg[7][1] - lg[3][1]) / 4.0 * 5.0
 			q.swing_log = null
-			out.append("로그: 뒤잡기 양손 내려찍기 %s, 콤보 순서 %s, 1페이즈 %.2f초 / 2페이즈 %.2f초" % ["O" if back_ok else "X", sides, p1, p2])
+			var tap_ok: bool = sides == [1, -1, 1, -1]
+			# 정면 강공격: 방어 무시 + 기절 + 앞으로 파고듦 (기습은 아님)
+			await _wait(0.5)
+			q.cd.lmb = 0.0
+			Input.action_press("attack")
+			await _wait(0.8)
+			Input.action_release("attack")
+			for _f in 3:
+				await get_tree().process_frame
+			var heavy_ok: bool = q.swing != null and q.swing.prof.get("pierce", false) and not q.swing.prof.get("backstab", false) and q.swing.prof.has("lunge")
+			out.append("로그: 짧게 누르기 = 번갈아 찌르기 %s %s, 누르고 떼기 = 강공격(방어 무시·기절·파고들기) %s, 등 뒤 강공격 = 기습 %s" % [sides, "O" if tap_ok else "X", "O" if heavy_ok else "X", "O" if back_ok else "X"])
 			# 은신: 3초 집중(느려짐, 피격 무관) → 준비 완료 유지 → 좌클릭 = 은신 / 우클릭 = 취소(재사용 대기 없음) → 은신 중 피격 = 해제
 			await _wait(0.6)
 			q.swing = null
@@ -1643,7 +1656,7 @@ func _autotest() -> void:
 			var unloaded: bool = not cbw.get("loaded", false)
 			out.append("석궁: 입장 시 장전 %s, 발사 %s, 자동 재장전 없음(0/2) %s, R 재장전(모션) %s, 볼트 없으면 재장전 불가 %s, 가방으로 내리면 장전 풀림 %s" % ["O" if entry_loaded else "X", "O" if shot else "X", "O" if no_auto else "X", "O" if reloaded else "X", "O" if no_bolt_ok else "X", "O" if unloaded else "X"])
 		elif cls2 == "pyromancer" and mon != null:
-			# 마나 = 지팡이에 장전된 양: 입장 시 가득, Q/E는 마나를 쓰지 않음, 안에서 새로 낀 지팡이는 0부터
+			# 지팡이 에너지 = 지팡이마다 따로: 입장 시 가득, Q/E는 쓰지 않음, 안에서 새로 낀 지팡이는 0부터, R을 누르고 있으면 충전
 			var full_ok: bool = q.res >= q.res_max() - 0.1 and q.res_max() > 0.0
 			var r0: float = q.res
 			q.cd.q = 0.0
@@ -1680,8 +1693,20 @@ func _autotest() -> void:
 			await get_tree().process_frame
 			Input.action_release("attack")
 			var struck: bool = game.zones.filter(func(z): return z.kind == "lightning").size() > z0
-			out.append("마나(지팡이 장전): 입장 시 가득 %s, Q 스킬 마나 미사용 %s, 던전에서 새로 낀 지팡이 0부터 %s" % ["O" if full_ok else "X", "O" if free_ok else "X", "O" if new_zero else "X"])
-			out.append("화염 지팡이 레이저 4타+폭발 피해 %.0f (마나 %.0f 사용 = %.1f칸), 번개 지팡이 조준점 번개 %s" % [beam_dmg, mana_used, mana_used / Skills.MANA_CELL, "O" if struck else "X"])
+			# R을 누르고 있으면 충전 (느리게 걷고 공격 안 됨) · 지팡이가 아닌 무기를 들면 에너지 바 없음
+			await _wait(1.3)
+			q.res = 20.0
+			Input.action_press("reload")
+			await _wait(1.0)
+			var charging: bool = q.staff_charging
+			Input.action_release("reload")
+			await get_tree().process_frame
+			var charged_amt: float = q.res - 20.0
+			q.equipment.w1 = Data.make_item("old_sword")
+			q.recalc()
+			var no_bar: bool = q.res_type() == "" and q.res_max() == 0.0
+			out.append("지팡이 에너지: 입장 시 가득 %s, Q 스킬은 안 씀 %s, 던전에서 새로 낀 지팡이 0부터 %s, R 누르고 충전 %s(+%.0f), 지팡이 없으면 바 없음 %s" % ["O" if full_ok else "X", "O" if free_ok else "X", "O" if new_zero else "X", "O" if charging and charged_amt > 10.0 else "X", charged_amt, "O" if no_bar else "X"])
+			out.append("화염 지팡이 레이저 4타+폭발 피해 %.0f (에너지 %.0f 사용 = %.1f칸), 번개 지팡이 조준점 번개 %s" % [beam_dmg, mana_used, mana_used / Skills.MANA_CELL, "O" if struck else "X"])
 		elif cls2 == "swordmaster":
 			var n_sw := Skills.sword_count(q)
 			Skills._use(q, "q", q.aim(), 1.0)
@@ -1813,7 +1838,7 @@ func _mptest_host(port: int) -> void:
 		await _wait(0.4)
 		await _shot(shots, "mp_host_view")
 	await _wait(2.0)
-	print("[mptest] 원격 플레이어 공격: 몬스터 체력 %.0f -> %.0f (공격자 %s), 원격 마나 %.0f" % [hp0, m.hp, m.last_attacker.name if m.last_attacker != null else "없음", r.res])
+	print("[mptest] 원격 플레이어 공격: 몬스터 체력 %.0f -> %.0f (공격자 %s), 원격 에너지 %.0f" % [hp0, m.hp, m.last_attacker.name if m.last_attacker != null else "없음", r.res])
 	# 상자 열기
 	var c = null
 	for ch in g.chests:

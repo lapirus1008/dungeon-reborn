@@ -721,7 +721,7 @@ func _class_detail(cur: Dictionary) -> RichTextLabel:
 	var t := "[font_size=18][color=#d9b45a][b]%s %s[/b][/color][/font_size]\n[font_size=13][color=#9a8e7a]%s[/color][/font_size]\n" % [cur.icon, cur.name, cur.desc]
 	t += "[font_size=12][color=#9a8e7a]무기: %s[/color][/font_size]\n" % ", ".join(cur.weapons.map(func(w): return Data.WEAPON_NAMES.get(w, w)))
 	if cur.res != "":
-		t += "[font_size=12][color=#8fd0ff]자원: %s[/color][/font_size]\n" % Data.RES_NAMES[cur.res]
+		t += "[font_size=12][color=#8fd0ff]자원: %s[/color][/font_size]\n" % _res_text(cur.res)
 	var keys := {"lmb": "좌클릭", "lmb_p": "표범 좌클릭"}
 	for k in keys:
 		if cur.skills.has(k):
@@ -821,7 +821,7 @@ func _refresh_create_screen() -> void:
 		var sk: Dictionary = c.skills[k]
 		t += "· %s %s: %s\n" % ["좌클릭" if k == "lmb" else "우클릭", sk.name, sk.desc]
 	if c.res != "":
-		t += "· 자원: %s\n" % Data.RES_NAMES[c.res]
+		t += "· 자원: %s\n" % _res_text(c.res)
 	t += "· 가방: %d칸 (%s 종족)\n" % [Inv.bag_size(create_cls).x * Inv.bag_size(create_cls).y, "언데드" if Inv.bag_size(create_cls) == Inv.UNDEAD_BAG else "인간"]
 	t += "[/font_size]\n[font_size=15][color=#d9b45a]사용 가능한 무기[/color][/font_size]\n[font_size=14]%s[/font_size]" % " · ".join(c.weapons.map(func(w): return Data.WEAPON_NAMES.get(w, w)))
 	cs_info.text = t
@@ -1032,3 +1032,9 @@ func _buy(base: String, _price: int) -> void:
 
 func _on_relief() -> void:
 	SaveData.op("relief")
+
+
+func _res_text(res: String) -> String:
+	if res == "mana":
+		return "지팡이 에너지 (직업 자원이 아니라 지팡이·오브마다 따로 들어 있음 · R을 누르고 있으면 충전)"
+	return Data.RES_NAMES[res]

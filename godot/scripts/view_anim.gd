@@ -61,6 +61,29 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 		R.position.y -= dk * 0.45
 		R.rotation.x = dk * 1.2
 		L.position.y -= dk * 0.4
+	# 강공격 준비: 무기를 뒤로 크게 젖히고, 다 모이면 살짝 떨림
+	var hv: float = p.get("heavy_t") if p.get("heavy_t") != null else -1.0
+	if p.swing == null and hv >= Skills.HEAVY_MIN:
+		var hk2 := clampf((hv - Skills.HEAVY_MIN) / (Skills.HEAVY_FULL - Skills.HEAVY_MIN), 0.0, 1.0)
+		var e2 := sin(hk2 * PI * 0.5)
+		var shake := (sin(t * 70.0) * 0.006) if hk2 >= 1.0 else 0.0
+		if p.cls == "rogue" and Skills.wcat(p) == "dagger":
+			# 단검: 두 손을 뒤로 당겨 찌를 준비
+			R.position += Vector3(0.04, 0.06 + shake, 0.2) * e2
+			L.position += Vector3(-0.04, 0.06 - shake, 0.2) * e2
+			R.rotation.x = -0.3 * e2
+			L.rotation.x = -0.3 * e2
+		else:
+			R.position += Vector3(0.12, 0.16 + shake, 0.16) * e2
+			R.rotation = Vector3(0.9 * e2, 0.35 * e2, -0.5 * e2)
+			if Skills.wcat(p) in Data.TWO_HANDED:
+				L.position = R.position + R.basis * Vector3(-0.02, -0.11, 0.07)
+				L.rotation = R.rotation
+	# 지팡이 에너지 충전(R): 지팡이를 세워 두 손으로 쥠
+	if p.get("staff_charging") == true:
+		R.position = R0 + Vector3(-0.14, 0.06 + sin(t * 6.0) * 0.01, 0.05)
+		R.rotation = Vector3(0.25, 0.0, 0.15)
+		L.position = R.position + Vector3(-0.06, -0.12, 0.02)
 	if p.swing != null:
 		var sw: Dictionary = p.swing
 		var k: float = sw.t / sw.prof.dur
