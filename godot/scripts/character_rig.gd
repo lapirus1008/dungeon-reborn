@@ -39,7 +39,7 @@ static func create(model_id: String, builder: Callable) -> CharacterRig:
 	if custom == null:
 		custom = AssetRegistry.scene("characters", model_id)
 	if custom != null:
-		rig._setup_custom(custom, cfg)
+		rig._setup_custom(custom, cfg, model_id)
 	else:
 		rig.node = builder.call()
 		rig.parts = rig.node.get_meta("parts", {})
@@ -47,7 +47,7 @@ static func create(model_id: String, builder: Callable) -> CharacterRig:
 	return rig
 
 
-func _setup_custom(model: Node3D, cfg: Dictionary) -> void:
+func _setup_custom(model: Node3D, cfg: Dictionary, model_id := "") -> void:
 	procedural = false
 	node = Node3D.new()
 	node.add_child(model)
@@ -98,8 +98,7 @@ func _setup_custom(model: Node3D, cfg: Dictionary) -> void:
 		anim = aps[0]
 	# Mixamo: 별도 폴더의 동작 파일들을 이 캐릭터의 애니메이션으로 추가 ("anim_dir")
 	if cfg.has("anim_dir") and anim != null and skel != null:
-		var hip := skel.find_bone("mixamorig_Hips")
-		var lib := AssetRegistry.anim_library(cfg.anim_dir, skel.get_bone_rest(hip).origin.y if hip >= 0 else 1.0)
+		var lib := AssetRegistry.anim_library(cfg.anim_dir, skel, str(cfg.get("source", model_id)))
 		if lib.get_animation_list().size():
 			if anim.has_animation_library(""):
 				anim.remove_animation_library("")

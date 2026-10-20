@@ -133,17 +133,35 @@ static func extract_mesh(path: String, mesh_name: String) -> MeshInstance3D:
 
 
 # Mixamo 동작 묶음: 폴더 안의 동작 파일(fbx/glb, Without Skin)마다 첫 애니메이션을 꺼내 파일 이름으로 등록.
-# 모든 Mixamo 캐릭터는 같은 뼈 이름(mixamorig_*)이라 한 묶음을 여러 캐릭터가 같이 씀.
-# 엉덩이(Hips) 위치 트랙만 남기고 키 차이에 맞게 비율을 맞춤 (다른 뼈의 위치 트랙은 체형을 망가뜨려 제거)
-static func anim_library(dir: String, target_hip_y: float) -> AnimationLibrary:
-	var key := "animlib:%s:%.3f" % [dir, target_hip_y]
+# 모든 Mixamo 캐릭터는 같은 뼈 이름(mixamorig_*)이지만, 캐릭터마다 뼈의 기본 방향이 조금씩 달라서
+# 동작을 그대로 쓰면 몸이 비틀림 → 두 캐릭터 모두 T자 기본 자세라는 점을 이용해 "기본 자세에서 얼마나 돌았는지"를
+# 전체 공간 기준으로 옮겨 다시 계산함 (리타깃). 엉덩이 위치는 키 비율로 맞추고, 다른 뼈의 위치 트랙은 제거.
+static func anim_library(dir: String, target: Skeleton3D, model_key: String) -> AnimationLibrary:
+	var key := "animlib:%s:%s" % [dir, model_key]
 	if _cache.has(key):
 		return _cache[key]
 	var lib := AnimationLibrary.new()
 	var da := DirAccess.open(dir)
+	# 동작 파일 속 뼈대의 "기본 자세"는 T자가 아니라 동작 첫 장면이라 기준으로 못 씀.
+	# → 동작을 받을 때 고른 캐릭터(source.json의 "rest", 기본 팔라딘)의 T자 자세를 기준으로 사용
+	var ref_skel: Skeleton3D = null
+	var ref_node: Node = null
+	var src_cfg := {}
+	if FileAccess.file_exists(dir.path_join("source.json")):
+		var parsed = JSON.parse_string(FileAccess.get_file_as_string(dir.path_join("source.json")))
+		if parsed is Dictionary:
+			src_cfg = parsed
+	var ref_ps = load_res(str(src_cfg.get("rest", "res://assets/mixamo/characters/paladin.fbx")))
+	if ref_ps is PackedScene:
+		ref_node = ref_ps.instantiate()
+		var rs := ref_node.find_children("*", "Skeleton3D", true, false)
+		if rs.size():
+			ref_skel = rs[0]
 	if da != null:
 		var seen := {}
-		for f in da.get_files():
+		var files := da.get_files()
+		files.sort()
+		for f in files:
 			var fn := f.trim_suffix(".import").trim_suffix(".remap")
 			var ext := fn.get_extension().to_lower()
 			if not (ext in ["fbx", "glb", "gltf"]) or seen.has(fn):
@@ -157,25 +175,56 @@ static func anim_library(dir: String, target_hip_y: float) -> AnimationLibrary:
 			var sks := inst.find_children("*", "Skeleton3D", true, false)
 			if aps.size() and sks.size():
 				var ap: AnimationPlayer = aps[0]
-				var sk: Skeleton3D = sks[0]
-				var hip := sk.find_bone("mixamorig_Hips")
-				var src_hip_y: float = sk.get_bone_rest(hip).origin.y if hip >= 0 else 1.0
+				var src: Skeleton3D = sks[0]
 				for an in ap.get_animation_list():
 					if an == "RESET" or an == "Take 001":
 						continue
-					var a: Animation = ap.get_animation(an).duplicate(true)
-					for t in range(a.get_track_count() - 1, -1, -1):
-						if a.track_get_type(t) != Animation.TYPE_POSITION_3D:
-							continue
-						var path := str(a.track_get_path(t))
-						if not path.ends_with("mixamorig_Hips"):
-							a.remove_track(t)
-							continue
-						var k := target_hip_y / maxf(0.01, src_hip_y)
-						for i in a.track_get_key_count(t):
-							a.track_set_key_value(t, i, a.track_get_key_value(t, i) * k)
+					var a := _retarget(ap.get_animation(an), ref_skel if ref_skel != null else src, target)
 					lib.add_animation(fn.get_basename().to_lower().replace(" ", "_"), a)
 					break
 			inst.free()
+	if ref_node != null:
+		ref_node.free()
 	_cache[key] = lib
 	return lib
+
+
+static func _retarget(orig: Animation, src: Skeleton3D, dst: Skeleton3D) -> Animation:
+	var a: Animation = orig.duplicate(true)
+	var sh := src.find_bone("mixamorig_Hips")
+	var dh := dst.find_bone("mixamorig_Hips")
+	var hip_k := 1.0
+	if sh >= 0 and dh >= 0:
+		hip_k = dst.get_bone_global_rest(dh).origin.y / maxf(0.01, src.get_bone_global_rest(sh).origin.y)
+	for t in range(a.get_track_count() - 1, -1, -1):
+		var np := a.track_get_path(t)
+		var bone_name := str(np.get_concatenated_subnames())
+		var tt := a.track_get_type(t)
+		var sb := src.find_bone(bone_name)
+		var db := dst.find_bone(bone_name)
+		if db < 0 or sb < 0:
+			a.remove_track(t) # 이 캐릭터에 없는 뼈
+			continue
+		if tt == Animation.TYPE_POSITION_3D:
+			if bone_name != "mixamorig_Hips":
+				a.remove_track(t)
+				continue
+			for i in a.track_get_key_count(t):
+				a.track_set_key_value(t, i, a.track_get_key_value(t, i) * hip_k)
+		elif tt == Animation.TYPE_ROTATION_3D:
+			var s_rest := src.get_bone_rest(sb).basis.get_rotation_quaternion()
+			var d_rest := dst.get_bone_rest(db).basis.get_rotation_quaternion()
+			var sp := src.get_bone_parent(sb)
+			var dp := dst.get_bone_parent(db)
+			var s_par := src.get_bone_global_rest(sp).basis.get_rotation_quaternion() if sp >= 0 else Quaternion.IDENTITY
+			var d_par := dst.get_bone_global_rest(dp).basis.get_rotation_quaternion() if dp >= 0 else Quaternion.IDENTITY
+			var s_inv := s_rest.inverse()
+			for i in a.track_get_key_count(t):
+				var q: Quaternion = a.track_get_key_value(t, i)
+				# 기본 자세 대비 회전(부모 기준) → 전체 공간 → 대상 캐릭터의 부모 기준으로
+				var delta_g := s_par * (q * s_inv) * s_par.inverse()
+				var nq := d_par.inverse() * delta_g * d_par * d_rest
+				a.track_set_key_value(t, i, nq.normalized())
+		elif tt == Animation.TYPE_SCALE_3D:
+			a.remove_track(t)
+	return a
