@@ -130,3 +130,52 @@ static func extract_mesh(path: String, mesh_name: String) -> MeshInstance3D:
 	if f.mat != null:
 		mi.material_override = f.mat
 	return mi
+
+
+# Mixamo 동작 묶음: 폴더 안의 동작 파일(fbx/glb, Without Skin)마다 첫 애니메이션을 꺼내 파일 이름으로 등록.
+# 모든 Mixamo 캐릭터는 같은 뼈 이름(mixamorig_*)이라 한 묶음을 여러 캐릭터가 같이 씀.
+# 엉덩이(Hips) 위치 트랙만 남기고 키 차이에 맞게 비율을 맞춤 (다른 뼈의 위치 트랙은 체형을 망가뜨려 제거)
+static func anim_library(dir: String, target_hip_y: float) -> AnimationLibrary:
+	var key := "animlib:%s:%.3f" % [dir, target_hip_y]
+	if _cache.has(key):
+		return _cache[key]
+	var lib := AnimationLibrary.new()
+	var da := DirAccess.open(dir)
+	if da != null:
+		var seen := {}
+		for f in da.get_files():
+			var fn := f.trim_suffix(".import").trim_suffix(".remap")
+			var ext := fn.get_extension().to_lower()
+			if not (ext in ["fbx", "glb", "gltf"]) or seen.has(fn):
+				continue
+			seen[fn] = true
+			var ps = load(dir.path_join(fn))
+			if not (ps is PackedScene):
+				continue
+			var inst: Node = ps.instantiate()
+			var aps := inst.find_children("*", "AnimationPlayer", true, false)
+			var sks := inst.find_children("*", "Skeleton3D", true, false)
+			if aps.size() and sks.size():
+				var ap: AnimationPlayer = aps[0]
+				var sk: Skeleton3D = sks[0]
+				var hip := sk.find_bone("mixamorig_Hips")
+				var src_hip_y: float = sk.get_bone_rest(hip).origin.y if hip >= 0 else 1.0
+				for an in ap.get_animation_list():
+					if an == "RESET" or an == "Take 001":
+						continue
+					var a: Animation = ap.get_animation(an).duplicate(true)
+					for t in range(a.get_track_count() - 1, -1, -1):
+						if a.track_get_type(t) != Animation.TYPE_POSITION_3D:
+							continue
+						var path := str(a.track_get_path(t))
+						if not path.ends_with("mixamorig_Hips"):
+							a.remove_track(t)
+							continue
+						var k := target_hip_y / maxf(0.01, src_hip_y)
+						for i in a.track_get_key_count(t):
+							a.track_set_key_value(t, i, a.track_get_key_value(t, i) * k)
+					lib.add_animation(fn.get_basename().to_lower().replace(" ", "_"), a)
+					break
+			inst.free()
+	_cache[key] = lib
+	return lib

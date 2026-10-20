@@ -96,6 +96,14 @@ func _setup_custom(model: Node3D, cfg: Dictionary) -> void:
 	var aps := model.find_children("*", "AnimationPlayer", true, false)
 	if aps.size():
 		anim = aps[0]
+	# Mixamo: 별도 폴더의 동작 파일들을 이 캐릭터의 애니메이션으로 추가 ("anim_dir")
+	if cfg.has("anim_dir") and anim != null and skel != null:
+		var hip := skel.find_bone("mixamorig_Hips")
+		var lib := AssetRegistry.anim_library(cfg.anim_dir, skel.get_bone_rest(hip).origin.y if hip >= 0 else 1.0)
+		if lib.get_animation_list().size():
+			if anim.has_animation_library(""):
+				anim.remove_animation_library("")
+			anim.add_animation_library("", lib)
 	anim_map.merge(cfg.get("animations", {}), true)
 	anim_speed = float(cfg.get("anim_speed", 1.0))
 	# 반복 재생할 동작 설정
