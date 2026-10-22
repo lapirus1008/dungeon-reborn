@@ -3,4 +3,4 @@
 class_name BuildInfo
 extends RefCounted
 
-const BUILD := "20261019-152422"
+const BUILD := "20261022-085112"
