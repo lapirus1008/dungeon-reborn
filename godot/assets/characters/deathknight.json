@@ -1,27 +1,48 @@
 {
- "source": "res://assets/kaykit/characters/Knight.glb",
- "scale": 0.8,
- "show": [
-  "2H_Sword",
-  "Knight_Helmet",
-  "Knight_Cape"
+ "source": "res://assets/mixamo/characters/castle_guard.fbx",
+ "tint": {
+  "*": "#6a6470"
+ },
+ "attach": [],
+ "scale": 1.05,
+ "anim_dir": [
+  "res://assets/mixamo/anims/human",
+  "res://assets/mixamo/anims/monster"
  ],
  "animations": {
-  "idle": "2H_Melee_Idle",
-  "walk": "Walking_A",
-  "run": "Running_A",
-  "block": "Blocking",
-  "cast": "Spellcast_Shoot",
-  "death": "Death_A",
-  "hit": "Hit_A",
-  "spin": "2H_Melee_Attack_Spinning",
+  "idle": "idle",
+  "walk": "walk",
+  "run": "run",
+  "block": "block_idle",
+  "cast": [
+   "casting",
+   "casting_2"
+  ],
+  "death": [
+   "death",
+   "death_2"
+  ],
+  "hit": [
+   "impact",
+   "impact_2"
+  ],
+  "spin": "attack_4",
   "attack": [
-   "2H_Melee_Attack_Chop",
-   "2H_Melee_Attack_Slice"
-  ]
+   "slash",
+   "slash_2",
+   "slash_3",
+   "attack",
+   "attack_2"
+  ],
+  "aim": "idle_2"
  },
- "tint": {
-  "*": "#5a5068",
-  "Knight_Cape": "#3a1850"
- }
+ "_kaykit_backup": {
+  "source": "res://assets/kaykit/characters/Knight.glb"
+ },
+ "attach_skinned": [
+  {
+   "from": "res://assets/mixamo/characters/paladin_prop.fbx",
+   "mesh": "bone:mixamorig_Sword_joint"
+  }
+ ]
 }

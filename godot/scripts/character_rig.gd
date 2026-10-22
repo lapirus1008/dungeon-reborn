@@ -32,6 +32,9 @@ static func create(model_id: String, builder: Callable) -> CharacterRig:
 	var rig := CharacterRig.new()
 	var cfg := AssetRegistry.config("characters", model_id)
 	var custom: Node3D = null
+	# 화면이 없는 서버·헤드리스 테스트는 모델을 보지 않으므로 무거운 3D 모델을 불러오지 않음 (블록 모델)
+	if DisplayServer.get_name() == "headless":
+		cfg = {}
 	if cfg.has("source"):
 		var ps = AssetRegistry.load_res(cfg.source)
 		if ps is PackedScene:
@@ -69,6 +72,9 @@ func _setup_custom(model: Node3D, cfg: Dictionary, model_id := "") -> void:
 		if skel == null:
 			break
 		var bone: String = "handslot.r" if a.get("slot", "r") == "r" else "handslot.l"
+		# Mixamo 뼈대: 손 뼈 이름이 다름
+		if skel.find_bone(bone) < 0:
+			bone = "mixamorig_RightHand" if a.get("slot", "r") == "r" else "mixamorig_LeftHand"
 		var holder: BoneAttachment3D = null
 		for b in skel.find_children("*", "BoneAttachment3D", false, false):
 			if (b as BoneAttachment3D).bone_name == bone:
@@ -80,7 +86,23 @@ func _setup_custom(model: Node3D, cfg: Dictionary, model_id := "") -> void:
 		var mi := AssetRegistry.extract_mesh(a.from, a.mesh)
 		if mi != null:
 			mi.name = a.mesh
+			# 손 안에서의 위치·회전(도)·크기 (모델마다 손 뼈 방향이 달라 설정으로 맞춤)
+			if a.has("pos"):
+				mi.position = Vector3(a.pos[0], a.pos[1], a.pos[2])
+			if a.has("rot"):
+				mi.rotation_degrees = Vector3(a.rot[0], a.rot[1], a.rot[2])
+			if a.has("scale"):
+				mi.scale = Vector3.ONE * float(a.scale)
 			holder.add_child(mi)
+	# 다른 Mixamo 모델의 무기(검·방패·활)를 뼈대째 옮겨 붙임: 손 뼈를 따라 움직이므로 어떤 Mixamo 캐릭터에도 맞음
+	for a in cfg.get("attach_skinned", []):
+		if skel == null:
+			break
+		var sm := AssetRegistry.extract_skinned(a.from, a.mesh)
+		if sm != null:
+			AssetRegistry.add_missing_bones(skel, sm.get_meta("bones", []))
+			skel.add_child(sm)
+			sm.skeleton = NodePath("..")
 	# 색 입히기: "*"는 전체, 그 외는 메시 이름별 (텍스처 색에 곱해짐)
 	var tint: Dictionary = cfg.get("tint", {})
 	for m in model.find_children("*", "MeshInstance3D", true, false):
@@ -98,7 +120,13 @@ func _setup_custom(model: Node3D, cfg: Dictionary, model_id := "") -> void:
 		anim = aps[0]
 	# Mixamo: 별도 폴더의 동작 파일들을 이 캐릭터의 애니메이션으로 추가 ("anim_dir")
 	if cfg.has("anim_dir") and anim != null and skel != null:
-		var lib := AssetRegistry.anim_library(cfg.anim_dir, skel, str(cfg.get("source", model_id)))
+		# 이 캐릭터가 실제로 쓰는 동작만 불러옴
+		var wanted := []
+		for v in cfg.get("animations", {}).values():
+			for c in (v if v is Array else [v]):
+				if not (c in wanted):
+					wanted.append(c)
+		var lib := AssetRegistry.anim_library(cfg.anim_dir, skel, str(cfg.get("source", model_id)), wanted)
 		if lib.get_animation_list().size():
 			if anim.has_animation_library(""):
 				anim.remove_animation_library("")

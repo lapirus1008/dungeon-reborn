@@ -1,23 +1,72 @@
 {
- "source": "res://assets/kaykit/characters/Rogue_Hooded.glb",
- "scale": 0.8,
- "show": [
-  "Knife",
-  "Knife_Offhand",
-  "Rogue_Cape"
+ "source": "res://assets/mixamo/characters/erika.fbx",
+ "attach": [
+  {
+   "from": "res://assets/kaykit/characters/Rogue.glb",
+   "mesh": "Knife",
+   "slot": "r",
+   "pos": [
+    0,
+    0.08,
+    0.02
+   ],
+   "rot": [
+    0,
+    0,
+    -90
+   ],
+   "scale": 0.6
+  },
+  {
+   "from": "res://assets/kaykit/characters/Rogue.glb",
+   "mesh": "Knife_Offhand",
+   "slot": "l",
+   "pos": [
+    0,
+    0.08,
+    0.02
+   ],
+   "rot": [
+    0,
+    0,
+    -90
+   ],
+   "scale": 0.6
+  }
+ ],
+ "scale": 1.05,
+ "anim_dir": [
+  "res://assets/mixamo/anims/human",
+  "res://assets/mixamo/anims/monster"
  ],
  "animations": {
-  "idle": "Idle",
-  "walk": "Walking_A",
-  "run": "Running_A",
-  "block": "Blocking",
-  "cast": "Spellcast_Shoot",
-  "death": "Death_A",
-  "hit": "Hit_A",
-  "spin": "2H_Melee_Attack_Spinning",
+  "idle": "idle",
+  "walk": "walk",
+  "run": "run",
+  "block": "block_idle",
+  "cast": [
+   "casting",
+   "casting_2"
+  ],
+  "death": [
+   "death",
+   "death_2"
+  ],
+  "hit": [
+   "impact",
+   "impact_2"
+  ],
+  "spin": "attack_4",
   "attack": [
-   "Dualwield_Melee_Attack_Stab",
-   "Dualwield_Melee_Attack_Slice"
-  ]
+   "slash",
+   "slash_2",
+   "slash_3",
+   "attack",
+   "attack_2"
+  ],
+  "aim": "idle_2"
+ },
+ "_kaykit_backup": {
+  "source": "res://assets/kaykit/characters/Rogue_Hooded.glb"
  }
 }

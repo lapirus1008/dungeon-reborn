@@ -1,5 +1,23 @@
 # 그래픽 교체 가이드
 
+## Mixamo 캐릭터 (현재 사용 중)
+
+모험가와 사람형 몬스터는 Mixamo 캐릭터(`godot/assets/mixamo/characters/*.fbx`)를 씁니다.
+동작은 `godot/assets/mixamo/anims/<묶음>/` 폴더의 동작 파일(Without Skin)을 **모든 캐릭터가 같이** 씁니다.
+
+- 캐릭터마다 뼈의 기본 방향이 조금씩 달라서, 동작을 받을 때 고른 캐릭터(`source.json`의 `rest`, 기본 팔라딘)의
+  T자 자세를 기준으로 "기본 자세에서 얼마나 돌았는지"를 다시 계산해서 입힙니다 (`AssetRegistry._retarget`).
+- 엉덩이 위치는 키 비율로 맞추고 앞뒤·좌우 이동은 없앱니다(제자리 동작). 다른 뼈의 위치 트랙은 체형을 망가뜨려 제거.
+- 캐릭터 설정 `assets/characters/<id>.json`:
+  - `"anim_dir"`: 동작 폴더 (여러 개면 앞 폴더 우선)
+  - `"animations"`: 상황별 동작 이름 = 동작 파일 이름 (소문자, 공백은 `_`)
+  - `"attach_skinned"`: 다른 Mixamo 모델의 무기를 뼈대째 옮겨 붙임. FBX를 가져올 때 메시 이름이 뒤섞이는 경우가 있어
+    `"bone:mixamorig_Sword_joint"`처럼 **무기가 묶인 뼈 이름**으로 찾습니다 (무기 전용 뼈는 손 아래에 자동 추가)
+  - `"attach"`: KayKit 무기를 손 뼈(`mixamorig_RightHand`/`LeftHand`)에 붙임. `pos`/`rot`(도)/`scale`로 손 안 위치 조정
+  - `"_kaykit_backup"`: 예전 KayKit 모델 경로 (되돌릴 때 참고)
+- 화면이 없는 서버는 모델을 불러오지 않고, 게임은 로비에 있는 동안 모델·동작을 미리 불러 둡니다(레이드 시작 때 멈춤 방지).
+- 확인용 스크린샷: `godot --path godot -- --mobshots <폴더>` (몬스터·모험가 종류별로 가까이 가서 찍음)
+
 현재 기본 그래픽은 KayKit(CC0) 에셋입니다 (`godot/assets/kaykit/`). 아래 설정 파일로 어떤 모델을 쓸지 정합니다.
 
 ## 설정 파일로 지정 (현재 사용 중)

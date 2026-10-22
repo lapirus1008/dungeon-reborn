@@ -1,27 +1,41 @@
 {
- "source": "res://assets/kaykit/characters/Skeleton_Rogue.glb",
- "scale": 0.8,
- "show": [
-  "Skeleton_Rogue_Hood",
-  "Skeleton_Rogue_Cape"
- ],
- "attach": [
-  {
-   "from": "res://assets/kaykit/characters/Rogue.glb",
-   "mesh": "2H_Crossbow",
-   "slot": "r"
-  }
+ "source": "res://assets/mixamo/characters/skeletonzombie.fbx",
+ "attach": [],
+ "scale": 1.05,
+ "anim_dir": [
+  "res://assets/mixamo/anims/monster",
+  "res://assets/mixamo/anims/human"
  ],
  "animations": {
-  "idle": "Idle_Combat",
-  "walk": "Walking_D_Skeletons",
-  "run": "Running_A",
-  "death": "Death_C_Skeletons",
-  "hit": "Hit_A",
-  "block": "Blocking",
-  "cast": "1H_Ranged_Shoot",
-  "spin": "Hit_A",
-  "attack": "1H_Ranged_Shoot",
-  "aim": "1H_Ranged_Aiming"
- }
+  "idle": [
+   "zombie_idle",
+   "zombie_idle_1",
+   "zombie_idle_2"
+  ],
+  "walk": "mutant_walking",
+  "run": "mutant_run",
+  "attack": "mutant_swiping",
+  "death": "mutant_dying",
+  "hit": [
+   "impact",
+   "impact_2"
+  ],
+  "block": "block_idle",
+  "cast": "mutant_swiping",
+  "spin": "mutant_swiping",
+  "aim": "zombie_idle"
+ },
+ "_kaykit_backup": {
+  "source": "res://assets/kaykit/characters/Skeleton_Rogue.glb"
+ },
+ "attach_skinned": [
+  {
+   "from": "res://assets/mixamo/characters/erika_bow.fbx",
+   "mesh": "bone:mixamorig_Left_arch1"
+  },
+  {
+   "from": "res://assets/mixamo/characters/erika_bow.fbx",
+   "mesh": "bone:mixamorig_arrow"
+  }
+ ]
 }

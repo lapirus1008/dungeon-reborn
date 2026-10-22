@@ -1,31 +1,48 @@
 {
- "source": "res://assets/kaykit/characters/Skeleton_Warrior.glb",
- "scale": 0.8,
- "show": [
-  "Skeleton_Warrior_Helmet"
- ],
+ "source": "res://assets/mixamo/characters/knight.fbx",
  "tint": {
-  "*": "#5a4a78"
+  "*": "#4a4458"
  },
- "attach": [
-  {
-   "from": "res://assets/kaykit/characters/Knight.glb",
-   "mesh": "2H_Sword",
-   "slot": "r"
-  }
+ "attach": [],
+ "scale": 1.05,
+ "anim_dir": [
+  "res://assets/mixamo/anims/human",
+  "res://assets/mixamo/anims/monster"
  ],
  "animations": {
-  "idle": "Idle_Combat",
-  "walk": "Walking_D_Skeletons",
-  "run": "Running_A",
-  "attack": [
-   "2H_Melee_Attack_Chop",
-   "2H_Melee_Attack_Slice"
+  "idle": "idle",
+  "walk": "walk",
+  "run": "run",
+  "block": "block_idle",
+  "cast": [
+   "casting",
+   "casting_2"
   ],
-  "death": "Death_C_Skeletons",
-  "hit": "Hit_A",
-  "block": "Blocking",
-  "cast": "2H_Melee_Attack_Spin",
-  "spin": "2H_Melee_Attack_Spin"
- }
+  "death": [
+   "death",
+   "death_2"
+  ],
+  "hit": [
+   "impact",
+   "impact_2"
+  ],
+  "spin": "attack_4",
+  "attack": [
+   "slash",
+   "slash_2",
+   "slash_3",
+   "attack",
+   "attack_2"
+  ],
+  "aim": "idle_2"
+ },
+ "_kaykit_backup": {
+  "source": "res://assets/kaykit/characters/Skeleton_Warrior.glb"
+ },
+ "attach_skinned": [
+  {
+   "from": "res://assets/mixamo/characters/paladin_prop.fbx",
+   "mesh": "bone:mixamorig_Sword_joint"
+  }
+ ]
 }

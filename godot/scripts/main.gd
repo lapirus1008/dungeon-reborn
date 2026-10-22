@@ -75,6 +75,7 @@ func _ready() -> void:
 	apply_fps(SaveData.setting("fps", "60" if UI.touch else "adaptive"))
 	_build_results()
 	open_lobby()
+	_warmup_models.call_deferred()
 	if args.has("--mptest"):
 		_mptest.call_deferred(args[args.find("--mptest") + 1])
 	elif args.has("--lobbyshots"):
@@ -112,6 +113,8 @@ func _ready() -> void:
 		_autotest.call_deferred()
 	elif args.has("--swingshots"):
 		_swingshots.call_deferred(args[args.find("--swingshots") + 1])
+	elif args.has("--mobshots"):
+		_mobshots.call_deferred(args[args.find("--mobshots") + 1])
 	elif args.has("--moodshots"):
 		_moodshots.call_deferred(args[args.find("--moodshots") + 1])
 	elif args.has("--fpshots"):
@@ -847,6 +850,58 @@ func _swingshots(dir: String) -> void:
 
 
 # 1인칭 손/방어/반격 빛/투척 포물선/횃불 화면 확인용
+# 로비에 있는 동안 캐릭터 모델·동작을 한 종류씩 미리 불러 둠 (레이드 시작 때 멈춤 방지)
+func _warmup_models() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	var da := DirAccess.open("res://assets/characters")
+	if da == null:
+		return
+	for f in da.get_files():
+		if not f.ends_with(".json"):
+			continue
+		await get_tree().process_frame
+		var rig := CharacterRig.create(f.get_basename(), func(): return Node3D.new())
+		if rig.node != null:
+			rig.node.free()
+
+
+# 몬스터·모험가 모델 확인용: 종류별로 가까이 가서 횃불을 들고 찍음
+func _mobshots(dir: String) -> void:
+	await get_tree().create_timer(0.5).timeout
+	SaveData.data.settings["quality"] = "high"
+	apply_quality("high")
+	_test_char("fighter")
+	start_raid("sinners_end_1")
+	game.force_act = true
+	await get_tree().create_timer(1.5).timeout
+	var g := game
+	var p := g.player
+	p.invuln = 999.0
+	p.toggle_torch()
+	var done := {}
+	var n := 0
+	var order: Array = g.actors.filter(func(x): return x.kind == "monster") + g.actors.filter(func(x): return x.kind == "bot")
+	for a in order:
+		if n >= 8 or a == p or not a.alive or (a.kind != "monster" and a.kind != "bot"):
+			continue
+		var kind: String = a.def.id if a.kind == "monster" else a.cls
+		if done.has(kind):
+			continue
+		done[kind] = true
+		n += 1
+		for b in g.actors:
+			if b != p and b.alive:
+				b.stun = 999.0 # 아무도 공격하지 않게 (기술 범위 표시가 화면을 가리지 않게)
+		var fwd := Actor.fwd(a.yaw)
+		p.pos = g.dungeon.resolve_circle(a.pos + fwd * 4.2, p.radius)
+		p.yaw = Actor.yaw_to(a.pos.x - p.pos.x, a.pos.z - p.pos.z)
+		p.pitch = -0.08
+		await get_tree().create_timer(1.2).timeout
+		await _shot(dir, "mob_%d_%s" % [n, kind])
+	get_tree().quit()
+
+
 # 분위기 확인용 스크린샷 (고품질): 실내 던전·성 외곽, 네 방향, 횃불을 든 모습
 func _moodshots(dir: String) -> void:
 	await get_tree().create_timer(0.5).timeout
