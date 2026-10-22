@@ -13,6 +13,11 @@ var dedicated := false
 
 
 func _ready() -> void:
+	# 캐릭터 모델·동작은 GitHub 파일 크기 제한(100MB) 때문에 별도 파일(DungeonReborn_characters.pck)로 나눠 배포 → 실행 파일 옆에 있으면 불러옴
+	if not OS.has_feature("editor"):
+		var extra := OS.get_executable_path().get_base_dir().path_join("DungeonReborn_characters.pck")
+		if FileAccess.file_exists(extra):
+			ProjectSettings.load_resource_pack(extra)
 	UI.touch = OS.has_feature("android") or OS.has_feature("mobile") or OS.get_cmdline_user_args().has("--touch")
 	_setup_input()
 	get_tree().root.theme = UI.build_theme()
