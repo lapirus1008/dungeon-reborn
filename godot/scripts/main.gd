@@ -885,7 +885,7 @@ func _mobshots(dir: String) -> void:
 	for a in order:
 		if n >= 8 or a == p or not a.alive or (a.kind != "monster" and a.kind != "bot"):
 			continue
-		var kind: String = a.def.id if a.kind == "monster" else a.cls
+		var kind: String = a.type if a.kind == "monster" else a.cls
 		if done.has(kind):
 			continue
 		done[kind] = true
