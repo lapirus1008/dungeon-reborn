@@ -947,7 +947,7 @@ func update_projectiles(dt: float) -> void:
 				hit_pillar(pil, p.dmg)
 				_projectile_impact(p, pp - vel.normalized() * 0.2, null)
 				break
-			if dungeon.is_solid(pp.x, pp.z) or pp.y < dungeon.ground_y(pp.x, pp.z) + 0.02 or (pp.y > Dungeon.WALL_H - 0.05 and dungeon.area_at(dungeon.to_tile(pp.x), dungeon.to_tile(pp.z)) != Dungeon.A_OUT) \
+			if dungeon.is_solid(pp.x, pp.z) or pp.y < dungeon.ground_y(pp.x, pp.z) + 0.02 or (pp.y > dungeon.ceiling_y(pp.x, pp.z) - 0.05 and dungeon.area_at(dungeon.to_tile(pp.x), dungeon.to_tile(pp.z)) != Dungeon.A_OUT) \
 					or (dungeon.closed_n > 0 and dungeon.door_between(pp - vel * sdt, pp)):
 				done = true
 				p.vel = vel
@@ -2955,7 +2955,7 @@ func throw_arc(c) -> Array:
 		var np: Vector3 = p + v * sdt
 		acc += np.distance_to(p)
 		p = np
-		var stop := dungeon.is_solid(p.x, p.z) or p.y < dungeon.ground_y(p.x, p.z) + 0.02 or (p.y > Dungeon.WALL_H - 0.05 and dungeon.area_at(dungeon.to_tile(p.x), dungeon.to_tile(p.z)) != Dungeon.A_OUT) \
+		var stop := dungeon.is_solid(p.x, p.z) or p.y < dungeon.ground_y(p.x, p.z) + 0.02 or (p.y > dungeon.ceiling_y(p.x, p.z) - 0.05 and dungeon.area_at(dungeon.to_tile(p.x), dungeon.to_tile(p.z)) != Dungeon.A_OUT) \
 			or (dungeon.closed_n > 0 and dungeon.door_between(p - v * sdt, p))
 		if not stop and p.y < PILLAR_H:
 			for b in dungeon.dyn_blocks:

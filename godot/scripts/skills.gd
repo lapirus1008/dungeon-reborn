@@ -221,6 +221,9 @@ static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 		var d := sqrt(dx * dx + dz * dz)
 		if d > prof.range + a.radius:
 			continue
+		# 높이 차가 크면 (턱 위·아래) 닿지 않음
+		if absf(a.pos.y - c.pos.y) > 2.2:
+			continue
 		if d > 0.6 and absf(angle_difference(c.yaw, Actor.yaw_to(dx, dz))) > prof.arc / 2.0:
 			continue
 		if not g.dungeon.los(c.pos.x, c.pos.z, a.pos.x, a.pos.z):
@@ -352,7 +355,7 @@ static func ray_hit(c, aim: Dictionary, max_d := 18.0) -> Dictionary:
 	while d < max_d:
 		p += dir * 0.3
 		d += 0.3
-		if g.dungeon.is_solid(p.x, p.z) or p.y <= 0.0:
+		if g.dungeon.is_solid(p.x, p.z) or p.y <= g.dungeon.ground_y(p.x, p.z):
 			return {"point": p, "actor": null}
 		for a in g.actors:
 			if a.alive and not a.extracted and a != c and g.hostile(c, a):

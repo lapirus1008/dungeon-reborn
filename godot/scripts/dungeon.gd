@@ -37,6 +37,15 @@ var wild := PackedByteArray() # 지도 가장자리와 이어진 바위/숲 (벽
 var static_blocks: Array = [] # 탑·의자 등 고정 원형 장애물 [[pos, radius]]
 # 지도 표식 (타일 좌표 Vector2i): spawns 시작 위치, shrines 성소, stones 부활석, exits 고정 탈출구, descent 아래층 계단
 var marks := {"spawns": [], "shrines": [], "stones": [], "exits": [], "descent": []}
+# 높낮이 (2.5D): 칸마다 바닥 높이. 계단 칸은 한쪽 끝에서 다른 끝까지 비스듬히 오름.
+# 올라가는 것은 계단으로만(한 번에 STEP까지), 내려가는 것은 어디서든 (턱에서 뛰어내리기)
+const LEVEL_H := 2.5
+const STEP := 0.65
+var floor_h := PackedFloat32Array() # 칸 바닥 높이 (계단 칸은 낮은 끝)
+var ramp_dir := PackedByteArray() # 0 = 평지, 1 = +X로 오름, 2 = -X, 3 = +Z, 4 = -Z
+var ramp_rise := PackedFloat32Array() # 계단 칸 안에서 오르는 높이
+var has_levels := false
+const RAMP_V := [Vector2i.ZERO, Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 
 
 func _init(d: int = 1, seed_v: int = 0, map := "") -> void:
@@ -49,6 +58,7 @@ func _init(d: int = 1, seed_v: int = 0, map := "") -> void:
 		return
 	W = 46 if d == 1 else 50
 	H = W
+	_init_levels()
 	grid.resize(W * H)
 	grid.fill(EMPTY)
 	area.resize(W * H)
@@ -56,6 +66,78 @@ func _init(d: int = 1, seed_v: int = 0, map := "") -> void:
 	room_id.resize(W * H)
 	room_id.fill(-1)
 	generate()
+
+
+func _init_levels() -> void:
+	floor_h.resize(W * H)
+	floor_h.fill(0.0)
+	ramp_dir.resize(W * H)
+	ramp_dir.fill(0)
+	ramp_rise.resize(W * H)
+	ramp_rise.fill(0.0)
+
+
+# 지도의 "levels": 칸마다 한 글자. 0~9 = 층(×LEVEL_H m), a~d = 지하 1~4층, > < v ^ = 계단(그 방향으로 오름)
+# 같은 방향으로 이어진 계단 칸들은 뒤쪽 평지 높이에서 앞쪽 평지 높이까지 나눠서 오름
+func _load_levels(rows: Array) -> void:
+	const RAMPS := {">": 1, "<": 2, "v": 3, "^": 4}
+	for z in mini(H, rows.size()):
+		var row: String = rows[z]
+		for x in mini(W, row.length()):
+			var ch := row[x]
+			if RAMPS.has(ch):
+				ramp_dir[idx(x, z)] = RAMPS[ch]
+				has_levels = true
+			elif ch >= "1" and ch <= "9":
+				floor_h[idx(x, z)] = int(ch) * LEVEL_H
+				has_levels = true
+			elif ch >= "a" and ch <= "d":
+				floor_h[idx(x, z)] = -(ch.unicode_at(0) - 96) * LEVEL_H
+				has_levels = true
+	# 계단 줄마다 높이 나누기
+	for z in H:
+		for x in W:
+			var rd := ramp_dir[idx(x, z)]
+			if rd == 0:
+				continue
+			var d: Vector2i = RAMP_V[rd]
+			var b := Vector2i(x, z) - d
+			if b.x >= 0 and b.y >= 0 and b.x < W and b.y < H and ramp_dir[idx(b.x, b.y)] == rd:
+				continue # 줄의 첫 칸에서만 계산
+			var chain := []
+			var c := Vector2i(x, z)
+			while c.x >= 0 and c.y >= 0 and c.x < W and c.y < H and ramp_dir[idx(c.x, c.y)] == rd:
+				chain.append(c)
+				c += d
+			var lo := floor_h[idx(b.x, b.y)] if b.x >= 0 and b.y >= 0 and b.x < W and b.y < H else 0.0
+			var hi := floor_h[idx(c.x, c.y)] if c.x >= 0 and c.y >= 0 and c.x < W and c.y < H else lo
+			var per := (hi - lo) / chain.size()
+			for i in chain.size():
+				floor_h[idx(chain[i].x, chain[i].y)] = lo + per * i
+				ramp_rise[idx(chain[i].x, chain[i].y)] = per
+
+
+# 칸 안 위치(월드 좌표)의 바닥 높이 (언덕 제외)
+func floor_at(x: float, z: float) -> float:
+	if not has_levels:
+		return 0.0
+	var tx := clampi(to_tile(x), 0, W - 1)
+	var tz := clampi(to_tile(z), 0, H - 1)
+	var i := idx(tx, tz)
+	var rd := ramp_dir[i]
+	if rd == 0:
+		return floor_h[i]
+	var u := clampf(x / T - tx, 0.0, 1.0)
+	var v := clampf(z / T - tz, 0.0, 1.0)
+	var k: float = [0.0, u, 1.0 - u, v, 1.0 - v][rd]
+	return floor_h[i] + ramp_rise[i] * k
+
+
+# 칸에서 가장 높은 바닥 (계단은 높은 끝)
+func tile_top(x: int, z: int) -> float:
+	if not has_levels or x < 0 or z < 0 or x >= W or z >= H:
+		return 0.0
+	return floor_h[idx(x, z)] + ramp_rise[idx(x, z)]
 
 
 func idx(x: int, z: int) -> int:
@@ -233,6 +315,9 @@ func _load_map(def: Dictionary) -> void:
 	area.fill(A_IN)
 	room_id.resize(W * H)
 	room_id.fill(-1)
+	_init_levels()
+	if j.has("levels"):
+		_load_levels(j.levels)
 	decor = j.get("decor", {})
 	var rows: Array = j.rows
 	# 타일 문자: # 벽 · . 실내 · , 야외 · T 나무 · r 야외 기둥 · c 성당 · P 성당 기둥 · p 실내 기둥
@@ -451,7 +536,7 @@ const HILL_AMP := 3.5
 
 func ground_y(x: float, z: float) -> float:
 	if hv.is_empty():
-		return 0.0
+		return floor_at(x, z)
 	var fx := clampf(x / T, 0.0, W - 0.001)
 	var fz := clampf(z / T, 0.0, H - 0.001)
 	var i := int(fx)
@@ -462,7 +547,7 @@ func ground_y(x: float, z: float) -> float:
 	var b := hv[j * (W + 1) + i + 1]
 	var c := hv[(j + 1) * (W + 1) + i]
 	var d := hv[(j + 1) * (W + 1) + i + 1]
-	return lerpf(lerpf(a, b, u), lerpf(c, d, u), v)
+	return lerpf(lerpf(a, b, u), lerpf(c, d, u), v) + floor_at(x, z)
 
 
 func _build_heights() -> void:
@@ -486,6 +571,8 @@ func _build_heights() -> void:
 						flat = true # 성벽·건물 벽 옆은 평평하게
 				elif area_at(t.x, t.y) != A_OUT:
 					flat = true
+				elif has_levels and t.x >= 0 and t.y >= 0 and t.x < W and t.y < H and (floor_h[idx(t.x, t.y)] != 0.0 or ramp_dir[idx(t.x, t.y)] != 0):
+					flat = true # 높낮이가 있는 칸(성벽 위 길·해자·계단) 옆은 평평하게
 			if flat:
 				dist[j * CW + i] = 0
 				q.append(Vector2i(i, j))
@@ -515,9 +602,11 @@ func _build_heights() -> void:
 
 # 실내 천장 높이 (성당은 높음)
 func ceiling_y(x: float, z: float) -> float:
+	var base := tile_top(to_tile(x), to_tile(z))
 	if area_at(to_tile(x), to_tile(z)) == A_CATH:
-		return float(decor.get("wall_h", {}).get("cathedral", WALL_H))
-	return WALL_H
+		# 성당은 높은 천장 하나 (제단이 높아도 천장은 그대로)
+		return maxf(float(decor.get("wall_h", {}).get("cathedral", WALL_H)), base + WALL_H)
+	return base + WALL_H
 
 
 func is_wild(x: int, z: int) -> bool:
@@ -619,7 +708,7 @@ func _add_wall_torch(x: int, z: int, d: Vector2i, off: Vector3, have: Dictionary
 	have[key] = true
 	var nrm := Vector3(d.x, 0, d.y)
 	var ct := center(x, z) + off
-	torches.append({"tx": x, "tz": z, "off": off, "pos": Vector3(ct.x + nrm.x * (T / 2.0 - 0.25), 3.2, ct.z + nrm.z * (T / 2.0 - 0.25)), "n": nrm})
+	torches.append({"tx": x, "tz": z, "off": off, "pos": Vector3(ct.x + nrm.x * (T / 2.0 - 0.25), tile_top(x, z) + 3.2, ct.z + nrm.z * (T / 2.0 - 0.25)), "n": nrm})
 
 
 # 지도용 횃불과 소품
@@ -648,7 +737,7 @@ func _decorate() -> void:
 		var d: Vector2i = c[2]
 		var nrm := Vector3(d.x, 0, d.y)
 		var ct := center(c[0], c[1])
-		torches.append({"tx": c[0], "tz": c[1], "pos": Vector3(ct.x + nrm.x * (T / 2.0 - 0.25), 3.2, ct.z + nrm.z * (T / 2.0 - 0.25)), "n": nrm})
+		torches.append({"tx": c[0], "tz": c[1], "pos": Vector3(ct.x + nrm.x * (T / 2.0 - 0.25), tile_top(c[0], c[1]) + 3.2, ct.z + nrm.z * (T / 2.0 - 0.25)), "n": nrm})
 	if has_outdoor:
 		_exterior_torches()
 	for rm in rooms:
@@ -763,6 +852,8 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 	var walls := []
 	var walls_by_h := {} # 4m가 아닌 벽: 높이 -> 위치
 	var merlons := []
+	var plinths := {} # 높은 칸 아래 돌 받침: 높이 -> 변환
+	var steps_x := [] # 계단 디딤돌 (단위 상자를 늘려 씀)
 	var tree_x := [] # [위치, 크기, 종류]
 	var bush_x := []
 	var curtain: Array = decor.get("curtain", [])
@@ -773,7 +864,17 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 			var c := center(x, z)
 			if g != EMPTY:
 				var a := area_at(x, z)
-				var fxf := Transform3D(Basis(), Vector3(c.x, 0, c.z))
+				var fl := tile_top(x, z)
+				var fxf := Transform3D(Basis(), Vector3(c.x, fl, c.z))
+				if has_levels:
+					_level_geometry(x, z, plinths, steps_x)
+					if ramp_dir[idx(x, z)] != 0:
+						# 계단 칸: 바닥 대신 디딤돌, 실내면 천장만
+						if a == A_IN:
+							ceils.append(Transform3D(Basis(Vector3.RIGHT, PI), Vector3(c.x, tile_top(x, z) + WALL_H, c.z)))
+						elif a == A_CATH:
+							cath_ceils.append(Transform3D(Basis(Vector3.RIGHT, PI), Vector3(c.x, maxf(cath_h, fl + WALL_H), c.z)))
+						continue
 				if a == A_OUT:
 					if _in_rect(curtain, x, z):
 						yard_floors.append(fxf)
@@ -789,10 +890,10 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 						bush_x.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * rng.randf_range(0.6, 1.2)), bp))
 				elif a == A_CATH:
 					cath_floors.append(fxf)
-					cath_ceils.append(Transform3D(Basis(Vector3.RIGHT, PI), Vector3(c.x, cath_h, c.z)))
+					cath_ceils.append(Transform3D(Basis(Vector3.RIGHT, PI), Vector3(c.x, maxf(cath_h, fl + WALL_H), c.z)))
 				else:
 					floors.append(fxf)
-					ceils.append(Transform3D(Basis(Vector3.RIGHT, PI), Vector3(c.x, WALL_H, c.z)))
+					ceils.append(Transform3D(Basis(Vector3.RIGHT, PI), Vector3(c.x, fl + WALL_H, c.z)))
 			else:
 				var adj := false
 				for dz in range(-1, 2):
@@ -815,14 +916,32 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 					continue
 				if adj:
 					var h := _wall_h(x, z)
-					if is_equal_approx(h, WALL_H):
-						walls.append(Transform3D(Basis(), Vector3(c.x, WALL_H / 2.0, c.z)))
+					# 높낮이: 벽은 이웃 바닥 중 가장 낮은 곳부터, 가장 높은 바닥 + 벽 높이까지
+					# (성벽·본성·성당처럼 지도에서 정한 높이는 땅 기준 절대 높이, 단 이웃 바닥보다 1.4m는 높게)
+					var lo := 0.0
+					var hi := 0.0
+					if has_levels:
+						lo = 1e9
+						hi = -1e9
+						for dz in range(-1, 2):
+							for dx in range(-1, 2):
+								if get_t(x + dx, z + dz) != EMPTY:
+									lo = minf(lo, floor_h[idx(x + dx, z + dz)])
+									hi = maxf(hi, tile_top(x + dx, z + dz))
+					var top := hi + h
+					if _wall_abs(x, z):
+						top = maxf(h, hi + 1.4)
+					var hh := snappedf(top - lo, 0.1)
+					var wy := lo + hh / 2.0
+					if is_equal_approx(hh, WALL_H):
+						walls.append(Transform3D(Basis(), Vector3(c.x, wy, c.z)))
 					else:
-						if not walls_by_h.has(h):
-							walls_by_h[h] = []
-						walls_by_h[h].append(Transform3D(Basis(), Vector3(c.x, h / 2.0, c.z)))
+						if not walls_by_h.has(hh):
+							walls_by_h[hh] = []
+						walls_by_h[hh].append(Transform3D(Basis(), Vector3(c.x, wy, c.z)))
+						h = lo + hh
 						# 성벽/본성 꼭대기 톱니 (총안)
-						if h >= 12.0:
+						if h >= 6.0 and _wall_abs(x, z) and not (_in_rect(decor.get("cathedral", []), x, z) or _in_rect(decor.get("transept", []), x, z)):
 							for o in [Vector3(-1.0, 0, -1.0), Vector3(1.0, 0, 1.0), Vector3(-1.0, 0, 1.0), Vector3(1.0, 0, -1.0)]:
 								merlons.append(Transform3D(Basis(), Vector3(c.x, h + 0.6, c.z) + o))
 
@@ -903,6 +1022,18 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		var tmat := _mat(wall_tex, _wall_uv(h))
 		tb.material = tmat
 		root.add_child(_multimesh(tb, walls_by_h[h]))
+	for ph in plinths:
+		var pb := BoxMesh.new()
+		pb.size = Vector3(T, ph, T)
+		pb.material = _mat(wall_tex, _wall_uv(ph))
+		root.add_child(_multimesh(pb, plinths[ph]))
+	if steps_x.size():
+		var sb := BoxMesh.new()
+		sb.size = Vector3.ONE
+		var smat2 := _mat(wall_tex, Vector3(0.5, 0.25, 1.0))
+		smat2.albedo_color = Color(0.85, 0.82, 0.78)
+		sb.material = smat2
+		root.add_child(_multimesh(sb, steps_x))
 	if merlons.size():
 		var mb := BoxMesh.new()
 		mb.size = Vector3(1.2, 1.2, 1.2)
@@ -990,7 +1121,7 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		var bs: float = th.get("barrel_scale", 1.0)
 		var bx := []
 		for t in barrel_x:
-			bx.append(Transform3D(t.basis.scaled(Vector3.ONE * bs), Vector3(t.origin.x, 0.0, t.origin.z)))
+			bx.append(Transform3D(t.basis.scaled(Vector3.ONE * bs), Vector3(t.origin.x, t.origin.y - 0.6, t.origin.z)))
 		root.add_child(_multimesh(tm.call("barrel"), bx))
 		# 일부 방 구석에 상자 더미
 		var crates: Mesh = tm.call("crates")
@@ -1179,7 +1310,8 @@ func _build_terrain(tiles: Array) -> void:
 					var p := [Vector3(x0 + a * s, 0, z0 + b * s), Vector3(x0 + (a + 1) * s, 0, z0 + b * s),
 						Vector3(x0 + (a + 1) * s, 0, z0 + (b + 1) * s), Vector3(x0 + a * s, 0, z0 + (b + 1) * s)]
 					for k in 4:
-						p[k].y = ground_y(p[k].x, p[k].z)
+						# 칸 경계에서 이웃 칸 높이를 읽지 않도록 칸 안쪽으로 살짝 당겨서 (절벽이 비스듬히 이어지지 않게)
+						p[k].y = ground_y(clampf(p[k].x, x0 + 0.01, x0 + T - 0.01), clampf(p[k].z, z0 + 0.01, z0 + T - 0.01))
 					for idx3 in [0, 1, 2, 0, 2, 3]:
 						var v: Vector3 = p[idx3]
 						var e := 0.5
@@ -1193,6 +1325,58 @@ func _build_terrain(tiles: Array) -> void:
 		mi.material_override = mat
 		mi.visibility_range_end = VIEW_RANGE + 10.0
 		root.add_child(mi)
+
+
+# 높은 칸 아래 돌 받침과 계단 디딤돌
+func _level_geometry(x: int, z: int, plinths: Dictionary, steps_x: Array) -> void:
+	var i := idx(x, z)
+	var fl := floor_h[i]
+	var c := Vector3((x + 0.5) * T, 0, (z + 0.5) * T)
+	var lowest := fl
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var n: Vector2i = Vector2i(x, z) + d
+		if get_t(n.x, n.y) != EMPTY:
+			lowest = minf(lowest, floor_h[idx(n.x, n.y)])
+	if fl > lowest + 0.01:
+		var ph := snappedf(fl - lowest, 0.05)
+		if not plinths.has(ph):
+			plinths[ph] = []
+		plinths[ph].append(Transform3D(Basis(), Vector3(c.x, fl - ph / 2.0 - 0.015, c.z)))
+	# 실내 천장 높이가 이웃보다 높으면 그 사이를 벽으로 막음 (천장 틈새)
+	if area_at(x, z) == A_IN:
+		var my_c := tile_top(x, z) + WALL_H
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var n2: Vector2i = Vector2i(x, z) + d
+			if get_t(n2.x, n2.y) == EMPTY or area_at(n2.x, n2.y) != A_IN:
+				continue
+			var nc := tile_top(n2.x, n2.y) + WALL_H
+			if nc < my_c - 0.05:
+				var sz := Vector3(T if d.x == 0 else 0.3, my_c - nc, T if d.y == 0 else 0.3)
+				steps_x.append(Transform3D(Basis().scaled(sz), c + Vector3(d.x * T / 2.0, (my_c + nc) / 2.0, d.y * T / 2.0)))
+	var rd := ramp_dir[i]
+	if rd == 0:
+		return
+	var rise := ramp_rise[i]
+	var d: Vector2i = RAMP_V[rd]
+	var n_steps := maxi(2, roundi(absf(rise) / 0.3))
+	var dir3 := Vector3(d.x, 0, d.y)
+	for k in n_steps:
+		var top := fl + rise * (k + 1) / n_steps
+		var hgt := maxf(0.05, top - lowest + 0.02)
+		var along := (k + 0.5) / n_steps - 0.5
+		var pos := c + dir3 * (along * T) + Vector3(0, top - hgt / 2.0, 0)
+		var size := Vector3(T if d.x == 0 else T / n_steps, hgt, T if d.y == 0 else T / n_steps)
+		steps_x.append(Transform3D(Basis().scaled(size), pos))
+
+
+# 지도에서 정한 높은 벽(성벽·본성·성당)은 땅 기준 절대 높이
+func _wall_abs(x: int, z: int) -> bool:
+	if decor.is_empty():
+		return false
+	if _in_rect(decor.get("keep", []), x, z) or _in_rect(decor.get("cathedral", []), x, z) or _in_rect(decor.get("transept", []), x, z):
+		return true
+	var cu: Array = decor.get("curtain", [])
+	return _in_rect(cu, x, z) and (x == int(cu[0]) or x == int(cu[2]) or z == int(cu[1]) or z == int(cu[3]))
 
 
 func _in_rect(r: Array, x: int, z: int) -> bool:
@@ -1376,12 +1560,12 @@ func _build_outdoor(tree_x: Array, bush_x: Array, wall_tex: Array) -> void:
 		var cyl := CylinderMesh.new()
 		cyl.top_radius = r
 		cyl.bottom_radius = r * 1.06
-		cyl.height = h
+		cyl.height = h + 3.0 # 해자 옆에서도 땅에 닿게 아래로 더
 		cyl.radial_segments = 16
 		cyl.material = _mat(wall_tex, Vector3(TAU * r / 2.5, h / 2.5, 1) if Textures.pbr("wall").size() else Vector3(6, h / 3.0, 1))
 		var mi := MeshInstance3D.new()
 		mi.mesh = cyl
-		mi.position = c + Vector3(0, h / 2.0, 0)
+		mi.position = c + Vector3(0, (h - 3.0) / 2.0, 0)
 		root.add_child(mi)
 		var roof := CylinderMesh.new()
 		roof.top_radius = 0.0
@@ -1598,10 +1782,16 @@ func _resolve_tiles(pos: Vector3, r: float) -> Vector3:
 					pos.x = cx + ddx / d * mn
 					pos.z = cz + ddz / d * mn
 				continue
-			if g != EMPTY:
-				continue
 			var min_x := x * T
 			var min_z := z * T
+			if g != EMPTY:
+				# 높낮이: 발보다 STEP 넘게 높은 칸은 벽처럼 막힘 (계단으로 올라감). 내려가는 것은 막지 않음
+				if not has_levels or (dx == 0 and dz == 0):
+					continue
+				var ex := clampf(pos.x, min_x + 0.05, min_x + T - 0.05)
+				var ez := clampf(pos.z, min_z + 0.05, min_z + T - 0.05)
+				if floor_at(ex, ez) <= pos.y + STEP:
+					continue
 			var px := clampf(pos.x, min_x, min_x + T)
 			var pz := clampf(pos.z, min_z, min_z + T)
 			var ddx := pos.x - px
@@ -1629,6 +1819,10 @@ func los(ax: float, az: float, bx: float, bz: float) -> bool:
 	var dz := bz - az
 	var d := sqrt(dx * dx + dz * dz)
 	var steps := int(ceil(d / 0.5))
+	# 높낮이: 두 지점보다 눈높이 넘게 높은 바닥(성벽 위·단상 등)이 사이에 있으면 가려짐
+	var eye := -1e9
+	if has_levels:
+		eye = maxf(floor_at(ax, az), floor_at(bx, bz)) + 1.8
 	for i in range(1, steps):
 		var t := float(i) / steps
 		var x := ax + dx * t
@@ -1638,11 +1832,39 @@ func los(ax: float, az: float, bx: float, bz: float) -> bool:
 		var g := get_t(tx, tz)
 		if g == EMPTY:
 			return false
+		if has_levels and floor_at(x, z) > eye:
+			return false
 		if g == PILLAR or g == TREE:
 			var cx := (tx + 0.5) * T
 			var cz := (tz + 0.5) * T
 			if Vector2(x - cx, z - cz).length() < (1.2 if g == PILLAR else 0.6):
 				return false
+	return true
+
+
+# 칸 (x, z)에서 d 방향 이웃 칸으로 걸어서 넘어갈 수 있는지 (경계에서 STEP 넘게 높아지면 안 됨)
+func step_ok(x: int, z: int, d: Vector2i) -> bool:
+	var c := Vector2((x + 0.5) * T, (z + 0.5) * T)
+	var e := c + Vector2(d) * (T / 2.0 - 0.05)
+	var e2 := c + Vector2(d) * (T / 2.0 + 0.05)
+	return floor_at(e2.x, e2.y) <= floor_at(e.x, e.y) + STEP
+
+
+# 직선으로 걸어갈 수 있는지 (도중에 STEP 넘게 높아지는 턱이 없어야 함. 내려가는 턱은 괜찮음)
+func walk_line(a: Vector3, b: Vector3) -> bool:
+	if not has_levels:
+		return true
+	var dx := b.x - a.x
+	var dz := b.z - a.z
+	var d := sqrt(dx * dx + dz * dz)
+	var steps := int(ceil(d / 0.4))
+	var prev_h := floor_at(a.x, a.z)
+	for i in range(1, steps + 1):
+		var t := float(i) / steps
+		var h := floor_at(a.x + dx * t, a.z + dz * t)
+		if h > prev_h + STEP * 0.7:
+			return false
+		prev_h = h
 	return true
 
 
@@ -1652,7 +1874,8 @@ func wide_los(a: Vector3, b: Vector3) -> bool:
 	var d := maxf(0.001, sqrt(dx * dx + dz * dz))
 	var px := -dz / d * 0.7
 	var pz := dx / d * 0.7
-	return los(a.x + px, a.z + pz, b.x + px, b.z + pz) and los(a.x - px, a.z - pz, b.x - px, b.z - pz)
+	return los(a.x + px, a.z + pz, b.x + px, b.z + pz) and los(a.x - px, a.z - pz, b.x - px, b.z - pz) \
+		and walk_line(Vector3(a.x + px, 0, a.z + pz), Vector3(b.x + px, 0, b.z + pz)) and walk_line(Vector3(a.x - px, 0, a.z - pz), Vector3(b.x - px, 0, b.z - pz))
 
 
 # BFS 경로 탐색 -> 월드 좌표 웨이포인트 배열 (실패 시 빈 배열)
@@ -1687,6 +1910,8 @@ func path(a: Vector3, b: Vector3) -> Array:
 			var nx: int = cx + dv.x
 			var nz: int = cz + dv.y
 			if tile_solid(nx, nz):
+				continue
+			if has_levels and not step_ok(cx, cz, dv):
 				continue
 			var ni := idx(nx, nz)
 			if prev[ni] != -2:
@@ -1783,13 +2008,13 @@ func _build_doors() -> void:
 					door.coord = (x + 1) * T
 					door.lo = z * T
 					door.hi = (z + 1) * T
-					door.pos = Vector3(door.coord, 0, (z + 0.5) * T)
+					door.pos = Vector3(door.coord, tile_top(x, z), (z + 0.5) * T)
 				else:
 					door.axis = 1
 					door.coord = (z + 1) * T
 					door.lo = x * T
 					door.hi = (x + 1) * T
-					door.pos = Vector3((x + 0.5) * T, 0, door.coord)
+					door.pos = Vector3((x + 0.5) * T, tile_top(x, z), door.coord)
 				door.pos.y = minf(ground_y(door.pos.x - 0.1 * d.x, door.pos.z - 0.1 * d.y), ground_y(door.pos.x + 0.1 * d.x, door.pos.z + 0.1 * d.y))
 				# 안쪽(실내) 방향: 문은 안쪽으로 열림
 				door.inward = Vector3(d.x, 0, d.y) * (1.0 if b != A_OUT else -1.0)

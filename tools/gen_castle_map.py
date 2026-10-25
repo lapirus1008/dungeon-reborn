@@ -6,6 +6,9 @@
   ,  야외 (숲/안뜰, 천장 없음)    T  나무 (야외, 지나갈 수 없음)
   r  야외 폐허 기둥               c  성당 실내 바닥 (높은 천장)
   P  성당 기둥                    p  실내 기둥
+높낮이 ("levels", 칸마다 한 글자): 0 땅 · 1~9 층(×2.5m) · a~d 지하 1~4층 · > < v ^ 계단(그 방향으로 오름)
+  해자(-2.5m)와 다리, 성벽 위 길(+5m, 성문 옆 계단), 높은 본성(+2.5m, 큰 계단), 가라앉은 훈련장,
+  숲의 폐허 언덕(+2.5m), 성당 제단(+2.5m), 성당 지하 묘지(-5m, 성당과 숲으로 이어짐)
 실행: python3 tools/gen_castle_map.py  →  godot/assets/maps/clouseau_castle.json
 """
 import json, random, os
@@ -13,6 +16,17 @@ import json, random, os
 W = H = 72
 rnd = random.Random(1207)
 g = [['#'] * W for _ in range(H)]
+L = [['0'] * W for _ in range(H)]   # 높낮이
+no_tree = set()                       # 나무를 심지 않을 칸 (해자·계단·높은 곳)
+
+
+def lv(x0, z0, x1, z1, ch, floor=None):
+    for z in range(z0, z1 + 1):
+        for x in range(x0, x1 + 1):
+            L[z][x] = ch
+            no_tree.add((x, z))
+            if floor is not None:
+                g[z][x] = floor
 
 
 def fill(x0, z0, x1, z1, ch):
@@ -123,6 +137,84 @@ fill(15, 66, 17, 66, 'c')         # 남쪽 정문
 fill(26, 53, 26, 53, 'c')         # 동쪽 옆문
 fill(6, 53, 6, 53, 'c')           # 서쪽 옆문
 
+# 3.5) 높낮이
+# 해자: 성 서쪽·남쪽 바깥 2칸, 2.5m 아래 (정문·뒷문 앞은 다리)
+for z in range(3, 63):
+    for x in (32, 33):
+        g[z][x] = ','
+        L[z][x] = 'a'
+        no_tree.add((x, z))
+for x in range(32, 71):
+    for z in (61, 62):
+        g[z][x] = ','
+        L[z][x] = 'a'
+        no_tree.add((x, z))
+lv(32, 30, 33, 31, '0')                 # 정문 다리
+lv(50, 61, 53, 62, '0')                 # 뒷문 다리
+for z in (12, 13, 47, 48):              # 해자에서 숲으로 올라가는 계단
+    lv(32, z, 32, z, '<')
+for x in (40, 41, 64, 65):
+    lv(x, 62, x, 62, 'v')
+    no_tree.add((x, 63))
+# 성벽 위 길 (+5m): 성벽 바로 안쪽 한 바퀴, 정문·뒷문 옆에서 계단으로 내려옴
+lv(35, 5, 35, 25, '2', ',')              # 서쪽 (정문 북쪽)
+lv(35, 26, 35, 28, '^', ',')
+lv(35, 29, 35, 32, '0', ',')             # 정문 안쪽은 땅
+lv(35, 33, 35, 35, 'v', ',')
+lv(35, 36, 35, 59, '2', ',')             # 서쪽 (정문 남쪽)
+lv(35, 5, 68, 5, '2', ',')               # 북쪽
+lv(68, 5, 68, 59, '2', ',')              # 동쪽
+lv(35, 59, 45, 59, '2', ',')             # 남쪽 (뒷문 서쪽)
+lv(46, 59, 48, 59, '<', ',')
+lv(49, 59, 52, 59, '0', ',')             # 뒷문 안쪽은 땅
+lv(53, 59, 55, 59, '>', ',')
+lv(56, 59, 68, 59, '2', ',')
+# 본성: 2.5m 높은 단 위, 문마다 큰 계단
+for z in range(13, 50):
+    for x in range(48, 68):
+        if g[z][x] != '#':
+            L[z][x] = '1'
+lv(45, 30, 47, 32, '>', ',')             # 서쪽 큰 계단 (안뜰 → 큰 홀)
+lv(56, 10, 57, 12, 'v', ',')             # 북쪽 계단
+lv(58, 50, 59, 52, '^', ',')             # 남쪽 계단
+# 가라앉은 훈련장 (안뜰, 2.5m 아래)
+lv(39, 35, 45, 41, 'a', ',')
+lv(41, 35, 42, 35, '^')
+lv(41, 41, 42, 41, 'v')
+# 숲 북서쪽 폐허 언덕 (+2.5m)
+lv(7, 7, 13, 13, '1')
+lv(9, 14, 11, 14, '^')
+lv(14, 9, 14, 11, '<')
+lv(6, 9, 6, 11, '>')
+# 성당 제단 (+2.5m, 계단 한 칸)
+lv(14, 43, 18, 44, '1')
+lv(14, 45, 18, 45, '^')
+# 성당 지하 묘지 (-5m): 성당 서쪽 익랑에서 계단으로 내려가고, 북쪽 숲으로 올라가는 출구
+fill(5, 33, 26, 40, '#')
+fill(6, 34, 24, 39, '.')
+for x in (11, 18):                        # 묘실 칸막이 + 문
+    for z in range(34, 40):
+        g[z][x] = '#'
+    g[36][x] = g[37][x] = '.'
+for z in (35, 38):                        # 묘지 기둥
+    for x in (8, 14, 21):
+        g[z][x] = 'p'
+lv(6, 34, 24, 39, 'b')
+fill(8, 40, 11, 49, '#')                  # 성당으로 가는 지하 통로
+fill(9, 40, 10, 46, '.')
+lv(9, 40, 10, 46, 'b')
+fill(9, 47, 10, 49, 'c')
+lv(9, 47, 10, 49, 'v')                    # 통로 → 익랑 계단
+g[50][9] = g[50][10] = 'c'                # 익랑 북쪽 벽 입구
+fill(19, 29, 22, 33, '#')                 # 숲으로 올라가는 출구
+fill(20, 30, 21, 33, '.')
+lv(20, 33, 21, 33, 'b')
+lv(20, 30, 21, 32, '^')
+g[29][20] = g[29][21] = ','              # 출구 앞 숲
+for x in range(18, 24):
+    no_tree.add((x, 28))
+    no_tree.add((x, 29))
+
 # 4) 숲: 길과 빈터를 비우고 나무를 흩뿌림
 clear = set()
 
@@ -161,7 +253,7 @@ for x, z in [(8, 8), (12, 8), (8, 12), (12, 12)]:
 forest = lambda x, z: not (CX0 <= x <= CX1 and CZ0 <= z <= CZ1) and not (5 <= x <= 27 and 41 <= z <= 67)
 for z in range(1, H - 1):
     for x in range(1, W - 1):
-        if g[z][x] != ',' or (x, z) in clear:
+        if g[z][x] != ',' or (x, z) in clear or (x, z) in no_tree:
             continue
         if forest(x, z):
             if rnd.random() < 0.24:
@@ -200,20 +292,26 @@ marks = {
 }
 decor = {
     # 성 모서리/정문 탑 (타일 좌표, 반지름 m, 높이 m)
-    "towers": [[CX0, CZ0, 4.5, 20], [CX1, CZ0, 4.5, 20], [CX0, CZ1, 4.5, 20], [CX1, CZ1, 4.5, 20],
-               [CX0, 28, 3.5, 16], [CX0, 33, 3.5, 16], [48, 13, 4.0, 26], [67, 13, 4.0, 26], [48, 49, 4.0, 26], [67, 49, 4.0, 26]],
+    "towers": [[CX0, CZ0, 3.2, 20], [CX1, CZ0, 3.2, 20], [CX0, CZ1, 3.2, 20], [CX1, CZ1, 3.2, 20],
+               [CX0, 28, 2.8, 16], [CX0, 33, 2.8, 16], [48, 13, 4.0, 26], [67, 13, 4.0, 26], [48, 49, 4.0, 26], [67, 49, 4.0, 26]],
     "keep": [48, 13, 67, 49],
     "curtain": [CX0, CZ0, CX1, CZ1],
     "cathedral": [12, 42, 20, 66],
     "transept": [6, 50, 26, 56],
     "spire": [16, 66],
-    "wall_h": {"castle": 12.0, "keep": 16.0, "cathedral": 10.0},
+    "wall_h": {"castle": 6.5, "keep": 16.0, "cathedral": 10.0},
     # 불빛: [x, z, 종류] — brazier 화로(바닥), chandelier 샹들리에(천장)
     "lights": [[36, 28, "brazier"], [36, 33, "brazier"], [46, 29, "brazier"], [46, 33, "brazier"], [52, 51, "brazier"], [44, 18, "brazier"],
                [54, 31, "chandelier"], [60, 31, "chandelier"], [16, 60, "chandelier"], [16, 53, "chandelier"], [16, 47, "chandelier"],
-               [10, 10, "brazier"], [20, 28, "brazier"], [16, 69, "brazier"], [29, 31, "brazier"]],
+               [10, 10, "brazier"], [20, 27, "brazier"], [16, 69, "brazier"], [29, 31, "brazier"],
+               [9, 36, "brazier"], [15, 34, "brazier"], [22, 37, "brazier"], [16, 44, "brazier"]],
 }
-out = {"name": "clouseau_castle", "w": W, "h": H, "rows": [''.join(r) for r in g], **marks, "decor": decor}
+# 벽 칸의 높낮이는 의미 없음 (0으로)
+for z in range(H):
+    for x in range(W):
+        if g[z][x] == '#':
+            L[z][x] = '0'
+out = {"name": "clouseau_castle", "w": W, "h": H, "rows": [''.join(r) for r in g], "levels": [''.join(r) for r in L], **marks, "decor": decor}
 p = os.path.join(os.path.dirname(__file__), '..', 'godot', 'assets', 'maps', 'clouseau_castle.json')
 json.dump(out, open(p, 'w'), ensure_ascii=False, indent=0)
 print('ok', p)

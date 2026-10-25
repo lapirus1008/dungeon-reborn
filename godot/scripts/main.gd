@@ -118,6 +118,8 @@ func _ready() -> void:
 		_autotest.call_deferred()
 	elif args.has("--swingshots"):
 		_swingshots.call_deferred(args[args.find("--swingshots") + 1])
+	elif args.has("--levelshots"):
+		_levelshots.call_deferred(args[args.find("--levelshots") + 1])
 	elif args.has("--mobshots"):
 		_mobshots.call_deferred(args[args.find("--mobshots") + 1])
 	elif args.has("--moodshots"):
@@ -855,6 +857,39 @@ func _swingshots(dir: String) -> void:
 
 
 # 1인칭 손/방어/반격 빛/투척 포물선/횃불 화면 확인용
+# 높낮이 확인용: 클루조 성 곳곳 (타일 x, z, 보는 방향 dx, dz, 고개 각도)
+func _levelshots(dir: String) -> void:
+	await get_tree().create_timer(0.5).timeout
+	SaveData.data.settings["quality"] = "high"
+	apply_quality("high")
+	_test_char("fighter")
+	start_raid("clouseau_castle")
+	game.force_act = true
+	await get_tree().create_timer(1.5).timeout
+	var g := game
+	var p := g.player
+	p.invuln = 999.0
+	p.toggle_torch()
+	var views := [
+		["keep_stairs", 40, 31, 1, 0, 0.12], ["wall_walk", 35, 16, 0.4, 1, -0.25], ["moat", 30, 22, 1, 0.3, -0.05],
+		["gate_bridge", 28, 31, 1, 0, 0.0], ["crypt", 22, 36, -1, 0, 0.0], ["altar", 16, 54, 0, -1, 0.1],
+		["ruin_hill", 18, 10, -1, 0, 0.0], ["pit", 43, 33, 0, 1, -0.3],
+	]
+	for v in views:
+		for a in g.actors:
+			if a != p and a.alive:
+				a.stun = 999.0
+				if a.pos.distance_to(g.dungeon.center(v[1], v[2])) < 14.0:
+					a.pos = Vector3(-1000, 0, -1000) # 화면을 가리지 않게
+		p.pos = g.dungeon.center(v[1], v[2])
+		p.vy = 0.0
+		p.yaw = Actor.yaw_to(float(v[3]), float(v[4]))
+		p.pitch = float(v[5])
+		await get_tree().create_timer(1.0).timeout
+		await _shot(dir, "lv_" + str(v[0]))
+	get_tree().quit()
+
+
 # 로비에 있는 동안 캐릭터 모델·동작을 한 종류씩 미리 불러 둠 (레이드 시작 때 멈춤 방지)
 func _warmup_models() -> void:
 	if DisplayServer.get_name() == "headless":
@@ -2291,7 +2326,24 @@ func _inv_checks() -> Array:
 	var hmax := 0.0
 	for i in cd.hv.size():
 		hmax = maxf(hmax, cd.hv[i])
-	ok.call("성 지도 높낮이 (숲 언덕 최고 %.1fm, 성 안 %.1fm)" % [hmax, cd.ground_y(56 * 4.0, 31 * 4.0)], hmax > 1.0 and absf(cd.ground_y(56 * 4.0, 31 * 4.0)) < 0.01)
+	ok.call("성 지도 언덕 (숲 언덕 최고 %.1fm)" % hmax, hmax > 1.0)
+	# 높낮이 지도: 본성 단 2.5m · 성벽 위 길 5m · 해자 -2.5m · 지하 묘지 -5m · 계단 중간
+	var tg := func(x: float, z: float) -> float: return cd.ground_y((x + 0.5) * 4.0, (z + 0.5) * 4.0)
+	var lv_ok: bool = absf(tg.call(56, 31) - 2.5) < 0.01 and absf(tg.call(35, 10) - 5.0) < 0.01 and absf(tg.call(33, 20) + 2.5) < 0.01 and absf(tg.call(14, 36) + 5.0) < 0.01
+	var mid: float = tg.call(35, 27)
+	# 안뜰(0m)에서 성벽 위 길(5m)로 바로 올라가지 못함 → 밀려남, 길 위에서 안뜰로는 뛰어내릴 수 있음
+	var up := cd.resolve_circle(Vector3(35 * 4.0 + 4.1, 0.0, 20.5 * 4.0), 0.4)
+	var blocked: bool = up.x >= 36 * 4.0 + 0.39
+	var down := cd.resolve_circle(Vector3(36 * 4.0 + 0.2, 5.0, 20.5 * 4.0), 0.4)
+	var drop_ok: bool = down.x < 36 * 4.0 + 0.3
+	# 길 찾기: 안뜰 → 성벽 위는 계단을 돌아서 감
+	var pth := cd.path(Vector3(38.5 * 4.0, 0, 29.5 * 4.0), Vector3(35.5 * 4.0, 5.0, 20.5 * 4.0))
+	var via := false
+	for wp in pth:
+		if cd.to_tile(wp.x) == 35 and cd.to_tile(wp.z) >= 26 and cd.to_tile(wp.z) <= 29:
+			via = true
+	ok.call("높낮이 (본성 %.1f · 성벽 위 %.1f · 해자 %.1f · 묘지 %.1f · 계단 중간 %.1fm), 안뜰에서 성벽 위로 바로 못 오름 %s, 뛰어내리기 %s, 계단으로 돌아가는 길 %s" % [tg.call(56, 31), tg.call(35, 10), tg.call(33, 20), tg.call(14, 36), mid, blocked, drop_ok, via],
+		lv_ok and mid > 0.5 and mid < 4.5 and blocked and drop_ok and via)
 	ok.call("성 지도 (야외 %s, 성당 %s, 시작 위치 %s, 나무 충돌 %s, 큰 홀·성당까지 길 %s)" % [cd.has_outdoor, cd.area_at(16, 58) == Dungeon.A_CATH, sp_ok, pushed.distance_to(tc) > 1.0, reach],
 		cd.has_outdoor and cd.area_at(16, 58) == Dungeon.A_CATH and sp_ok and pushed.distance_to(tc) > 1.0 and reach)
 	# 효과음: 중세풍 파일(변형 포함)을 쓰고, 같은 소리를 순간에 여러 번 부르면 한 번만
