@@ -32,6 +32,7 @@ var blast: Array = [] # 악마의 눈 마법진 [위치, 남은 시간]
 var bob := 0.0
 var summoned := false # 미믹 플라스크로 불러낸 내 편 미믹 (전리품 없음)
 var life := -1.0
+var stay_r := 0.0 # 옥상 네임드: 집 근처(같은 높이)에서만 서성임
 
 
 func _init(g, t: String, p: Vector3, room: Dictionary, depth_mul := 1.0) -> void:
@@ -248,7 +249,16 @@ func _wander(dt: float) -> void:
 	if wander_goal == null or wander_t <= 0.0:
 		wander_t = randf_range(3.0, 8.0)
 		wander_goal = null if randf() < 0.4 else game.dungeon.random_point_in_room(home, 1)
-		if pos.distance_to(home_pos) > 20.0:
+		if stay_r > 0.0:
+			wander_goal = null
+			if randf() < 0.6:
+				var g: Vector3 = home_pos + Vector3(randf_range(-stay_r, stay_r), 0, randf_range(-stay_r, stay_r))
+				g.y = game.dungeon.ground_y(g.x, g.z)
+				if not game.dungeon.is_solid(g.x, g.z) and absf(g.y - home_pos.y) < 0.3:
+					wander_goal = g
+			if pos.distance_to(home_pos) > stay_r + 2.0:
+				wander_goal = home_pos
+		elif pos.distance_to(home_pos) > 20.0:
 			wander_goal = home_pos
 	if wander_goal != null:
 		if nav_to(wander_goal, def.speed * 0.4, dt, 0.8):
@@ -261,7 +271,7 @@ func _fight(dt: float) -> void:
 	var tg = target
 	var dx: float = tg.pos.x - pos.x
 	var dz: float = tg.pos.z - pos.z
-	var d := sqrt(dx * dx + dz * dz)
+	var d := maxf(sqrt(dx * dx + dz * dz), 0.001) # 같은 자리에 겹쳐도 0으로 나누지 않게
 	var seen: bool = game.dungeon.los(pos.x, pos.z, tg.pos.x, tg.pos.z)
 	lost_t = 0.0 if seen else lost_t + dt
 	if lost_t > 7.0 or d > 45.0:

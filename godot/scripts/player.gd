@@ -70,6 +70,9 @@ var last_guard := -10.0
 var psi_rmb := true
 var combo_i := 0 # 로그 단검: 다음 찌르기 손 (0 = 오른손, 1 = 왼손)
 var heavy_t := -1.0 # 근접 좌클릭을 누르고 있는 시간 (강공격 준비, -1 = 안 누름)
+var plunge := false # 덮치기: 높은 곳에서 떨어지는 중 좌클릭 → 착지하며 내려찍기
+var fall_top := 0.0 # 공중에 뜬 뒤 가장 높았던 곳 (떨어진 높이 계산)
+var land_t := 0.0 # 덮치기 착지 후 잠깐 경직
 var staff_charging := false # R을 누르고 있어 지팡이 에너지 충전 중
 var combo_t := 0.0
 var staff_item = null # 지금 든 지팡이·오브 (충전량은 무기마다 따로 저장: item.staff_e)
@@ -500,12 +503,24 @@ func _movement(dt: float, locked: bool, can_act: bool) -> void:
 		vy = 6.2
 	vy -= 20.0 * dt
 	pos.y = pos.y + vy * dt
+	var airborne := pos.y > gy + 0.01
 	if pos.y <= gy:
 		pos.y = gy
 		vy = 0.0
+		airborne = false
 	elif vy <= 0.0 and pos.y - gy < 0.35:
 		pos.y = gy # 완만한 내리막은 바로 붙어서 걸음
 		vy = 0.0
+		airborne = false
+	if airborne:
+		fall_top = maxf(fall_top, pos.y)
+	else:
+		if plunge:
+			if game.net == "client":
+				plunge = false # 피해는 서버가 계산
+			else:
+				_plunge_land(fall_top - pos.y)
+		fall_top = pos.y
 
 	stamina = 100.0
 	exhausted = false
@@ -522,8 +537,49 @@ func _start_swing(prof: Dictionary, bash := false) -> void:
 		game.notify(self, "swing", [swing_side, bash, prof.dur, prof.hit_at])
 
 
+# 덮치기 착지: 떨어진 높이만큼 강한 내려찍기 (주변 적 모두, 기절)
+const PLUNGE_MIN := 1.6 # 이만큼 위에 떠 있어야 덮치기 가능 (m)
+
+
+func _plunge_land(drop: float) -> void:
+	plunge = false
+	land_t = 0.35
+	var prof := Skills.melee_profile(self)
+	var dmg: float = prof.dmg * dmg_mul() * (1.6 + clampf(drop, 0.0, 8.0) * 0.2)
+	var hit_any := false
+	for a in game.actors:
+		if a == self or not a.alive or a.extracted or not game.hostile(self, a):
+			continue
+		var dx: float = a.pos.x - pos.x
+		var dz: float = a.pos.z - pos.z
+		var d := sqrt(dx * dx + dz * dz)
+		if d > 2.4 + a.radius or absf(a.pos.y - pos.y) > 1.6:
+			continue
+		var nd := maxf(d, 0.001)
+		game.hit(self, a, dmg, {"from": pos, "knock": Vector3(dx / nd * 6.0, 0, dz / nd * 6.0), "weapon": true, "melee": true})
+		a.add_stun(1.2)
+		hit_any = true
+	game.spawn_ring_burst(pos + Vector3(0, 0.15, 0), Color(0.75, 0.68, 0.55, 0.8), 2.6)
+	game.sfx("hit" if hit_any else "drop", pos)
+	shake = maxf(shake, 0.7 if hit_any else 0.35)
+	if hit_any:
+		game.notify(self, "toast", ["덮치기!"])
+
+
 func _combat(dt: float, act: bool) -> void:
 	var melee := Skills.is_melee(self)
+	land_t = maxf(0.0, land_t - dt)
+	# 덮치기: 떨어지는 중(발밑이 1.6m 이상 아래)에 근접 무기로 좌클릭 → 착지할 때 내려찍기
+	if plunge or land_t > 0.0:
+		heavy_t = -1.0
+		blocking = false
+		return
+	if melee and not panther and act and held == "" and inp.just_pressed("attack") and swing == null and vy < 0.5 \
+			and pos.y - game.dungeon.ground_y(pos.x, pos.z) >= PLUNGE_MIN:
+		plunge = true
+		heavy_t = -1.0
+		game.sfx("swing", pos)
+		return
 	# 화염 폭발을 모으는 중·대기 중에는 좌클릭/우클릭이 시전/취소로만 쓰임
 	var pyro_lock := pyro_ready > 0 or (hold_q >= 0.0 and Skills.skill_id(self, "q") == "pyro_pyroblast")
 	var rmb_pressed := act and inp.just_pressed("secondary") and not pyro_lock
@@ -1066,7 +1122,7 @@ func net_state() -> Dictionary:
 		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion, cd.util, cd.flask],
 		"chg": charges, "hold": [hold_q, hold_e],
 		"s": [stun, slow, root, stealth, frozen, parry, immune, dr, spin_t, channel_t, charge_t, cast],
-		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "chr": channel_ready, "dw": draw_t, "ld": active_crossbow() != null and active_crossbow().get("loaded", false), "rl": reload_t, "ct": counter_t, "dk": drink_t, "dkm": drink_max, "dkk": drink_kind, "mf": mimic_form,
+		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "chr": channel_ready, "dw": draw_t, "ld": active_crossbow() != null and active_crossbow().get("loaded", false), "rl": reload_t, "ct": counter_t, "dk": drink_t, "dkm": drink_max, "dkk": drink_kind, "mf": mimic_form, "pl": plunge,
 		"k": [kills, pvp_kills], "ch": ch,
 	}
 
@@ -1090,6 +1146,7 @@ func apply_net_state(d: Dictionary) -> void:
 	net_staff_max = d.get("sx", 0.0)
 	staff_charging = d.get("scg", false)
 	pyro_ready = d.get("pr", 0)
+	plunge = d.get("pl", false)
 	if absf(stamina - d.sta) > 4.0:
 		stamina = d.sta
 	exhausted = d.ex

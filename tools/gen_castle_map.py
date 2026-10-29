@@ -215,6 +215,35 @@ for x in range(18, 24):
     no_tree.add((x, 28))
     no_tree.add((x, 29))
 
+# 3.6) 옥상에 올라갈 수 있는 건물 (+5m): 안은 막혀 있고 지붕 위가 평평한 옥상.
+#      나무판자 경사로나 돌계단으로만 올라가며, 옥상에는 네임드 몬스터. 옥상 가장자리 어디서든 뛰어내릴 수 있음
+roofs = []
+planks = []
+
+
+def roof(x0, z0, x1, z1):
+    fill(x0, z0, x1, z1, ',')
+    lv(x0, z0, x1, z1, '2')
+    roofs.append([x0, z0, x1, z1])
+
+
+# 안뜰 창고 옥상: 동쪽 나무판자 경사로 (서쪽은 성벽 위 길과 바로 이어짐)
+roof(36, 22, 42, 27)
+lv(43, 23, 45, 24, '<', ',')
+planks.append([43, 23, 45, 24])
+# 숲 속 망루 집: 남쪽 돌계단
+roof(23, 13, 28, 17)
+lv(25, 18, 26, 20, '^', ',')
+# 성당 옆 무너진 집: 동쪽 나무판자 경사로
+roof(22, 57, 26, 61)
+lv(27, 59, 29, 60, '<', ',')
+planks.append([27, 59, 29, 60])
+for x in range(21, 31):
+    for z in range(12, 26):
+        no_tree.add((x, z))
+    for z in range(56, 63):
+        no_tree.add((x, z))
+
 # 4) 숲: 길과 빈터를 비우고 나무를 흩뿌림
 clear = set()
 
@@ -289,6 +318,7 @@ marks = {
     "shrines": [near_walk(16, 44), near_walk(20, 28)],
     "stones": [near_walk(x, z) for x, z in [(10, 10), (40, 32), (58, 31), (16, 60), (30, 55)]],
     "exits": [near_walk(x, z) for x, z in [(6, 6), (66, 57), (24, 66)]],
+    "roofs": [[39, 24], [25, 15], [24, 59]],
 }
 decor = {
     # 성 모서리/정문 탑 (타일 좌표, 반지름 m, 높이 m)
@@ -300,6 +330,8 @@ decor = {
     "transept": [6, 50, 26, 56],
     "spire": [16, 66],
     "wall_h": {"castle": 6.5, "keep": 16.0, "cathedral": 10.0},
+    "roofs": roofs,
+    "planks": planks,
     # 불빛: [x, z, 종류] — brazier 화로(바닥), chandelier 샹들리에(천장)
     "lights": [[36, 28, "brazier"], [36, 33, "brazier"], [46, 29, "brazier"], [46, 33, "brazier"], [52, 51, "brazier"], [44, 18, "brazier"],
                [54, 31, "chandelier"], [60, 31, "chandelier"], [16, 60, "chandelier"], [16, 53, "chandelier"], [16, 47, "chandelier"],

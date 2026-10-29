@@ -522,6 +522,9 @@ func tick_common(dt: float) -> void:
 		pos = game.dungeon.resolve_circle(pos, radius)
 
 
+var fall_v := 0.0
+
+
 func move(dx: float, dz: float, dt: float) -> void:
 	if root > 0.0 or frozen > 0.0:
 		return
@@ -529,7 +532,14 @@ func move(dx: float, dz: float, dt: float) -> void:
 	pos.z += dz * dt
 	pos = game.dungeon.resolve_circle(pos, radius)
 	if kind != "player":
-		pos.y = game.dungeon.ground_y(pos.x, pos.z) # 몬스터·AI는 언덕을 따라감
+		# 몬스터·AI는 언덕을 따라감. 높은 곳(옥상·성벽)에서 걸어 나가면 떨어짐
+		var gy: float = game.dungeon.ground_y(pos.x, pos.z)
+		if pos.y - gy > 0.6:
+			fall_v += 20.0 * dt
+			pos.y = maxf(gy, pos.y - fall_v * dt)
+		else:
+			pos.y = gy
+			fall_v = 0.0
 
 
 func update(_dt: float) -> void:

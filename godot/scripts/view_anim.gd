@@ -79,6 +79,15 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 			if Skills.wcat(p) in Data.TWO_HANDED:
 				L.position = R.position + R.basis * Vector3(-0.02, -0.11, 0.07)
 				L.rotation = R.rotation
+	# 덮치기: 떨어지는 동안 무기를 머리 위로 높이 들어 내려찍을 준비
+	if p.get("plunge") == true and p.swing == null and p.get("held") == "":
+		R.position = R0 + Vector3(-0.1, 0.34, 0.12)
+		R.rotation = Vector3(1.25, 0.25, -0.35)
+		if Skills.wcat(p) in Data.TWO_HANDED:
+			L.position = R.position + R.basis * Vector3(-0.02, -0.11, 0.07)
+			L.rotation = R.rotation
+		else:
+			L.position = L0 + Vector3(0.06, 0.12, 0.05)
 	# 지팡이 충전(R): 지팡이를 세우고, 왼손을 내밀어 손바닥의 마나(파란 빛)가 지팡이 머리로 흘러 들어감
 	_mana_fx(vm, p.get("staff_charging") == true, t)
 	if p.get("staff_charging") == true:

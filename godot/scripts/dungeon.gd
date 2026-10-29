@@ -36,7 +36,7 @@ var has_outdoor := false
 var wild := PackedByteArray() # 지도 가장자리와 이어진 바위/숲 (벽 대신 나무로 그림)
 var static_blocks: Array = [] # 탑·의자 등 고정 원형 장애물 [[pos, radius]]
 # 지도 표식 (타일 좌표 Vector2i): spawns 시작 위치, shrines 성소, stones 부활석, exits 고정 탈출구, descent 아래층 계단
-var marks := {"spawns": [], "shrines": [], "stones": [], "exits": [], "descent": []}
+var marks := {"spawns": [], "shrines": [], "stones": [], "exits": [], "descent": [], "roofs": []}
 # 높낮이 (2.5D): 칸마다 바닥 높이. 계단 칸은 한쪽 끝에서 다른 끝까지 비스듬히 오름.
 # 올라가는 것은 계단으로만(한 번에 STEP까지), 내려가는 것은 어디서든 (턱에서 뛰어내리기)
 const LEVEL_H := 2.5
@@ -854,6 +854,7 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 	var merlons := []
 	var plinths := {} # 높은 칸 아래 돌 받침: 높이 -> 변환
 	var steps_x := [] # 계단 디딤돌 (단위 상자를 늘려 씀)
+	_house = {"plinth": {}, "beam": [], "window": [], "deck": [], "slat": [], "post": [], "floor": []}
 	var tree_x := [] # [위치, 크기, 종류]
 	var bush_x := []
 	var curtain: Array = decor.get("curtain", [])
@@ -875,7 +876,9 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 						elif a == A_CATH:
 							cath_ceils.append(Transform3D(Basis(Vector3.RIGHT, PI), Vector3(c.x, maxf(cath_h, fl + WALL_H), c.z)))
 						continue
-				if a == A_OUT:
+				if a == A_OUT and _in_roof(x, z):
+					_house.floor.append(fxf) # 옥상 바닥: 나무 널빤지
+				elif a == A_OUT:
 					if _in_rect(curtain, x, z):
 						yard_floors.append(fxf)
 					else:
@@ -1044,6 +1047,7 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 		pb.size = Vector3(T, ph, T)
 		pb.material = _mat(wall_tex, _wall_uv(ph))
 		root.add_child(_multimesh(pb, plinths[ph]))
+	_build_house(wall_tex)
 	if steps_x.size():
 		var sb := BoxMesh.new()
 		sb.size = Vector3.ONE
@@ -1372,11 +1376,15 @@ func _level_geometry(x: int, z: int, plinths: Dictionary, steps_x: Array) -> voi
 		var n: Vector2i = Vector2i(x, z) + d
 		if get_t(n.x, n.y) != EMPTY:
 			lowest = minf(lowest, floor_h[idx(n.x, n.y)])
+	var house := _in_roof(x, z)
 	if fl > lowest + 0.01:
 		var ph := snappedf(fl - lowest, 0.05)
-		if not plinths.has(ph):
-			plinths[ph] = []
-		plinths[ph].append(Transform3D(Basis(), Vector3(c.x, fl - ph / 2.0 - 0.015, c.z)))
+		var pl: Dictionary = _house.plinth if house else plinths
+		if not pl.has(ph):
+			pl[ph] = []
+		pl[ph].append(Transform3D(Basis(), Vector3(c.x, fl - ph / 2.0 - 0.015, c.z)))
+	if house:
+		_house_trim(x, z, c, fl)
 	# 실내 천장 높이가 이웃보다 높으면 그 사이를 벽으로 막음 (천장 틈새)
 	if area_at(x, z) == A_IN:
 		var my_c := tile_top(x, z) + WALL_H
@@ -1393,6 +1401,9 @@ func _level_geometry(x: int, z: int, plinths: Dictionary, steps_x: Array) -> voi
 		return
 	var rise := ramp_rise[i]
 	var d: Vector2i = RAMP_V[rd]
+	if _in_any(decor.get("planks", []), x, z):
+		_plank_ramp(c, fl, rise, Vector3(d.x, 0, d.y), lowest)
+		return
 	var n_steps := maxi(2, roundi(absf(rise) / 0.3))
 	var dir3 := Vector3(d.x, 0, d.y)
 	for k in n_steps:
@@ -1402,6 +1413,107 @@ func _level_geometry(x: int, z: int, plinths: Dictionary, steps_x: Array) -> voi
 		var pos := c + dir3 * (along * T) + Vector3(0, top - hgt / 2.0, 0)
 		var size := Vector3(T if d.x == 0 else T / n_steps, hgt, T if d.y == 0 else T / n_steps)
 		steps_x.append(Transform3D(Basis().scaled(size), pos))
+
+
+var _house := {} # 옥상 건물 조각들 (build 중에만 씀)
+
+
+func _build_house(wall_tex: Array) -> void:
+	if _house.is_empty():
+		return
+	var wood0 := StandardMaterial3D.new()
+	wood0.albedo_texture = Textures.wood()
+	var wood := _pbr_or("wood", wood0, Vector3(1, 1, 1))
+	var dark := wood.duplicate()
+	dark.albedo_color = Color(0.45, 0.36, 0.3)
+	for ph in _house.plinth:
+		var pb := BoxMesh.new()
+		pb.size = Vector3(T, ph, T)
+		pb.material = _mat(wall_tex, _wall_uv(ph), Color(0.92, 0.88, 0.8))
+		root.add_child(_multimesh(pb, _house.plinth[ph]))
+	var unit := func(m: Material) -> BoxMesh:
+		var b := BoxMesh.new()
+		b.size = Vector3.ONE
+		b.material = m
+		return b
+	if _house.beam.size():
+		root.add_child(_multimesh(unit.call(dark), _house.beam))
+	if _house.deck.size():
+		root.add_child(_multimesh(unit.call(wood), _house.deck))
+	if _house.slat.size():
+		root.add_child(_multimesh(unit.call(dark), _house.slat))
+	if _house.post.size():
+		root.add_child(_multimesh(unit.call(dark), _house.post))
+	if _house.window.size():
+		var wm := StandardMaterial3D.new()
+		wm.albedo_color = Color(0.02, 0.02, 0.025)
+		wm.roughness = 0.4
+		root.add_child(_multimesh(unit.call(wm), _house.window))
+	if _house.floor.size():
+		var fm := PlaneMesh.new()
+		fm.size = Vector2(T, T)
+		fm.material = _pbr_or("wood", wood0, Vector3(2, 2, 1), Color(0.8, 0.72, 0.64))
+		root.add_child(_multimesh(fm, _house.floor))
+	_house = {}
+
+
+func _in_any(rects: Array, x: int, z: int) -> bool:
+	for r in rects:
+		if _in_rect(r, x, z):
+			return true
+	return false
+
+
+func _in_roof(x: int, z: int) -> bool:
+	return not decor.is_empty() and _in_any(decor.get("roofs", []), x, z)
+
+
+# 옥상 건물 바깥면: 지붕 바로 아래 나무 들보 띠, 모서리 기둥, 창문
+func _house_trim(x: int, z: int, c: Vector3, fl: float) -> void:
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var n: Vector2i = Vector2i(x, z) + d
+		if _in_roof(n.x, n.y):
+			continue
+		var nf := floor_h[idx(n.x, n.y)] if n.x >= 0 and n.y >= 0 and n.x < W and n.y < H else 0.0
+		if fl - nf < 1.0:
+			continue
+		var out := Vector3(d.x, 0, d.y)
+		var along := Vector3(absf(d.y), 0, absf(d.x))
+		var face := c + out * (T / 2.0)
+		_house.beam.append(Transform3D(Basis().scaled(along * T + Vector3(absf(d.x), 0, absf(d.y)) * 0.3 + Vector3(0, 0.35, 0)), face + out * 0.1 + Vector3(0, fl - 0.25, 0)))
+		_house.beam.append(Transform3D(Basis().scaled(along * T + Vector3(absf(d.x), 0, absf(d.y)) * 0.25 + Vector3(0, 0.25, 0)), face + out * 0.08 + Vector3(0, nf + (fl - nf) * 0.45, 0)))
+		# 모서리 기둥 (이 면의 왼쪽 끝이 건물 모서리일 때)
+		var side := Vector2i(int(along.x), int(along.z))
+		if not _in_roof(x - side.x, z - side.y):
+			_house.beam.append(Transform3D(Basis().scaled(Vector3(0.35, fl - nf, 0.35)), face - along * (T / 2.0 - 0.1) + out * 0.1 + Vector3(0, (fl + nf) / 2.0, 0)))
+		if not _in_roof(x + side.x, z + side.y):
+			_house.beam.append(Transform3D(Basis().scaled(Vector3(0.35, fl - nf, 0.35)), face + along * (T / 2.0 - 0.1) + out * 0.1 + Vector3(0, (fl + nf) / 2.0, 0)))
+		if (x + z) % 2 == 0 and fl - nf >= 3.0:
+			_house.window.append(Transform3D(Basis().scaled(along * 0.9 + Vector3(absf(d.x), 0, absf(d.y)) * 0.12 + Vector3(0, 1.1, 0)), face + out * 0.04 + Vector3(0, nf + (fl - nf) * 0.72, 0)))
+
+
+# 나무판자 경사로: 기울어진 널빤지 + 가로 발판 + 받침 기둥 + 양옆 난간
+func _plank_ramp(c: Vector3, fl: float, rise: float, dir3: Vector3, lowest: float) -> void:
+	var wid := T * 0.85
+	var f := (dir3 * T + Vector3(0, rise, 0)).normalized()
+	var side := Vector3.UP.cross(dir3).normalized()
+	var nrm := f.cross(side).normalized()
+	var length := sqrt(T * T + rise * rise)
+	var mid := c + Vector3(0, fl + rise / 2.0, 0)
+	_house.deck.append(Transform3D(Basis(side * wid, nrm * 0.16, f * length), mid - nrm * 0.1))
+	var n_slat := int(length / 0.7)
+	for k in n_slat:
+		var along := (k + 0.5) / n_slat - 0.5
+		_house.slat.append(Transform3D(Basis(side * wid, nrm * 0.05, f * 0.12), mid + f * (along * length) + nrm * 0.0))
+	for sgn in [-1.0, 1.0]:
+		var sp: Vector3 = side * (wid / 2.0 - 0.1) * sgn
+		# 받침 기둥 (판자 아래 땅까지)
+		var top := fl + rise * 0.5
+		if top - lowest > 0.4:
+			_house.post.append(Transform3D(Basis().scaled(Vector3(0.22, top - lowest, 0.22)), c + sp + Vector3(0, (top + lowest) / 2.0 - 0.1, 0)))
+		# 난간 기둥과 손잡이
+		_house.post.append(Transform3D(Basis().scaled(Vector3(0.12, 1.0, 0.12)), c + sp + dir3 * (-T / 2.0 + 0.1) + Vector3(0, fl + 0.5, 0)))
+		_house.slat.append(Transform3D(Basis(side * 0.1, nrm * 0.1, f * length), mid + sp + Vector3(0, 0.95, 0)))
 
 
 # 지도에서 정한 높은 벽(성벽·본성·성당)은 땅 기준 절대 높이

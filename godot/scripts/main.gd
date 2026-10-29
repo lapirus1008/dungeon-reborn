@@ -122,6 +122,8 @@ func _ready() -> void:
 		_levelshots.call_deferred(args[args.find("--levelshots") + 1])
 	elif args.has("--mobshots"):
 		_mobshots.call_deferred(args[args.find("--mobshots") + 1])
+	elif args.has("--roofshots"):
+		_roofshots.call_deferred(args[args.find("--roofshots") + 1])
 	elif args.has("--pyroshots"):
 		_pyroshots.call_deferred(args[args.find("--pyroshots") + 1])
 	elif args.has("--moodshots"):
@@ -950,6 +952,50 @@ func _mobshots(dir: String) -> void:
 
 # 분위기 확인용 스크린샷 (고품질): 실내 던전·성 외곽, 네 방향, 횃불을 든 모습
 # 화염술사 HUD(체력/마나 구슬·지팡이 칸·Q 차징)·화염 폭발·지도 가장자리 확인용 스크린샷
+# 옥상 건물·나무판자 경사로·돌계단·옥상에서 내려다본 모습·덮치기 자세
+func _roofshots(dir: String) -> void:
+	await get_tree().create_timer(0.5).timeout
+	SaveData.data.settings["quality"] = "high"
+	apply_quality("high")
+	_test_char("fighter")
+	start_raid("clouseau_castle")
+	game.force_act = true
+	await get_tree().create_timer(1.5).timeout
+	var g := game
+	var p := g.player
+	p.invuln = 999.0
+	p.toggle_torch()
+	var views := [
+		["plank_ramp", 47.3, 28.5, -1, -0.55, 0.12], ["stone_stairs", 25.9, 24.5, -0.15, -1, 0.2], ["ruin_house", 31.0, 63.0, -1, -0.6, 0.1],
+		["roof_view", 41.5, 25.0, 1, 0.2, -0.3],
+	]
+	for v in views:
+		for a in g.actors:
+			if a != p and a.alive and not (a.kind == "monster" and a.stay_r > 0.0):
+				a.stun = 999.0
+				if a.pos.distance_to(Vector3(v[1] * 4.0, 0, v[2] * 4.0)) < 14.0:
+					a.pos = Vector3(-1000, 0, -1000)
+			elif a != p:
+				a.stun = 999.0
+		p.pos = Vector3(v[1] * 4.0, 0, v[2] * 4.0)
+		p.pos.y = g.dungeon.ground_y(p.pos.x, p.pos.z)
+		p.vy = 0.0
+		p.yaw = Actor.yaw_to(float(v[3]), float(v[4]))
+		p.pitch = float(v[5])
+		await get_tree().create_timer(1.0).timeout
+		await _shot(dir, "roof_" + str(v[0]))
+	# 덮치기 자세 (공중에서 무기를 머리 위로)
+	p.toggle_torch()
+	await get_tree().create_timer(0.8).timeout
+	p.pos = Vector3(43 * 4.0 + 0.5, 4.0, 25.5 * 4.0)
+	p.yaw = Actor.yaw_to(1.0, 0.0)
+	p.pitch = -0.5
+	p.plunge = true
+	await get_tree().process_frame
+	await _shot(dir, "roof_plunge")
+	get_tree().quit()
+
+
 func _pyroshots(dir: String) -> void:
 	await get_tree().create_timer(0.5).timeout
 	SaveData.data.settings["quality"] = "high"
@@ -1315,8 +1361,9 @@ func _flask_checks(pl, out: Array) -> void:
 			var fw := Actor.fwd(yw)
 			var sd := Vector3(-fw.z, 0, fw.x)
 			var open := true
-			for q in [cand + fw, cand + fw * 2.0, cand + fw * 4.0, cand + fw * 6.0, cand + fw * 3.0 + sd * 2.5, cand + fw * 3.0 - sd * 2.5]:
-				if game.dungeon.is_solid(q.x, q.z):
+			for q in [cand + fw, cand + fw * 2.0, cand + fw * 4.0, cand + fw * 6.0, cand + fw * 8.0, cand + fw * 3.0 + sd * 2.5, cand + fw * 3.0 - sd * 2.5]:
+				# 높낮이 지도: 앞이 같은 높이의 평지여야 함 (옥상 가장자리·계단 옆 제외)
+				if game.dungeon.is_solid(q.x, q.z) or absf(game.dungeon.ground_y(q.x, q.z) - cand.y) > 0.3:
 					open = false
 			if open:
 				pl.pos = cand
@@ -1980,6 +2027,49 @@ func _autotest() -> void:
 			await get_tree().process_frame
 		_on_results_continue()
 		await get_tree().process_frame
+	# 옥상: 네임드가 옥상에 있음 · 옥상에서 뛰어내리며 좌클릭 = 덮치기 (착지 때 큰 피해 + 기절)
+	_test_char("fighter")
+	start_raid("clouseau_castle")
+	game.force_act = true
+	await get_tree().process_frame
+	var rp := game.player
+	rp.invuln = 999.0
+	var named := game.actors.filter(func(a): return a.kind == "monster" and a.stay_r > 0.0)
+	var named_ok: bool = named.size() == 3 and named.all(func(a): return a.pos.y > 4.9)
+	for a in game.actors:
+		if a != rp and a.kind != "player":
+			a.pos = Vector3(-1000, 0, -1000)
+	var tgt = game.actors.filter(func(a): return a.kind == "monster")[0]
+	tgt.pos = Vector3(43 * 4.0 + 1.6, 0.0, 26.5 * 4.0) # 안뜰 창고 동쪽 옥상 아래 땅
+	tgt.stun = 0.0
+	tgt.invuln = 0.0
+	var th0: float = tgt.hp
+	rp.pos = Vector3(43 * 4.0 + 0.2, 5.0, 26.5 * 4.0) # 옥상 가장자리에서 막 걸어 나온 공중
+	rp.vy = 0.0
+	rp.fall_top = 5.0
+	rp.swing = null
+	rp.cd.lmb = 0.0
+	rp.draw_t = 0.0
+	await get_tree().process_frame
+	var ev := InputEventAction.new()
+	ev.action = "attack"
+	ev.pressed = true
+	Input.parse_input_event(ev)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var armed: bool = rp.plunge
+	ev = InputEventAction.new()
+	ev.action = "attack"
+	ev.pressed = false
+	Input.parse_input_event(ev)
+	await _wait(1.0)
+	var pdmg: float = th0 - tgt.hp
+	out.append("옥상 네임드 %d마리 (옥상 위 %s), 뛰어내리며 좌클릭 → 덮치기 준비 %s, 착지 피해 %.0f · 기절 %s" % [named.size(), "O" if named_ok else "X", "O" if armed else "X", pdmg, "O" if tgt.stun > 0.0 else "X"])
+	game.abandon()
+	while results.visible == false:
+		await get_tree().process_frame
+	_on_results_continue()
+	await get_tree().process_frame
 	# 긴 시뮬레이션: 8직업 봇/몬스터 상호작용
 	start_raid()
 	await get_tree().process_frame
@@ -2461,6 +2551,18 @@ func _inv_checks() -> Array:
 			via = true
 	ok.call("높낮이 (본성 %.1f · 성벽 위 %.1f · 해자 %.1f · 묘지 %.1f · 계단 중간 %.1fm), 안뜰에서 성벽 위로 바로 못 오름 %s, 뛰어내리기 %s, 계단으로 돌아가는 길 %s" % [tg.call(56, 31), tg.call(35, 10), tg.call(33, 20), tg.call(14, 36), mid, blocked, drop_ok, via],
 		lv_ok and mid > 0.5 and mid < 4.5 and blocked and drop_ok and via)
+	# 옥상: 5m 높이, 나무판자 경사로/돌계단으로만 올라감 (벽면으로 바로 못 오름), 네임드 자리
+	var roof_ok := true
+	var roof_txt := []
+	for rt in cd.marks.roofs:
+		var top: float = tg.call(rt.x, rt.y)
+		var rpath := cd.path(s0, cd.center(rt.x, rt.y))
+		roof_ok = roof_ok and absf(top - 5.0) < 0.01 and rpath.size() > 0
+		roof_txt.append("%.1fm·길 %s" % [top, rpath.size() > 0])
+	var ra_up := cd.resolve_circle(Vector3(43 * 4.0 + 0.3, 0.0, 26.5 * 4.0), 0.4) # 창고 동쪽 벽면
+	var plank_mid: float = tg.call(44, 23)
+	roof_ok = roof_ok and cd.marks.roofs.size() == 3 and ra_up.x >= 43 * 4.0 + 0.39 and plank_mid > 1.0 and plank_mid < 4.0
+	ok.call("옥상 %d곳 (%s), 벽면으로 못 오름 %s, 나무판자 경사로 중간 %.1fm" % [cd.marks.roofs.size(), ", ".join(roof_txt), ra_up.x >= 43 * 4.0 + 0.39, plank_mid], roof_ok)
 	ok.call("성 지도 (야외 %s, 성당 %s, 시작 위치 %s, 나무 충돌 %s, 큰 홀·성당까지 길 %s)" % [cd.has_outdoor, cd.area_at(16, 58) == Dungeon.A_CATH, sp_ok, pushed.distance_to(tc) > 1.0, reach],
 		cd.has_outdoor and cd.area_at(16, 58) == Dungeon.A_CATH and sp_ok and pushed.distance_to(tc) > 1.0 and reach)
 	# 효과음: 중세풍 파일(변형 포함)을 쓰고, 같은 소리를 순간에 여러 번 부르면 한 번만

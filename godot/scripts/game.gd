@@ -338,6 +338,15 @@ func build_level(d: int) -> void:
 			spawn_chest(r, 1 if randf() < 0.25 else 0, luck)
 		if area > 30 and randf() < 0.4:
 			spawn_chest(r, 0, luck)
+	# 옥상: 네임드 몬스터가 지키고 있고 좋은 상자가 있음 (경사로·계단으로 올라가거나, 옥상에서 뛰어내려 덮치기)
+	for t in dungeon.marks.get("roofs", []):
+		var rp := dungeon.center(t.x, t.y)
+		var rr: Dictionary = rooms[dungeon.room_id[dungeon.idx(t.x, t.y)]]
+		if elites.size():
+			var m := Monster.new(self, elites.pick_random(), rp, rr, mul * 1.2)
+			m.stay_r = 5.0
+			add_actor(m)
+		spawn_chest(rr, 1, luck + 1.5, rp + Vector3(2.0, 0, 2.0))
 	if online():
 		randomize()
 
@@ -559,9 +568,12 @@ func _use_fixture(p, f: Dictionary) -> void:
 			notify(p, "toast", ["2층은 준비 중입니다"])
 
 
-func spawn_chest(room: Dictionary, tier: int, luck: float) -> void:
+func spawn_chest(room: Dictionary, tier: int, luck: float, at = null) -> void:
 	var p := Vector3.ZERO
-	for k in 20:
+	if at is Vector3:
+		p = at
+		p.y = dungeon.ground_y(p.x, p.z)
+	for k in (0 if at is Vector3 else 20):
 		p = dungeon.random_point_in_room(room, 0)
 		var clash := false
 		for c in chests:
