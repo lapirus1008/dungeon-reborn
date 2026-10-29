@@ -662,6 +662,156 @@ static func fire_particles(size := 1.0, sparks := true) -> Node3D:
 	return root
 
 
+static var _smoke_mat: StandardMaterial3D
+static var _blast_mat: StandardMaterial3D
+
+
+static func _burst(amount: int, life: float, pm: ParticleProcessMaterial, quad: Vector2, m: Material, ext: float) -> GPUParticles3D:
+	var n := GPUParticles3D.new()
+	n.amount = amount
+	n.lifetime = life
+	n.one_shot = true
+	n.explosiveness = 0.92
+	n.fixed_fps = 0
+	n.process_material = pm
+	n.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var q := QuadMesh.new()
+	q.size = quad
+	q.material = m
+	n.draw_pass_1 = q
+	n.visibility_aabb = AABB(Vector3(-ext, -ext * 0.5, -ext), Vector3(ext * 2.0, ext * 2.5, ext * 2.0))
+	n.emitting = true
+	return n
+
+
+static func _ramp_tex(stops: Array) -> GradientTexture1D:
+	var g := Gradient.new()
+	g.offsets = PackedFloat32Array(stops.map(func(s): return s[0]))
+	g.colors = PackedColorArray(stops.map(func(s): return s[1]))
+	var t := GradientTexture1D.new()
+	t.gradient = g
+	return t
+
+
+static func _curve_tex(pts: Array) -> CurveTexture:
+	var c := Curve.new()
+	for pt in pts:
+		c.add_point(pt)
+	var t := CurveTexture.new()
+	t.curve = c
+	return t
+
+
+# 폭발: 부풀어 오르는 불덩이 + 사방으로 튀는 불티 + 천천히 올라가는 검은 연기 (한 번만 터지고 사라짐)
+static func explosion_particles(rad: float, color: Color) -> Node3D:
+	fire_particles(0.1, false) # 공용 재질 준비
+	if _smoke_mat == null:
+		_smoke_mat = StandardMaterial3D.new()
+		_smoke_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_smoke_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_smoke_mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+		_smoke_mat.vertex_color_use_as_albedo = true
+		_smoke_mat.albedo_texture = _fire_tex(0.6)
+		_smoke_mat.proximity_fade_enabled = true
+		_smoke_mat.proximity_fade_distance = 0.8
+		# 바닥·벽과 만나는 곳이 칼로 자른 듯 보이지 않게 부드럽게
+		_blast_mat = _fire_mat.duplicate()
+		_blast_mat.proximity_fade_enabled = true
+		_blast_mat.proximity_fade_distance = 0.8
+	var root := Node3D.new()
+	var hot := color.lerp(Color(1.0, 0.95, 0.75), 0.6)
+	# 불덩이
+	var fm := ParticleProcessMaterial.new()
+	fm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	fm.emission_sphere_radius = rad * 0.25
+	fm.direction = Vector3(0, 1, 0)
+	fm.spread = 180.0
+	fm.initial_velocity_min = rad * 1.6
+	fm.initial_velocity_max = rad * 3.2
+	fm.damping_min = rad * 3.0
+	fm.damping_max = rad * 5.0
+	fm.gravity = Vector3(0, 1.5, 0)
+	fm.angle_min = -180.0
+	fm.angle_max = 180.0
+	fm.scale_min = 0.7
+	fm.scale_max = 1.4
+	fm.scale_curve = _curve_tex([Vector2(0.0, 0.4), Vector2(0.25, 1.0), Vector2(1.0, 0.55)])
+	fm.color_ramp = _ramp_tex([[0.0, Color(hot.r, hot.g, hot.b, 0.95)], [0.2, Color(color.r, color.g, color.b, 0.8)], [0.6, Color(color.r * 0.5, color.g * 0.25, color.b * 0.15, 0.45)], [1.0, Color(0.1, 0.03, 0.0, 0.0)]])
+	fm.turbulence_enabled = true
+	fm.turbulence_noise_strength = 0.6
+	root.add_child(_burst(44, 0.9, fm, Vector2.ONE * rad * 0.65, _blast_mat, rad * 3.0))
+	# 불티
+	var sm := ParticleProcessMaterial.new()
+	sm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	sm.emission_sphere_radius = rad * 0.2
+	sm.direction = Vector3(0, 1, 0)
+	sm.spread = 180.0
+	sm.initial_velocity_min = rad * 3.0
+	sm.initial_velocity_max = rad * 7.0
+	sm.gravity = Vector3(0, -7.0, 0)
+	sm.damping_min = 0.5
+	sm.damping_max = 1.5
+	sm.scale_min = 0.5
+	sm.scale_max = 1.2
+	sm.color_ramp = _ramp_tex([[0.0, Color(1.0, 0.9, 0.6, 1.0)], [0.7, Color(1.0, 0.45, 0.12, 0.9)], [1.0, Color(0.6, 0.1, 0.0, 0.0)]])
+	root.add_child(_burst(48, 1.3, sm, Vector2.ONE * 0.07, _spark_mat, rad * 4.0))
+	# 연기
+	var km := ParticleProcessMaterial.new()
+	km.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	km.emission_sphere_radius = rad * 0.5
+	km.direction = Vector3(0, 1, 0)
+	km.spread = 70.0
+	km.initial_velocity_min = 0.6
+	km.initial_velocity_max = 1.6
+	km.damping_min = 0.5
+	km.damping_max = 1.0
+	km.gravity = Vector3(0, 0.8, 0)
+	km.angle_min = -180.0
+	km.angle_max = 180.0
+	km.angular_velocity_min = -40.0
+	km.angular_velocity_max = 40.0
+	km.scale_min = 0.8
+	km.scale_max = 1.5
+	km.scale_curve = _curve_tex([Vector2(0.0, 0.3), Vector2(1.0, 1.0)])
+	km.color_ramp = _ramp_tex([[0.0, Color(0.05, 0.04, 0.035, 0.0)], [0.15, Color(0.07, 0.06, 0.05, 0.55)], [1.0, Color(0.1, 0.09, 0.08, 0.0)]])
+	km.turbulence_enabled = true
+	km.turbulence_noise_strength = 0.5
+	var smoke := _burst(18, 2.4, km, Vector2.ONE * rad * 1.1, _smoke_mat, rad * 3.0)
+	smoke.explosiveness = 0.7
+	smoke.sorting_offset = -1.0
+	root.add_child(smoke)
+	return root
+
+
+# 날아가는 불덩이 뒤에 남는 불꽃 꼬리
+static func fire_trail(size: float) -> GPUParticles3D:
+	fire_particles(0.1, false)
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = size * 0.5
+	pm.direction = Vector3(0, 1, 0)
+	pm.spread = 180.0
+	pm.initial_velocity_min = 0.1
+	pm.initial_velocity_max = 0.5
+	pm.gravity = Vector3(0, 1.2, 0)
+	pm.angle_min = -180.0
+	pm.angle_max = 180.0
+	pm.scale_curve = _curve_tex([Vector2(0.0, 1.0), Vector2(1.0, 0.2)])
+	pm.color_ramp = _ramp_tex([[0.0, Color(1.0, 0.85, 0.5, 0.9)], [0.35, Color(1.0, 0.4, 0.08, 0.6)], [1.0, Color(0.15, 0.04, 0.0, 0.0)]])
+	var n := GPUParticles3D.new()
+	n.amount = 40
+	n.lifetime = 0.5
+	n.local_coords = false
+	n.process_material = pm
+	n.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var q := QuadMesh.new()
+	q.size = Vector2.ONE * size * 1.6
+	q.material = _fire_mat
+	n.draw_pass_1 = q
+	n.visibility_aabb = AABB(Vector3(-4, -4, -4), Vector3(8, 8, 8))
+	return n
+
+
 # 1인칭: 불붙은 횃불 (천을 감은 머리 + 입자 불꽃)
 static func torch_view() -> Node3D:
 	var root := Node3D.new()

@@ -111,15 +111,42 @@ static func ranged_profile(c) -> Dictionary:
 static func pay(c, cost: float) -> bool:
 	if cost <= 0.0:
 		return true
-	# Q/E 스킬은 지팡이 에너지를 쓰지 않음 (지팡이 에너지는 지팡이 기본 공격용)
-	if c.skill_casting and c.res_type() == "mana":
-		return true
 	if c.res < cost:
 		c.game.notify(c, "toast", ["%s이(가) 부족합니다" % Data.RES_NAMES.get(c.res_type(), "자원")])
 		return false
 	c.res -= cost
 	c.res_idle = 0.0
 	return true
+
+
+# 지팡이·오브 기본 공격: 직업 마나가 아니라 무기에 충전된 칸을 씀 (AI는 예전처럼 자원을 씀)
+static func pay_staff(c, cost: float) -> bool:
+	if cost <= 0.0:
+		return true
+	if not (c is Player) or c.staff_item == null:
+		return pay(c, cost)
+	if c.staff_e < cost - 0.001:
+		c.game.notify(c, "toast", ["지팡이 충전이 부족합니다 — R: 마나로 충전"])
+		return false
+	c.staff_e -= cost
+	c.res_idle = 0.0
+	return true
+
+
+# 지팡이 칸 수: 화염 지팡이 5칸, 번개 지팡이 2칸, 그 외 지팡이·오브 3칸
+static func staff_cells(item) -> int:
+	if item == null:
+		return 0
+	var b: Dictionary = Data.base_of(item)
+	if b.has("cells"):
+		return int(b.cells)
+	if b.get("cat", "") == "staff":
+		match str(item.get("stats", {}).get("dtype", b.get("dtype", ""))):
+			"fire":
+				return 5
+			"lightning":
+				return 2
+	return 3
 
 
 static func gain(c, amount: float) -> void:
@@ -154,19 +181,24 @@ static func tick_resource(c, dt: float) -> void:
 	var rm: float = c.stats.get("regen_mul", 1.0)
 	match c.res_type():
 		"mana":
-			# 지팡이 에너지: 지팡이마다 따로 장전됨. 쓰지 않으면 아주 천천히 차고, R을 누르고 있으면 빠르게 충전
+			# 마나(Q/E 스킬용): 쓰지 않을 때만 천천히 재생 (마지막 사용 1.5초 뒤부터)
 			c.res_idle += dt
-			var rate := 0.0
-			if c.get("staff_charging") == true:
-				rate = STAFF_CHARGE_RATE
-			elif c.res_idle >= 1.5:
-				rate = 1.2
-			c.res = minf(c.res_max(), c.res + dt * rate * rm)
+			if c.res_idle >= 1.5 and c.get("staff_charging") != true:
+				c.res = minf(c.res_max(), c.res + dt * 2.5 * rm)
 		"soul":
 			# 영혼 에너지는 쓰러진 적의 영혼을 흡수해서 얻음 (아주 느린 자연 회복)
 			c.res = minf(c.res_max(), c.res + dt * 0.4 * rm)
 		"primal":
 			c.res = minf(c.res_max(), c.res + dt * 1.0 * rm)
+	# 지팡이 충전: 가만히 두면 아주 천천히(약 12초에 1칸), R을 누르고 있으면 왼손의 마나를 지팡이로 빠르게 옮김
+	if c is Player and c.staff_item != null and c.game.net != "client":
+		var mx: float = c.staff_max()
+		if c.staff_charging and c.res > 0.0:
+			var amt := minf(minf(STAFF_CHARGE_RATE * dt, c.res), mx - c.staff_e)
+			c.staff_e += amt
+			c.res -= amt
+		elif c.staff_e < mx:
+			c.staff_e = minf(mx, c.staff_e + dt * MANA_CELL / 12.0 * rm)
 	# 자연의 힘 충전
 	if c.cls == "druid":
 		var mx := nature_max(c)
@@ -323,7 +355,7 @@ static func fire_basic(c, aim: Dictionary) -> bool:
 				c.game.notify(c, "toast", ["장전되지 않음 — R: 재장전" if c.bolt_count() > 0 else "볼트가 없습니다"])
 			return false
 		cb["loaded"] = false
-	if not pay(c, prof.cost):
+	if not pay_staff(c, prof.cost):
 		return false
 	c.cd.lmb = prof.cd / c.stats.get("act_mul", 1.0)
 	var extra := {"dtype": prof.get("dtype", c.stats.get("dtype", "phys")), "weapon": true}
@@ -367,8 +399,7 @@ static func ray_hit(c, aim: Dictionary, max_d := 18.0) -> Dictionary:
 const BEAM_TICK := 0.32
 const BEAM_TICKS := 4
 const MANA_CELL := 20.0 # 지팡이 에너지 바 1칸
-const STAFF_CHARGE_RATE := 16.0 # R을 누르고 있을 때 초당 충전량
-const STAFF_ENERGY := {"staff": 100.0, "orb": 80.0} # 무기 종류별 기본 에너지 최대치
+const STAFF_CHARGE_RATE := 22.0 # R을 누르고 있을 때 초당 마나 → 지팡이 (약 1초에 1칸)
 # 레이저 한 번은 아주 조금, 마지막 폭발까지 쓰면 합쳐서 정확히 1칸
 const BEAM_TICK_COST := 1.0
 const BEAM_BLAST_COST := MANA_CELL - BEAM_TICK_COST * BEAM_TICKS
@@ -390,7 +421,7 @@ static func tick_beam(c, dt: float, holding: bool, aim: Dictionary) -> void:
 	c.beam_t += dt
 	c.cast = 0.15
 	if c.beam_n < BEAM_TICKS and c.beam_t >= BEAM_TICK * (c.beam_n + 1):
-		if not pay(c, BEAM_TICK_COST):
+		if not pay_staff(c, BEAM_TICK_COST):
 			c.beam_on = false
 			c.cd.lmb = 0.5
 			return
@@ -402,7 +433,7 @@ static func tick_beam(c, dt: float, holding: bool, aim: Dictionary) -> void:
 		g.sfx("fire", c.pos, 0.1)
 	elif c.beam_n >= BEAM_TICKS and c.beam_t >= BEAM_TICK * (BEAM_TICKS + 1):
 		# 마지막: 조준한 곳에 큰 폭발 (에너지가 모자라면 폭발 없이 끝)
-		if not pay(c, BEAM_BLAST_COST):
+		if not pay_staff(c, BEAM_BLAST_COST):
 			c.beam_on = false
 			c.cd.lmb = 0.5
 			return
@@ -414,7 +445,7 @@ static func tick_beam(c, dt: float, holding: bool, aim: Dictionary) -> void:
 
 
 static func lightning_strike(c, aim: Dictionary) -> bool:
-	if c.cd.lmb > 0.0 or not pay(c, 8.0):
+	if c.cd.lmb > 0.0 or not pay_staff(c, MANA_CELL):
 		return false
 	var g = c.game
 	var p: Vector3 = g.aim_point(aim.origin, aim.dir, 22.0)

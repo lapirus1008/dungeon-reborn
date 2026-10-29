@@ -1036,5 +1036,5 @@ func _on_relief() -> void:
 
 func _res_text(res: String) -> String:
 	if res == "mana":
-		return "지팡이 에너지 (직업 자원이 아니라 지팡이·오브마다 따로 들어 있음 · R을 누르고 있으면 충전)"
+		return "마나 (Q/E 스킬에 사용) · 지팡이·오브는 따로 충전 칸이 있음 (화염 5칸, 번개 2칸 · R을 누르고 있으면 마나로 충전)"
 	return Data.RES_NAMES[res]

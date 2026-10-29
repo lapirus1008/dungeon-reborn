@@ -79,11 +79,13 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 			if Skills.wcat(p) in Data.TWO_HANDED:
 				L.position = R.position + R.basis * Vector3(-0.02, -0.11, 0.07)
 				L.rotation = R.rotation
-	# 지팡이 에너지 충전(R): 지팡이를 세워 두 손으로 쥠
+	# 지팡이 충전(R): 지팡이를 세우고, 왼손을 내밀어 손바닥의 마나(파란 빛)가 지팡이 머리로 흘러 들어감
+	_mana_fx(vm, p.get("staff_charging") == true, t)
 	if p.get("staff_charging") == true:
-		R.position = R0 + Vector3(-0.14, 0.06 + sin(t * 6.0) * 0.01, 0.05)
-		R.rotation = Vector3(0.25, 0.0, 0.15)
-		L.position = R.position + Vector3(-0.06, -0.12, 0.02)
+		R.position = R0 + Vector3(-0.06, 0.08 + sin(t * 6.0) * 0.01, 0.0)
+		R.rotation = Vector3(0.2, 0.0, 0.12)
+		L.position = L0 + Vector3(0.12, 0.12 + sin(t * 9.0) * 0.015, -0.12)
+		L.rotation = Vector3(-0.4, 0.3, -0.5)
 	if p.swing != null:
 		var sw: Dictionary = p.swing
 		var k: float = sw.t / sw.prof.dur
@@ -174,6 +176,56 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 
 
 static var _glow_mat: StandardMaterial3D
+
+
+# R 충전 효과: 왼손 앞 파란 구슬 + 지팡이 머리까지 이어진 빛줄기 (흐르는 알갱이)
+static func _mana_fx(vm: Node3D, on: bool, t: float) -> void:
+	var fx: Node3D = vm.get_meta("mana_fx") if vm.has_meta("mana_fx") else null
+	if fx == null or not is_instance_valid(fx):
+		if not on:
+			return
+		fx = Node3D.new()
+		var orb := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 0.035
+		sm.height = 0.07
+		orb.mesh = sm
+		orb.material_override = Models.glow_mat(Color(0.35, 0.6, 1.0), 6.0)
+		orb.name = "Orb"
+		fx.add_child(orb)
+		for i in 6:
+			var mote := MeshInstance3D.new()
+			var ms := SphereMesh.new()
+			ms.radius = 0.012
+			ms.height = 0.024
+			mote.mesh = ms
+			mote.material_override = Models.glow_mat(Color(0.5, 0.75, 1.0), 5.0)
+			mote.name = "M%d" % i
+			fx.add_child(mote)
+		var lt := OmniLight3D.new()
+		lt.light_color = Color(0.4, 0.6, 1.0)
+		lt.light_energy = 0.8
+		lt.omni_range = 2.5
+		lt.name = "Light"
+		fx.add_child(lt)
+		vm.add_child(fx)
+		vm.set_meta("mana_fx", fx)
+	fx.visible = on
+	if not on:
+		return
+	var L: Node3D = vm.get_meta("L")
+	var R: Node3D = vm.get_meta("R")
+	var a := L.position + Vector3(0.02, 0.06, -0.08)
+	var b := R.position + R.basis * Vector3(0, 0.55, -0.05) # 지팡이 머리 쪽
+	var orb2: Node3D = fx.get_node("Orb")
+	orb2.position = a
+	orb2.scale = Vector3.ONE * (1.0 + 0.25 * sin(t * 14.0))
+	(fx.get_node("Light") as Node3D).position = a
+	for i in 6:
+		var k := fmod(t * 1.6 + i / 6.0, 1.0)
+		var m: Node3D = fx.get_node("M%d" % i)
+		m.position = a.lerp(b, k) + Vector3(sin(t * 7.0 + i) * 0.015, sin(k * PI) * 0.05, 0)
+		m.scale = Vector3.ONE * (1.0 - k * 0.5)
 
 
 static func _counter_glow(vm: Node3D, ct: float) -> void:

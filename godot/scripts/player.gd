@@ -72,7 +72,10 @@ var combo_i := 0 # 로그 단검: 다음 찌르기 손 (0 = 오른손, 1 = 왼�
 var heavy_t := -1.0 # 근접 좌클릭을 누르고 있는 시간 (강공격 준비, -1 = 안 누름)
 var staff_charging := false # R을 누르고 있어 지팡이 에너지 충전 중
 var combo_t := 0.0
-var mana_item = null # 지팡이 에너지가 들어 있는 지금 무기 (에너지는 무기마다 따로 저장)
+var staff_item = null # 지금 든 지팡이·오브 (충전량은 무기마다 따로 저장: item.staff_e)
+var staff_e := 0.0 # 지금 지팡이의 충전량 (1칸 = Skills.MANA_CELL)
+var net_staff_max := -1.0 # 온라인 클라이언트: 서버가 알려준 최대 충전량
+var pyro_ready := 0 # 파이로맨서 Q: 차징 완료 후 대기 중인 단계 (0 = 없음, 1·2단계)
 var reload_t := 0.0 # 석궁 재장전 남은 시간
 var reload_key := false
 var drink_t := 0.0 # 마시는 중 (끝나면 효과)
@@ -105,19 +108,18 @@ func _init(g, p: Vector3, c: String, eq: Dictionary, b: Array, pname := "당신"
 	skills = sk.duplicate() if sk.size() else Account.default_skills(c)
 	stats = st
 	res = st.res_max if st.res == "mana" else st.res_max * 0.4
-	if st.res == "mana":
-		# 지팡이 에너지는 지팡이/오브에 들어 있음: 던전에 가지고 들어간 무기는 가득 찬 상태
-		for s in ["w1", "w1o", "w2", "w2o"]:
-			var w = equipment.get(s)
-			if w != null and Data.base_of(w).get("cat", "") in ["staff", "orb"]:
-				w["mana"] = float(Data.base_of(w).get("energy", Skills.STAFF_ENERGY.get(Data.base_of(w).cat, 100.0)))
-		mana_item = _caster_weapon()
+	# 지팡이·오브 충전 칸: 던전에 가지고 들어간 무기는 가득 찬 상태 (칸은 무기마다 따로)
+	for s in ["w1", "w1o", "w2", "w2o"]:
+		var w = equipment.get(s)
+		if w != null and Data.base_of(w).get("cat", "") in ["staff", "orb"]:
+			w["staff_e"] = Skills.staff_cells(w) * Skills.MANA_CELL
+	staff_item = _caster_weapon()
+	staff_e = float(staff_item.get("staff_e", 0.0)) if staff_item != null else 0.0
 	# 던전에 가지고 들어간 석궁은 모두 장전된 상태
 	for s2 in ["w1", "w2"]:
 		var cb = equipment.get(s2)
 		if cb != null and Data.base_of(cb).get("cat", "") == "crossbow":
 			cb["loaded"] = true
-		res = float(mana_item.get("mana", 0.0)) if mana_item != null else 0.0
 	block_mul = 1.0 - st.block_pct / 100.0 if st.block_pct > 0.0 else 0.4
 	charges = 1
 	if c == "druid" and Skills.has_fx(self, "nature_seed"):
@@ -140,7 +142,7 @@ func recalc() -> void:
 	hp = clampf(ratio * max_hp, 1.0, max_hp)
 	armor = st.armor
 	if st.res != "mana":
-		res = minf(res, st.res_max) # 지팡이 에너지는 _sync_weapon_mana에서
+		res = minf(res, st.res_max)
 	_sync_weapon_mana()
 	block_mul = 1.0 - st.block_pct / 100.0 if st.block_pct > 0.0 else 0.4
 	game.on_weapon_changed(self)
@@ -210,22 +212,11 @@ func _tick_reload(dt: float) -> void:
 		game.inv_changed(self)
 
 
-# 지팡이 에너지는 직업 자원이 아니라 지팡이/오브에 들어 있음: 그런 무기를 들었을 때만 보이고, 최대치는 무기 종류별
-func res_type() -> String:
-	var t: String = stats.get("res", "")
-	if t == "mana":
-		return "mana" if _caster_weapon() != null else ""
-	return t
-
-
-func res_max() -> float:
-	if stats.get("res", "") == "mana":
-		var w = _caster_weapon()
-		if w == null:
-			return 0.0
-		var b: Dictionary = Data.base_of(w)
-		return float(b.get("energy", Skills.STAFF_ENERGY.get(b.get("cat", ""), 100.0)))
-	return stats.get("res_max", 0.0)
+# 지금 지팡이의 최대 충전량 (화염 지팡이 5칸, 번개 지팡이 2칸, 그 외 3칸)
+func staff_max() -> float:
+	if net_staff_max >= 0.0 and game != null and game.net == "client":
+		return net_staff_max
+	return Skills.staff_cells(staff_item) * Skills.MANA_CELL if staff_item != null else 0.0
 
 
 # 지금 손에 든 세트의 에너지 무기 (지팡이 또는 오브)
@@ -237,17 +228,15 @@ func _caster_weapon():
 	return null
 
 
-# 무기를 바꾸면 그 무기에 남은 에너지로 (던전 안에서 새로 낀 무기는 0부터 재생)
+# 무기를 바꾸면 그 무기에 남은 충전량으로 (던전 안에서 새로 낀 무기는 0부터 천천히 참)
 func _sync_weapon_mana() -> void:
-	if res_type() != "mana":
-		return
 	var w = _caster_weapon()
-	if w == mana_item:
+	if w == staff_item:
 		return
-	if mana_item != null:
-		mana_item["mana"] = res
-	mana_item = w
-	res = minf(float(w.get("mana", 0.0)), res_max()) if w != null else 0.0
+	if staff_item != null:
+		staff_item["staff_e"] = staff_e
+	staff_item = w
+	staff_e = minf(float(w.get("staff_e", 0.0)), staff_max()) if w != null else 0.0
 
 
 # 무기 세트 교체 (X)
@@ -366,12 +355,13 @@ func update(dt: float) -> void:
 			toggle_torch()
 		# R: 누른 순간 재장전 (원격 입력도 한 프레임 눌림으로 들어옴)
 		var r_now := inp.pressed("reload")
-		if r_now and not reload_key and res_type() != "mana":
+		if r_now and not reload_key and staff_item == null:
 			start_reload()
 		reload_key = r_now
 		# 지팡이·오브: R을 누르고 있으면 에너지 충전 (느리게 걸음, 공격 불가)
 		var was := staff_charging
-		staff_charging = r_now and res_type() == "mana" and held == "" and swing == null and not beam_on and res < res_max()
+		# R: 왼손에서 마나를 지팡이로 모음 (마나가 있어야 함)
+		staff_charging = r_now and staff_item != null and held == "" and swing == null and not beam_on and staff_e < staff_max() - 0.01 and res > 0.5 and stats.get("res", "") == "mana"
 		if staff_charging and not was:
 			game.sfx("magic", pos, 0.1)
 	else:
@@ -534,9 +524,11 @@ func _start_swing(prof: Dictionary, bash := false) -> void:
 
 func _combat(dt: float, act: bool) -> void:
 	var melee := Skills.is_melee(self)
-	var rmb_pressed := act and inp.just_pressed("secondary")
-	var rmb_held := act and inp.pressed("secondary")
-	var lmb_held := act and inp.pressed("attack")
+	# 화염 폭발을 모으는 중·대기 중에는 좌클릭/우클릭이 시전/취소로만 쓰임
+	var pyro_lock := pyro_ready > 0 or (hold_q >= 0.0 and Skills.skill_id(self, "q") == "pyro_pyroblast")
+	var rmb_pressed := act and inp.just_pressed("secondary") and not pyro_lock
+	var rmb_held := act and inp.pressed("secondary") and not pyro_lock
+	var lmb_held := act and inp.pressed("attack") and not pyro_lock
 	var free := swing == null and spin_t <= 0.0 and dash == null and not (drink_t > 0.0 and drink_slot == "") # 가방에서 쓴 붕대·물약 중엔 공격 대신 취소
 
 	# 우클릭: 방패/무기 방어, 패링, 단검 투척, 지팡이 치기, 표범 포효
@@ -659,6 +651,9 @@ func _combat(dt: float, act: bool) -> void:
 		var key = "skill_" + slot
 		var sid := Skills.skill_id(self, slot)
 		var holding: float = hold_q if slot == "q" else hold_e
+		if sid == "pyro_pyroblast":
+			_pyro_q(slot, key, act, dt)
+			continue
 		if sid in Skills.HOLD_SKILLS:
 			if act and inp.pressed(key) and cd[slot] <= 0.0:
 				holding = maxf(holding, 0.0) + dt
@@ -696,6 +691,58 @@ func _combat(dt: float, act: bool) -> void:
 				shake = maxf(shake, 0.5 if heavy else 0.25)
 		if swing.t >= swing.prof.dur:
 			swing = null
+
+
+# 파이로맨서 Q (화염 폭발): Q를 누르고 있으면 차징 (1단계 → 2단계). 차징이 되면 Q를 떼도 그대로 유지되고
+# 좌클릭 = 시전, 우클릭 = 취소 (취소하면 마나·재사용 대기 없음)
+func _pyro_q(slot: String, key: String, act: bool, dt: float) -> void:
+	var holding: float = hold_q if slot == "q" else hold_e
+	var t1 := Skills.pyro_stage_time(self, 1)
+	var t2 := Skills.pyro_stage_time(self, 2)
+	var lmb := act and inp.just_pressed("attack")
+	var rmb := act and inp.just_pressed("secondary")
+	if pyro_ready > 0 or holding >= t1:
+		if rmb:
+			pyro_ready = 0
+			holding = -1.0
+			charge_t = -1.0
+			game.notify(self, "toast", ["화염 폭발 취소"])
+		elif lmb:
+			var stage := 2 if (holding >= t2 or pyro_ready == 2) else 1
+			var a := aim()
+			if Skills._use(self, slot, a, t2 + 0.01 if stage == 2 else t1 + 0.01):
+				cast = 0.4
+			pyro_ready = 0
+			holding = -1.0
+			charge_t = -1.0
+	if pyro_ready == 0 and act and inp.pressed(key) and cd[slot] <= 0.0:
+		if holding < 0.0 and res < Data.SKILLS.pyro_pyroblast.cost:
+			if inp.just_pressed(key):
+				game.notify(self, "toast", ["마나가 부족합니다"])
+		else:
+			holding = minf(maxf(holding, 0.0) + dt, t2)
+			charge_t = holding
+	elif holding >= 0.0 and pyro_ready == 0:
+		# Q를 뗌: 1단계 이상 모였으면 그 단계로 대기, 아니면 취소
+		if holding >= t1:
+			pyro_ready = 2 if holding >= t2 else 1
+		else:
+			holding = -1.0
+			charge_t = -1.0
+	if slot == "q":
+		hold_q = holding
+	else:
+		hold_e = holding
+
+
+func pyro_stage() -> int:
+	if pyro_ready > 0:
+		return pyro_ready
+	if hold_q >= Skills.pyro_stage_time(self, 2):
+		return 2
+	if hold_q >= Skills.pyro_stage_time(self, 1):
+		return 1
+	return 0
 
 
 func set_held(k: String) -> void:
@@ -1015,7 +1062,7 @@ func net_state() -> Dictionary:
 	return {
 		"p": pos, "f": forced_t > 0.0 or dash != null, "a": alive,
 		"hp": hp, "mh": max_hp, "he": heal, "sh": shield, "sm": shield_max, "st": shield_t, "sc": shield_color, "shf": shield_hit_fx,
-		"r": res, "sta": stamina, "ex": exhausted,
+		"r": res, "se": staff_e, "sx": staff_max(), "scg": staff_charging, "pr": pyro_ready, "sta": stamina, "ex": exhausted,
 		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion, cd.util, cd.flask],
 		"chg": charges, "hold": [hold_q, hold_e],
 		"s": [stun, slow, root, stealth, frozen, parry, immune, dr, spin_t, channel_t, charge_t, cast],
@@ -1039,6 +1086,10 @@ func apply_net_state(d: Dictionary) -> void:
 	shield_color = d.sc
 	shield_hit_fx = maxf(shield_hit_fx, d.shf)
 	res = d.r
+	staff_e = d.get("se", 0.0)
+	net_staff_max = d.get("sx", 0.0)
+	staff_charging = d.get("scg", false)
+	pyro_ready = d.get("pr", 0)
 	if absf(stamina - d.sta) > 4.0:
 		stamina = d.sta
 	exhausted = d.ex

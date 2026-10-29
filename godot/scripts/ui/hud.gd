@@ -41,6 +41,11 @@ var key_text: Label
 var key_t := 0.0
 const KEY_SZ := 40.0
 var channel_box: VBoxContainer
+var pyro_box: VBoxContainer
+var pyro_label: Label
+var pyro_bar: ProgressBar
+var pyro_hints: Array = []
+var orb: Control
 var ammo_box: VBoxContainer
 var ammo_label: Label
 var ammo_hint: Label
@@ -219,6 +224,26 @@ func _ready() -> void:
 	channel_box.add_child(channel_bar)
 	channel_box.visible = false
 	root.add_child(channel_box)
+	# 파이로맨서 화염 폭발: 차지 게이지 + 조준선 양옆 "시전 / 취소" 안내
+	pyro_box = VBoxContainer.new()
+	pyro_box.set_anchors_preset(Control.PRESET_CENTER)
+	pyro_box.position = Vector2(-120, 190)
+	pyro_box.custom_minimum_size = Vector2(240, 0)
+	pyro_label = _centered(UI.label("차지 중", 13, Color(1.0, 0.85, 0.6)))
+	pyro_bar = _bar(Color(1.0, 0.55, 0.15), Vector2(240, 8))
+	pyro_box.add_child(pyro_bar)
+	pyro_box.add_child(pyro_label)
+	pyro_box.visible = false
+	root.add_child(pyro_box)
+	for side in [-1, 1]:
+		var hint := UI.label("시전  🖱좌" if side < 0 else "🖱우  취소", 14, Color(1, 0.92, 0.8))
+		hint.set_anchors_preset(Control.PRESET_CENTER)
+		hint.position = Vector2(-150 if side < 0 else 70, 10)
+		hint.add_theme_color_override("font_shadow_color", Color.BLACK)
+		hint.add_theme_constant_override("shadow_outline_size", 6)
+		hint.visible = false
+		root.add_child(hint)
+		pyro_hints.append(hint)
 
 	announce_box = VBoxContainer.new()
 	announce_box.set_anchors_preset(Control.PRESET_CENTER_TOP)
@@ -271,6 +296,7 @@ func _ready() -> void:
 	for n in [hp_heal, hp_bar, shield_bar, hp_text]:
 		hp_stack.add_child(n)
 	bars.add_child(hp_stack)
+	hp_stack.visible = false # 체력·마나는 가운데 구슬로
 	st_bar = _bar(Color(0.85, 0.75, 0.31), Vector2(340, 10))
 	mana_bar = _bar(Color(0.29, 0.48, 1.0), Vector2(340, 10))
 	bars.add_child(st_bar)
@@ -306,7 +332,8 @@ func _ready() -> void:
 
 	skills_row = HBoxContainer.new()
 	skills_row.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	skills_row.position = Vector2(-273, -80)
+	skills_row.position = Vector2(-330, -112)
+	skills_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	skills_row.add_theme_constant_override("separation", 6)
 	root.add_child(skills_row)
 
@@ -530,7 +557,12 @@ func start(g) -> void:
 	var cls: Dictionary = Data.CLASSES[g.player.cls]
 	UI.clear(skills_row)
 	skill_boxes.clear()
-	for k in ["q", "e", "w1", "w2", "c3", "c4", "c5", "torch"]:
+	# 던전본 배치: Q · 무기 1·2 · [체력/마나 구슬] · 횃불 · 소모품 3·4·5 · E
+	for k in ["q", "w1", "w2", "orb", "torch", "c3", "c4", "c5", "e"]:
+		if k == "orb":
+			orb = _make_orb()
+			skills_row.add_child(orb)
+			continue
 		var box := PanelContainer.new()
 		var sb := StyleBoxFlat.new()
 		sb.bg_color = Color(0.04, 0.03, 0.02, 0.85)
@@ -564,12 +596,21 @@ func start(g) -> void:
 		v.add_child(nm)
 		var cd_bar := _bar(Color(0, 0, 0, 0.0), Vector2(48 if small else 76, 4))
 		v.add_child(cd_bar)
+		# 무기 칸: 지팡이 충전 칸 게이지 (화염 5칸 · 번개 2칸)
+		var gauge: Control = null
+		if k in ["w1", "w2"]:
+			gauge = Control.new()
+			gauge.custom_minimum_size = Vector2(48, 7)
+			gauge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			var set_n := int(k.right(1))
+			gauge.draw.connect(func(): _draw_staff_gauge(gauge, set_n))
+			v.add_child(gauge)
 		box.add_child(v)
 		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		skills_row.add_child(box)
-		skill_boxes[k] = {"box": box, "style": sb, "name": nm, "cd": cd_bar, "sid": "", "icons": icons}
+		skill_boxes[k] = {"box": box, "style": sb, "name": nm, "cd": cd_bar, "sid": "", "icons": icons, "gauge": gauge}
 	var rt: String = g.player.res_type()
-	mana_bar.get_parent().visible = rt != ""
+	mana_bar.get_parent().visible = false # 가운데 구슬로 표시
 	if rt != "":
 		(mana_bar.get_theme_stylebox("fill") as StyleBoxFlat).bg_color = Data.RES_COLORS[rt]
 
@@ -866,6 +907,21 @@ func update_hud(dt: float) -> void:
 	var ex: int = g.exit_portals().size()
 	portal_label.text = "🌀 탈출 포탈 %d개 열림" % ex if ex > 0 else "🌀 포탈 대기 중"
 
+	if orb != null:
+		orb.queue_redraw()
+	for k in ["w1", "w2"]:
+		if skill_boxes[k].gauge != null:
+			skill_boxes[k].gauge.queue_redraw()
+	var py_on: bool = p.pyro_ready > 0 or (p.hold_q >= 0.0 and Skills.skill_id(p, "q") == "pyro_pyroblast")
+	pyro_box.visible = py_on
+	if py_on:
+		var t2 := Skills.pyro_stage_time(p, 2)
+		var st_n: int = p.pyro_stage()
+		pyro_bar.value = 1.0 if p.pyro_ready > 0 else clampf(p.hold_q / t2, 0.0, 1.0)
+		pyro_label.text = ("화염 폭발 %d단계 준비" % st_n) if p.pyro_ready > 0 else ("차지 중 (%d단계)" % st_n if st_n > 0 else "차지 중")
+		(pyro_bar.get_theme_stylebox("fill") as StyleBoxFlat).bg_color = Color(1.0, 0.85, 0.3) if st_n == 2 else Color(1.0, 0.5, 0.12)
+	for h in pyro_hints:
+		h.visible = py_on and p.pyro_stage() > 0
 	for k in ["q", "e"]:
 		var sbx: Dictionary = skill_boxes[k]
 		var def := Skills.skill_def(p, k)
@@ -999,3 +1055,91 @@ func _set_icons(sbx: Dictionary, list: Array) -> void:
 		trs[i].texture = tex
 		trs[i].visible = tex != null
 		trs[i].custom_minimum_size = Vector2(24 if list.size() > 1 and list[1] != null else 44, 26)
+
+
+# ------------------------------------------------------------------ 체력/마나 구슬 (던전본: 왼쪽 반 빨강 = 체력, 오른쪽 반 파랑 = 마나)
+const ORB_R := 44.0
+
+
+func _make_orb() -> Control:
+	var c := Control.new()
+	c.custom_minimum_size = Vector2(ORB_R * 2 + 12, ORB_R * 2 + 8)
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	c.draw.connect(func(): _draw_orb(c))
+	return c
+
+
+func _draw_orb(c: Control) -> void:
+	if game == null or game.player == null:
+		return
+	var p = game.player
+	var ctr := Vector2(c.size.x / 2.0, ORB_R + 2)
+	var r := ORB_R
+	c.draw_circle(ctr, r + 4, Color(0.08, 0.06, 0.04, 0.95))
+	c.draw_circle(ctr, r, Color(0.04, 0.03, 0.03))
+	var hp_k: float = clampf(p.hp / maxf(1.0, p.max_hp), 0.0, 1.0)
+	var heal_k: float = clampf((p.hp + p.heal) / maxf(1.0, p.max_hp), 0.0, 1.0)
+	var rt: String = p.res_type()
+	var rk := hp_k
+	var rcol := Color(0.75, 0.12, 0.1)
+	if rt != "":
+		rk = clampf(p.res / maxf(1.0, p.res_max()), 0.0, 1.0)
+		rcol = {"mana": Color(0.15, 0.35, 0.95), "soul": Color(0.2, 0.7, 0.35), "primal": Color(0.5, 0.25, 0.8)}.get(rt, Color(0.15, 0.35, 0.95))
+	# 가로줄로 채움: 아래부터 비율만큼 (왼쪽 반 = 체력, 오른쪽 반 = 마나)
+	var y0 := ctr.y - r
+	for i in int(r * 2):
+		var y := y0 + i + 0.5
+		var dy := y - ctr.y
+		var w := sqrt(maxf(0.0, r * r - dy * dy))
+		var from_bottom := 1.0 - float(i) / (r * 2)
+		var shade := 0.75 + 0.25 * (1.0 - absf(dy) / r)
+		if from_bottom <= hp_k:
+			c.draw_line(Vector2(ctr.x - w, y), Vector2(ctr.x, y), Color(0.78, 0.1, 0.08) * shade)
+		elif from_bottom <= heal_k:
+			c.draw_line(Vector2(ctr.x - w, y), Vector2(ctr.x, y), Color(0.3, 0.55, 0.22) * shade)
+		if from_bottom <= rk:
+			c.draw_line(Vector2(ctr.x, y), Vector2(ctr.x + w, y), rcol * shade)
+	# 보호막: 바깥 고리
+	if p.shield > 0.0:
+		c.draw_arc(ctr, r + 2, 0, TAU, 48, Color(0.5, 0.75, 1.0, 0.9), 3.0)
+	# 유리 반사광 + 금테 + 가운데 선
+	c.draw_circle(ctr + Vector2(-r * 0.3, -r * 0.45), r * 0.35, Color(1, 1, 1, 0.07))
+	c.draw_line(ctr + Vector2(0, -r), ctr + Vector2(0, r), Color(0.1, 0.08, 0.05), 2.0)
+	c.draw_arc(ctr, r, 0, TAU, 64, Color(0.75, 0.6, 0.3), 2.5)
+	c.draw_arc(ctr, r + 4, 0, TAU, 64, Color(0.35, 0.27, 0.15), 2.0)
+	var font: Font = UI.font
+	var hp_s := str(ceili(p.hp))
+	c.draw_string(font, ctr + Vector2(-r * 0.62, 6), hp_s, HORIZONTAL_ALIGNMENT_CENTER, r * 0.6, 14, Color(1, 0.95, 0.9))
+	if rt != "":
+		c.draw_string(font, ctr + Vector2(r * 0.04, 6), str(roundi(p.res)), HORIZONTAL_ALIGNMENT_CENTER, r * 0.6, 14, Color(0.9, 0.95, 1))
+
+
+# 무기 세트 칸 아래: 그 세트의 지팡이 충전 칸
+func _draw_staff_gauge(gc: Control, set_n: int) -> void:
+	if game == null or game.player == null:
+		return
+	var p = game.player
+	var item = null
+	for s in ["w%d" % set_n, "w%do" % set_n]:
+		var w = p.equipment.get(s)
+		if w != null and Data.base_of(w).get("cat", "") in ["staff", "orb"]:
+			item = w
+	if item == null:
+		return
+	var cells := Skills.staff_cells(item)
+	var energy: float = p.staff_e if set_n == p.wset else float(item.get("staff_e", 0.0))
+	var col := Color(0.25, 0.5, 1.0)
+	match str(item.get("stats", {}).get("dtype", Data.base_of(item).get("dtype", ""))):
+		"fire":
+			col = Color(1.0, 0.35, 0.12)
+		"lightning":
+			col = Color(0.7, 0.35, 1.0)
+	var gap := 2.0
+	var cw := (gc.size.x - gap * (cells - 1)) / cells
+	for i in cells:
+		var r := Rect2(i * (cw + gap), 0, cw, gc.size.y)
+		gc.draw_rect(r, Color(0.06, 0.05, 0.05))
+		var f := clampf(energy / Skills.MANA_CELL - i, 0.0, 1.0)
+		if f > 0.0:
+			gc.draw_rect(Rect2(r.position, Vector2(r.size.x * f, r.size.y)), col if f >= 1.0 else col * 0.7)
+		gc.draw_rect(r, Color(0, 0, 0, 0.8), false, 1.0)

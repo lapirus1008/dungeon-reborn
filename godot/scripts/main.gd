@@ -122,6 +122,8 @@ func _ready() -> void:
 		_levelshots.call_deferred(args[args.find("--levelshots") + 1])
 	elif args.has("--mobshots"):
 		_mobshots.call_deferred(args[args.find("--mobshots") + 1])
+	elif args.has("--pyroshots"):
+		_pyroshots.call_deferred(args[args.find("--pyroshots") + 1])
 	elif args.has("--moodshots"):
 		_moodshots.call_deferred(args[args.find("--moodshots") + 1])
 	elif args.has("--fpshots"):
@@ -606,10 +608,14 @@ func _touchtest() -> void:
 	p.cd.lmb = 0.0
 	p.draw_t = 0.0
 	var ab: Dictionary = tc.buttons.filter(func(b): return b.id == "attack")[0]
+	# 짧게 누르면(떼면) 일반 공격 (누르고 있으면 강공격 준비)
 	touch.call(2, ab.pos, true)
 	await _wait(0.1)
-	var swung: bool = p.swing != null
 	touch.call(2, ab.pos, false)
+	var swung := false
+	for _f in 10:
+		await get_tree().process_frame
+		swung = swung or p.swing != null
 	await _wait(0.6)
 	# 앉기 토글
 	var cb: Dictionary = tc.buttons.filter(func(b): return b.id == "crouch")[0]
@@ -943,6 +949,84 @@ func _mobshots(dir: String) -> void:
 
 
 # 분위기 확인용 스크린샷 (고품질): 실내 던전·성 외곽, 네 방향, 횃불을 든 모습
+# 화염술사 HUD(체력/마나 구슬·지팡이 칸·Q 차징)·화염 폭발·지도 가장자리 확인용 스크린샷
+func _pyroshots(dir: String) -> void:
+	await get_tree().create_timer(0.5).timeout
+	SaveData.data.settings["quality"] = "high"
+	apply_quality("high")
+	_test_char("pyromancer")
+	start_raid("clouseau_castle")
+	game.force_act = true
+	await get_tree().create_timer(1.5).timeout
+	var g := game
+	var p := g.player
+	p.invuln = 999.0
+	for a in g.actors:
+		if a != p:
+			a.stun = 999.0
+			a.pos = Vector3(-1000, 0, -1000)
+	var dg = g.dungeon
+	# 가장자리: 지도 끝에 가장 가까운 야외 바닥에서 바깥쪽을 봄
+	var edges := []
+	for side in 4:
+		var best := Vector2i(-1, -1)
+		var bd := 1e9
+		for z in dg.H:
+			for x in dg.W:
+				if dg.get_t(x, z) == Dungeon.EMPTY or dg.area_at(x, z) != Dungeon.A_OUT or dg.floor_h[dg.idx(x, z)] != 0.0:
+					continue
+				var d: float = [x, dg.W - 1 - x, z, dg.H - 1 - z][side] + absf((z if side < 2 else x) - (dg.H if side < 2 else dg.W) / 2.0) * 0.05
+				if d < bd:
+					bd = d
+					best = Vector2i(x, z)
+		edges.append([best, [Vector2(-1, 0), Vector2(1, 0), Vector2(0, -1), Vector2(0, 1)][side]])
+	for i in (0 if OS.get_cmdline_user_args().has("--fxonly") else edges.size()):
+		var e: Array = edges[i]
+		p.pos = dg.center(e[0].x, e[0].y)
+		p.vy = 0.0
+		p.yaw = Actor.yaw_to(e[1].x, e[1].y)
+		p.pitch = -0.08
+		await get_tree().create_timer(1.0).timeout
+		await _shot(dir, "edge_%d" % i)
+	# 넓은 마당 한가운데
+	p.pos = dg.center(edges[0][0].x + 6, edges[0][0].y)
+	p.yaw = Actor.yaw_to(1.0, 0.0)
+	p.pitch = 0.0
+	await get_tree().create_timer(1.0).timeout
+	p.equipment.w1 = Data.make_item("pyro_staff")
+	p.recalc()
+	p.staff_e = p.staff_max() * 0.7
+	await get_tree().create_timer(0.5).timeout
+	await _shot(dir, "hud_idle")
+	Input.action_press("reload")
+	await get_tree().create_timer(0.6).timeout
+	await _shot(dir, "hud_r_charge")
+	Input.action_release("reload")
+	p.res = p.res_max()
+	Input.action_press("skill_q")
+	await get_tree().create_timer(0.8).timeout
+	await _shot(dir, "hud_q_charging")
+	await get_tree().create_timer(1.0).timeout
+	Input.action_release("skill_q")
+	await get_tree().create_timer(0.3).timeout
+	await _shot(dir, "hud_q_ready")
+	var ex: Vector3 = p.pos + Actor.fwd(p.yaw) * 7.0
+	ex.y = dg.ground_y(ex.x, ex.z) + 0.4
+	g.explode_fx(ex, 3.2, Color(1.0, 0.42, 0.1))
+	await get_tree().create_timer(0.12).timeout
+	await _shot(dir, "fx_explode_a")
+	await get_tree().create_timer(0.35).timeout
+	await _shot(dir, "fx_explode_b")
+	await get_tree().create_timer(0.9).timeout
+	await _shot(dir, "fx_explode_c")
+	Input.action_press("attack")
+	await get_tree().create_timer(0.15).timeout
+	Input.action_release("attack")
+	await get_tree().create_timer(0.2).timeout
+	await _shot(dir, "fx_fireball")
+	get_tree().quit()
+
+
 func _moodshots(dir: String) -> void:
 	await get_tree().create_timer(0.5).timeout
 	SaveData.data.settings["quality"] = "high"
@@ -1787,57 +1871,90 @@ func _autotest() -> void:
 			var unloaded: bool = not cbw.get("loaded", false)
 			out.append("석궁: 입장 시 장전 %s, 발사 %s, 자동 재장전 없음(0/2) %s, R 재장전(모션) %s, 볼트 없으면 재장전 불가 %s, 가방으로 내리면 장전 풀림 %s" % ["O" if entry_loaded else "X", "O" if shot else "X", "O" if no_auto else "X", "O" if reloaded else "X", "O" if no_bolt_ok else "X", "O" if unloaded else "X"])
 		elif cls2 == "pyromancer" and mon != null:
-			# 지팡이 에너지 = 지팡이마다 따로: 입장 시 가득, Q/E는 쓰지 않음, 안에서 새로 낀 지팡이는 0부터, R을 누르고 있으면 충전
-			var full_ok: bool = q.res >= q.res_max() - 0.1 and q.res_max() > 0.0
-			var r0: float = q.res
+			# 마나 = Q/E 스킬용 (가운데 구슬), 지팡이 = 따로 충전 칸 (화염 5칸·번개 2칸, R: 마나 → 지팡이)
+			var full_ok: bool = q.staff_e >= q.staff_max() - 0.1 and q.staff_max() > 0.0 and q.res >= q.res_max() - 0.1
+			# Q: 누르고 있으면 차징 → 떼도 대기 → 우클릭 취소(마나·재사용 대기 그대로)
+			var clk := func(action: String) -> void:
+				for down in [true, false]:
+					var ev := InputEventAction.new()
+					ev.action = action
+					ev.pressed = down
+					Input.parse_input_event(ev)
+					for _f in 3:
+						await get_tree().process_frame
 			q.cd.q = 0.0
-			var q_used := Skills.use_q(q, q.aim())
-			var free_ok: bool = q_used and absf(q.res - r0) < 0.01
+			q.draw_t = 0.0
+			var m0: float = q.res
+			Input.action_press("skill_q")
+			await _wait(Skills.pyro_stage_time(q, 2) + 0.3)
+			Input.action_release("skill_q")
+			for _f in 3:
+				await get_tree().process_frame
+			var ready_ok: bool = q.pyro_ready == 2
+			await clk.call("secondary")
+			var cancel_ok: bool = q.pyro_ready == 0 and absf(q.res - m0) < 0.5 and q.cd.q <= 0.0
+			# 다시 차징 → 좌클릭 시전: 마나 사용
+			Input.action_press("skill_q")
+			await _wait(Skills.pyro_stage_time(q, 2) + 0.3)
+			Input.action_release("skill_q")
+			for _f in 3:
+				await get_tree().process_frame
+			await _wait(0.5)
+			await clk.call("attack")
+			var cast_ok: bool = q.pyro_ready == 0 and q.res < m0 - 20.0 and q.cd.q > 0.0
 			q.cd.q = 0.0
+			q.cd.lmb = 0.0
 			mon.invuln = 0.0
 			mon.stun = 99.0
 			q.equipment.w1 = Data.make_item("pyro_staff")
 			q.recalc()
-			var new_zero: bool = q.res == 0.0
+			var new_zero: bool = q.staff_e < 0.5 and absf(q.staff_max() - 5 * Skills.MANA_CELL) < 0.1
 			q.draw_t = 0.0
-			q.res = q.res_max()
+			q.staff_e = q.staff_max()
 			q.pos = game.dungeon.resolve_circle(mon.pos + Vector3(0, 0, 4.0), q.radius)
 			q.yaw = Actor.yaw_to(mon.pos.x - q.pos.x, mon.pos.z - q.pos.z)
 			var c0: Vector3 = mon.center()
 			q.pitch = atan2(c0.y - (q.pos.y + Player.EYE), q.pos.distance_to(Vector3(mon.pos.x, q.pos.y, mon.pos.z)))
 			var mh0: float = mon.hp
-			var mana0: float = q.res
+			var se0: float = q.staff_e
+			var mana_b: float = q.res
 			Input.action_press("attack")
 			await _wait(1.9)
 			Input.action_release("attack")
 			var beam_dmg: float = mh0 - mon.hp
-			var mana_used: float = mana0 - q.res
+			var staff_used: float = se0 - q.staff_e
+			var mana_kept: bool = q.res >= mana_b - 0.01
 			await _wait(1.2)
 			q.equipment.w1 = Data.make_item("stormcaller_staff")
 			q.recalc()
 			q.cd.lmb = 0.0
 			q.draw_t = 0.0
-			q.res = q.res_max()
+			q.staff_e = q.staff_max()
+			var two_cells: bool = absf(q.staff_max() - 2 * Skills.MANA_CELL) < 0.1
 			var z0: int = game.zones.filter(func(z): return z.kind == "lightning").size()
 			Input.action_press("attack")
 			await get_tree().process_frame
 			await get_tree().process_frame
 			Input.action_release("attack")
-			var struck: bool = game.zones.filter(func(z): return z.kind == "lightning").size() > z0
-			# R을 누르고 있으면 충전 (느리게 걷고 공격 안 됨) · 지팡이가 아닌 무기를 들면 에너지 바 없음
+			var struck: bool = game.zones.filter(func(z): return z.kind == "lightning").size() > z0 and q.staff_e < q.staff_max() - 10.0
+			# R을 누르고 있으면 마나가 지팡이로 (마나 줄고 지팡이 참)
 			await _wait(1.3)
-			q.res = 20.0
+			q.staff_e = 0.0
+			q.res = q.res_max()
+			var mr0: float = q.res
 			Input.action_press("reload")
 			await _wait(1.0)
 			var charging: bool = q.staff_charging
 			Input.action_release("reload")
 			await get_tree().process_frame
-			var charged_amt: float = q.res - 20.0
+			var charged_amt: float = q.staff_e
+			var mana_spent: float = mr0 - q.res
 			q.equipment.w1 = Data.make_item("old_sword")
 			q.recalc()
-			var no_bar: bool = q.res_type() == "" and q.res_max() == 0.0
-			out.append("지팡이 에너지: 입장 시 가득 %s, Q 스킬은 안 씀 %s, 던전에서 새로 낀 지팡이 0부터 %s, R 누르고 충전 %s(+%.0f), 지팡이 없으면 바 없음 %s" % ["O" if full_ok else "X", "O" if free_ok else "X", "O" if new_zero else "X", "O" if charging and charged_amt > 10.0 else "X", charged_amt, "O" if no_bar else "X"])
-			out.append("화염 지팡이 레이저 4타+폭발 피해 %.0f (에너지 %.0f 사용 = %.1f칸), 번개 지팡이 조준점 번개 %s" % [beam_dmg, mana_used, mana_used / Skills.MANA_CELL, "O" if struck else "X"])
+			var no_staff: bool = q.staff_max() == 0.0 and q.res_type() == "mana"
+			out.append("파이로맨서 Q: 차징 후 떼도 대기 %s · 우클릭 취소(마나·재사용 그대로) %s · 좌클릭 시전(마나 사용) %s" % ["O" if ready_ok else "X", "O" if cancel_ok else "X", "O" if cast_ok else "X"])
+			out.append("지팡이 칸: 입장 시 가득 %s, 새로 낀 화염 지팡이 0부터·5칸 %s, 번개 지팡이 2칸 %s, R: 마나 → 지팡이 %s(+%.0f / 마나 -%.0f), 지팡이 없으면 칸 없음(마나는 그대로) %s" % ["O" if full_ok else "X", "O" if new_zero else "X", "O" if two_cells else "X", "O" if charging and charged_amt > 10.0 and absf(mana_spent - charged_amt) < 2.0 else "X", charged_amt, mana_spent, "O" if no_staff else "X"])
+			out.append("화염 지팡이 레이저 4타+폭발 피해 %.0f (지팡이 %.1f칸 사용, 마나 안 씀 %s), 번개 지팡이 조준점 번개(1칸) %s" % [beam_dmg, staff_used / Skills.MANA_CELL, "O" if mana_kept else "X", "O" if struck else "X"])
 		elif cls2 == "swordmaster":
 			var n_sw := Skills.sword_count(q)
 			Skills._use(q, "q", q.aim(), 1.0)

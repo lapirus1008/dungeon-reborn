@@ -824,6 +824,7 @@ func _proj_node(kind: String) -> Node3D:
 				(m as GeometryInstance3D).material_overlay = Models.glow_mat(Color(0.4, 0.6, 1.0, 0.5), 1.5)
 		"pyroblast", "fireball":
 			node = Models.orb(color, 0.42)
+			node.add_child(Models.fire_trail(0.42))
 		"torch":
 			node = Models.ground_torch(false)
 		"poison":
@@ -1058,14 +1059,15 @@ func beam_fx(a: Vector3, b: Vector3, color: Color, life := 0.3) -> void:
 func explode_fx(p: Vector3, rad: float, color: Color) -> void:
 	_bc("explode_fx", [p, rad, color])
 	var m := MeshInstance3D.new()
-	var sm := SphereMesh.new()
-	sm.radius = 1.0
-	sm.height = 2.0
+	var sm := QuadMesh.new()
+	sm.size = Vector2(2.6, 2.6)
 	m.mesh = sm
 	var mt := StandardMaterial3D.new()
 	mt.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mt.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mt.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mt.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mt.albedo_texture = Models._fire_tex(0.6)
 	mt.albedo_color = Color(color.r, color.g, color.b, 0.7)
 	m.material_override = mt
 	m.position = p
@@ -1077,7 +1079,12 @@ func explode_fx(p: Vector3, rad: float, color: Color) -> void:
 	l.omni_range = 12.0
 	l.position = p + Vector3(0, 0.5, 0)
 	world.add_child(l)
-	effects.append({"node": m, "light": l, "t": 0.0, "dur": 0.45, "kind": "explode", "rad": rad, "mat": mt})
+	effects.append({"node": m, "light": l, "t": 0.0, "dur": 0.35, "kind": "explode", "rad": rad, "mat": mt})
+	if DisplayServer.get_name() != "headless":
+		var parts := Models.explosion_particles(rad, color)
+		parts.position = p
+		world.add_child(parts)
+		get_tree().create_timer(2.8).timeout.connect(parts.queue_free)
 
 
 # 조준선이 처음 닿는 곳의 바닥 지점 (번개 지팡이·눈보라 등): 벽·천장·바닥·기둥/나무 줄기·적에서 멈춤.
@@ -1722,9 +1729,10 @@ func update_effects(dt: float) -> void:
 		var n: Node3D = e.node
 		match e.kind:
 			"explode":
-				n.scale = Vector3.ONE * (0.3 + k * e.rad)
-				e.mat.albedo_color.a = 0.7 * (1.0 - k)
-				e.light.light_energy = 8.0 * (1.0 - k)
+				# 순간 섬광 (불덩이·연기는 입자가 맡음)
+				n.scale = Vector3.ONE * (0.25 + sqrt(k) * e.rad * 0.55)
+				e.mat.albedo_color.a = 0.75 * (1.0 - k) * (1.0 - k)
+				e.light.light_energy = 10.0 * (1.0 - k)
 			"spark":
 				n.scale = Vector3.ONE * (1.0 + k * 2.0)
 			"ring":

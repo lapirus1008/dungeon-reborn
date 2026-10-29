@@ -908,11 +908,14 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 							for dx in range(-2, 3):
 								if get_t(x + dx, z + dz) != EMPTY:
 									near2 = true
-					if near2:
-						for k in 3:
-							var ep := Vector3(c.x + rng.randf_range(-1.7, 1.7), 0, c.z + rng.randf_range(-1.7, 1.7))
-							ep.y = ground_y(ep.x, ep.z) - 0.15
-							tree_x.append([ep, rng.randf_range(1.1, 1.8), rng.randi() % 3])
+					# 숲 바닥도 깔아서 길 밖이 허공으로 보이지 않게, 멀리는 듬성듬성한 숲
+					out_floors.append(Transform3D(Basis(), c))
+					for k in (3 if near2 else (1 if rng.randf() < 0.55 else 0)):
+						var ep := Vector3(c.x + rng.randf_range(-1.7, 1.7), 0, c.z + rng.randf_range(-1.7, 1.7))
+						ep.y = ground_y(ep.x, ep.z) - 0.15
+						tree_x.append([ep, rng.randf_range(1.1, 1.8), rng.randi() % 3])
+					if has_levels and adj:
+						_wild_plinth(x, z, plinths)
 					continue
 				if adj:
 					var h := _wall_h(x, z)
@@ -944,6 +947,20 @@ func build(parent: Node3D, light_shadows: bool) -> void:
 						if h >= 6.0 and _wall_abs(x, z) and not (_in_rect(decor.get("cathedral", []), x, z) or _in_rect(decor.get("transept", []), x, z)):
 							for o in [Vector3(-1.0, 0, -1.0), Vector3(1.0, 0, 1.0), Vector3(-1.0, 0, 1.0), Vector3(1.0, 0, -1.0)]:
 								merlons.append(Transform3D(Basis(), Vector3(c.x, h + 0.6, c.z) + o))
+
+	# 지도 바깥 둘레: 땅과 숲이 계속 이어지게 (지도 끝이 허공으로 보이지 않게)
+	if has_outdoor:
+		for z in range(-SKIRT, H + SKIRT):
+			for x in range(-SKIRT, W + SKIRT):
+				if x >= 0 and z >= 0 and x < W and z < H:
+					continue
+				var c := center(x, z)
+				out_floors.append(Transform3D(Basis(), c))
+				var edge := mini(mini(x + SKIRT, W + SKIRT - 1 - x), mini(z + SKIRT, H + SKIRT - 1 - z))
+				if edge > 0 and rng.randf() < 0.7:
+					var ep := Vector3(c.x + rng.randf_range(-1.7, 1.7), 0, c.z + rng.randf_range(-1.7, 1.7))
+					ep.y = ground_y(ep.x, ep.z) - 0.15
+					tree_x.append([ep, rng.randf_range(1.2, 1.9), rng.randi() % 2])
 
 	# 타일 메시: assets/theme.json 의 "dungeon" 설정 또는 assets/dungeon/<이름> 파일이 있으면 교체 (docs/ART_PIPELINE.md)
 	var th := AssetRegistry.theme_section("dungeon")
@@ -1325,6 +1342,24 @@ func _build_terrain(tiles: Array) -> void:
 		mi.material_override = mat
 		mi.visibility_range_end = VIEW_RANGE + 10.0
 		root.add_child(mi)
+
+
+const SKIRT := 6 # 지도 바깥에 더 깔아 두는 땅 (칸)
+
+
+# 숲 칸이 옆의 낮은 바닥(해자·지하 길)보다 높으면 그 사이를 흙벽 대신 돌 받침으로 막음
+func _wild_plinth(x: int, z: int, plinths: Dictionary) -> void:
+	var c := center(x, z)
+	var lowest := 0.0
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var n: Vector2i = Vector2i(x, z) + d
+		if get_t(n.x, n.y) != EMPTY:
+			lowest = minf(lowest, floor_h[idx(n.x, n.y)])
+	if lowest < -0.01:
+		var ph := snappedf(c.y - lowest, 0.05)
+		if not plinths.has(ph):
+			plinths[ph] = []
+		plinths[ph].append(Transform3D(Basis(), Vector3(c.x, c.y - ph / 2.0 - 0.015, c.z)))
 
 
 # 높은 칸 아래 돌 받침과 계단 디딤돌
