@@ -1561,6 +1561,13 @@ static func view_model(cls: String, wmodel: String, panther := false, off := "")
 			w2.rotation = Vector3(-1.2, 0, 0)
 			w2.scale = Vector3.ONE * 0.7
 			L.add_child(w2)
+		elif off == "sword":
+			# 쌍검: 왼손에도 한손검 (오른손과 거울처럼)
+			var w3 := weapon("sword")
+			w3.position = Vector3(0, 0, -0.14)
+			w3.rotation = Vector3(-0.5, 0, 0.25)
+			w3.scale = Vector3.ONE * 0.55
+			L.add_child(w3)
 		elif off == "orb":
 			var ob := orb(orb_color(cls), 0.09, false)
 			ob.position = Vector3(0.02, 0.04, -0.22)

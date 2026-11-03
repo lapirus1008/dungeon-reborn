@@ -338,7 +338,7 @@ func build_level(d: int) -> void:
 			spawn_chest(r, 1 if randf() < 0.25 else 0, luck)
 		if area > 30 and randf() < 0.4:
 			spawn_chest(r, 0, luck)
-	# 옥상: 네임드 몬스터가 지키고 있고 좋은 상자가 있음 (경사로·계단으로 올라가거나, 옥상에서 뛰어내려 덮치기)
+	# 옥상: 네임드 몬스터가 지키고 있고 좋은 상자가 있음 (경사로·계단으로 올라가 싸우거나, 옥상에서 아래 적을 노렸다가 뛰어내려 기습)
 	for t in dungeon.marks.get("roofs", []):
 		var rp := dungeon.center(t.x, t.y)
 		var rr: Dictionary = rooms[dungeon.room_id[dungeon.idx(t.x, t.y)]]

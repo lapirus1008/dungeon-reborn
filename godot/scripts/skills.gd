@@ -287,24 +287,87 @@ static func melee_strike(c, prof: Dictionary, mult := 1.0) -> float:
 	return total
 
 
-# 근접 강공격 (던전본): 좌클릭을 누르고 있다가 떼면 앞으로 짧게 파고들며 강하게 공격.
-# 방어를 뚫고 잠깐 기절시킴. 오래 누를수록(HEAVY_FULL까지) 강해짐
-const HEAVY_MIN := 0.3 # 이보다 짧게 누르면 일반 공격
-const HEAVY_FULL := 0.9
+# 근접 차지 공격 (던전본): 좌클릭을 누르고 있으면 차지 표시가 차오르고, 다 채운 뒤 떼면 방어를 무시하는 강공격.
+# 다 차기 전에 떼면 일반 공격. 무기마다 동작이 다름:
+#   대검(장검) 느리고 강한 내려베기 → 좌클릭을 한 번 더 누르면 이어지는 두 번째 타격
+#   쌍검 두 칼을 대각선으로 나란히 교차시켜 양쪽으로 긋기(2타) · 쌍단검 앞으로 짧게 돌진하며 두 손 찌르기
+const HEAVY_MIN := 0.25 # 이만큼 누르고 있으면 차지 표시가 나타남 (그 전에 떼면 일반 공격)
+const HEAVY_FULL := 1.0 # 다 차는 시간 (대검은 더 느림)
 
 
-static func heavy_profile(c, k: float) -> Dictionary:
+static func charge_time(c) -> float:
+	return (1.3 if wcat(c) == "longsword" else HEAVY_FULL) / c.stats.get("act_mul", 1.0)
+
+
+# 쌍검·쌍단검: 보조 칸에 주무기와 같은 종류(한손검/단검)를 든 상태
+static func dual_kind(c) -> String:
+	var w := wcat(c)
+	if w in ["sword", "dagger"] and c.get("equipment") != null and Data.offhand_cat(c.equipment, c.wset) == w:
+		return w
+	return ""
+
+
+static func heavy_profile(c, _k := 1.0) -> Dictionary:
 	var p := melee_profile(c)
-	p.dmg *= 1.6 + 0.6 * k
-	p.range += 0.5
-	p.knock *= 1.8
-	p.hit_at = 0.14
-	p.dur = maxf(p.dur, 0.45) + 0.1
-	p.cd *= 1.25
 	p["pierce"] = true # 방어 무시
-	p["stun"] = 0.4 + 0.4 * k
 	p["power"] = true
-	p["lunge"] = 2.0 + 1.5 * k # 앞으로 파고드는 거리(m)
+	match wcat(c):
+		"longsword":
+			p.dmg *= 2.5
+			p.range += 0.4
+			p.knock *= 2.0
+			p.hit_at = 0.42
+			p.dur = 0.95
+			p["stun"] = 0.7
+			p["lunge"] = 1.2
+			p["side"] = 1.0
+			p["followup"] = true # 좌클릭을 한 번 더 누르면 두 번째 타격
+		"sword" when dual_kind(c) == "sword":
+			p.dmg *= 1.45 # 두 번 맞음
+			p.range += 0.3
+			p.arc = 2.6
+			p.hit_at = 0.18
+			p["hits"] = [0.18, 0.3]
+			p.dur = 0.62
+			p["stun"] = 0.5
+			p["lunge"] = 1.0
+			p["side"] = 3.0 # 쌍검 교차 베기
+		"dagger" when dual_kind(c) == "dagger":
+			p.dmg *= 2.6
+			p.range += 0.3
+			p.arc = 1.2
+			p.hit_at = 0.2
+			p.dur = 0.5
+			p["stun"] = 0.5
+			p["lunge"] = 3.5 # 앞으로 돌진
+			p["lunge_t"] = 0.22
+			p["side"] = 4.0 # 쌍단검 돌진 찌르기
+		_:
+			p.dmg *= 2.2
+			p.range += 0.5
+			p.knock *= 1.8
+			p.hit_at = 0.14
+			p.dur = maxf(p.dur, 0.45) + 0.1
+			p["stun"] = 0.8
+			p["lunge"] = 3.0
+	p.cd *= 1.25
+	return p
+
+
+# 대검 차지 공격 뒤 좌클릭: 반대 방향으로 이어서 베는 두 번째 타격 (역시 방어 무시)
+static func followup_profile(c) -> Dictionary:
+	var p := melee_profile(c)
+	p.dmg *= 2.0
+	p.range += 0.4
+	p.knock *= 1.6
+	p.hit_at = 0.3
+	p.dur = 0.75
+	p.cd *= 1.25
+	p["pierce"] = true
+	p["power"] = true
+	p["stun"] = 0.5
+	p["lunge"] = 0.8
+	p["side"] = -1.0
 	return p
 
 

@@ -122,6 +122,8 @@ func _ready() -> void:
 		_levelshots.call_deferred(args[args.find("--levelshots") + 1])
 	elif args.has("--mobshots"):
 		_mobshots.call_deferred(args[args.find("--mobshots") + 1])
+	elif args.has("--chargeshots"):
+		_chargeshots.call_deferred(args[args.find("--chargeshots") + 1])
 	elif args.has("--roofshots"):
 		_roofshots.call_deferred(args[args.find("--roofshots") + 1])
 	elif args.has("--pyroshots"):
@@ -952,7 +954,59 @@ func _mobshots(dir: String) -> void:
 
 # 분위기 확인용 스크린샷 (고품질): 실내 던전·성 외곽, 네 방향, 횃불을 든 모습
 # 화염술사 HUD(체력/마나 구슬·지팡이 칸·Q 차징)·화염 폭발·지도 가장자리 확인용 스크린샷
-# 옥상 건물·나무판자 경사로·돌계단·옥상에서 내려다본 모습·덮치기 자세
+# 옥상 건물·나무판자 경사로·돌계단·옥상에서 내려다본 모습
+# 근접 차지 공격: 차지 표시와 무기별 강공격 동작 (대검·쌍검·쌍단검)
+func _chargeshots(dir: String) -> void:
+	await get_tree().create_timer(0.5).timeout
+	SaveData.data.settings["quality"] = "high"
+	apply_quality("high")
+	_test_char("fighter")
+	start_raid("sinners_end_1")
+	game.force_act = true
+	await get_tree().create_timer(1.5).timeout
+	var p := game.player
+	p.invuln = 999.0
+	for a in game.actors:
+		if a != p:
+			a.stun = 999.0
+			a.pos = Vector3(-1000, 0, -1000)
+	p.pitch = -0.05
+	# 앞이 가장 멀리 트인 자리·방향 (돌진해도 벽에 붙지 않게)
+	var spot := p.pos
+	var best := 0.0
+	for t in 40:
+		var cand: Vector3 = game.dungeon.random_point_in_room(game.dungeon.rooms.pick_random(), 1)
+		for i in 12:
+			var yw := i * TAU / 12.0
+			var eye: Vector3 = cand + Vector3(0, 1.6, 0)
+			var d: float = game.aim_point(eye, -Basis.from_euler(Vector3(-0.05, yw, 0), EULER_ORDER_YXZ).z, 30.0, p, false).distance_to(eye)
+			if d > best:
+				best = d
+				spot = cand
+				p.yaw = yw
+	var spot_yaw := p.yaw
+	for set in [["old_longsword", "", "ls"], ["old_sword", "old_sword", "dual_sword"], ["old_dagger", "old_dagger", "dual_dagger"]]:
+		p.equipment.w1 = Data.make_item(set[0])
+		p.equipment.w1o = Data.make_item(set[1]) if set[1] != "" else null
+		p.recalc()
+		p.pos = spot
+		p.yaw = spot_yaw
+		await get_tree().create_timer(1.0).timeout
+		Input.action_press("attack")
+		await get_tree().create_timer(Skills.charge_time(p) * 0.5).timeout
+		await _shot(dir, "charge_%s_half" % set[2])
+		await get_tree().create_timer(Skills.charge_time(p) * 0.5 + 0.2).timeout
+		await _shot(dir, "charge_%s_full" % set[2])
+		Input.action_release("attack")
+		var hit_at: float = Skills.heavy_profile(p).hit_at
+		await get_tree().create_timer(hit_at * 0.7).timeout
+		await _shot(dir, "charge_%s_wind" % set[2])
+		await get_tree().create_timer(hit_at * 0.3 + 0.08).timeout
+		await _shot(dir, "charge_%s_strike" % set[2])
+		await get_tree().create_timer(1.2).timeout
+	get_tree().quit()
+
+
 func _roofshots(dir: String) -> void:
 	await get_tree().create_timer(0.5).timeout
 	SaveData.data.settings["quality"] = "high"
@@ -984,15 +1038,6 @@ func _roofshots(dir: String) -> void:
 		p.pitch = float(v[5])
 		await get_tree().create_timer(1.0).timeout
 		await _shot(dir, "roof_" + str(v[0]))
-	# 덮치기 자세 (공중에서 무기를 머리 위로)
-	p.toggle_torch()
-	await get_tree().create_timer(0.8).timeout
-	p.pos = Vector3(43 * 4.0 + 0.5, 4.0, 25.5 * 4.0)
-	p.yaw = Actor.yaw_to(1.0, 0.0)
-	p.pitch = -0.5
-	p.plunge = true
-	await get_tree().process_frame
-	await _shot(dir, "roof_plunge")
 	get_tree().quit()
 
 
@@ -1767,9 +1812,9 @@ func _autotest() -> void:
 			q.yaw = Actor.yaw_to(mon.pos.x - q.pos.x, mon.pos.z - q.pos.z)
 			q.draw_t = 0.0
 			q.cd.lmb = 0.0
-			# 등 뒤에서 좌클릭을 누르고 있다가 떼면(강공격) 기습
+			# 등 뒤에서 좌클릭을 다 차지한 뒤 떼면(강공격) 기습
 			Input.action_press("attack")
-			await _wait(0.6)
+			await _wait(Skills.charge_time(q) + 0.2)
 			Input.action_release("attack")
 			for _f in 3:
 				await get_tree().process_frame
@@ -1798,7 +1843,7 @@ func _autotest() -> void:
 			await _wait(0.5)
 			q.cd.lmb = 0.0
 			Input.action_press("attack")
-			await _wait(0.8)
+			await _wait(Skills.charge_time(q) + 0.2)
 			Input.action_release("attack")
 			for _f in 3:
 				await get_tree().process_frame
@@ -2027,7 +2072,96 @@ func _autotest() -> void:
 			await get_tree().process_frame
 		_on_results_continue()
 		await get_tree().process_frame
-	# 옥상: 네임드가 옥상에 있음 · 옥상에서 뛰어내리며 좌클릭 = 덮치기 (착지 때 큰 피해 + 기절)
+	# 근접 차지: 다 차기 전에 떼면 일반 공격, 다 차면 방어 무시 강공격 · 대검 이어 베기 · 쌍검 교차 베기(2타) · 쌍단검 돌진 찌르기
+	_test_char("fighter")
+	start_raid("sinners_end_1")
+	game.force_act = true
+	await get_tree().process_frame
+	var hp_ := game.player
+	hp_.invuln = 999.0
+	var tm = null
+	for a4 in game.actors:
+		if a4.kind == "monster" and not a4.def.boss and a4.def.get("ai", "") in ["melee", "fleeing"]:
+			tm = a4
+			break
+	for a4 in game.actors:
+		if a4 != hp_ and a4 != tm:
+			a4.pos = Vector3(-1000, 0, -1000)
+	tm.petrified = 999.0
+	tm.invuln = 0.0
+	tm.hp = 99999.0
+	var put_front := func() -> void:
+		hp_.swing = null
+		hp_.dash = null
+		hp_.heavy_t = -1.0
+		hp_.cd.lmb = 0.0
+		hp_.draw_t = 0.0
+		hp_.pos = game.dungeon.resolve_circle(tm.pos + Vector3(0, 0, 2.0), hp_.radius)
+		hp_.yaw = Actor.yaw_to(tm.pos.x - hp_.pos.x, tm.pos.z - hp_.pos.z)
+	var hold := func(sec: float) -> void:
+		Input.action_press("attack")
+		await _wait(sec)
+		Input.action_release("attack")
+		for _f in 3:
+			await get_tree().process_frame
+	var equip := func(main: String, off: String) -> void:
+		hp_.equipment.w1 = Data.make_item(main)
+		hp_.equipment.w1o = Data.make_item(off) if off != "" else null
+		hp_.recalc()
+		await _wait(0.8)
+	# 한손검+방패: 반만 차지 → 일반 공격, 완충 → 강공격
+	await put_front.call()
+	await hold.call(Skills.charge_time(hp_) * 0.5)
+	var half_ok: bool = hp_.swing != null and not hp_.swing.prof.get("pierce", false)
+	await _wait(1.0)
+	await put_front.call()
+	await hold.call(Skills.charge_time(hp_) + 0.2)
+	var full_ok: bool = hp_.swing != null and hp_.swing.prof.get("pierce", false)
+	await _wait(1.2)
+	# 대검: 완충 강공격 → 좌클릭 한 번 더 = 두 번째 타격
+	await equip.call("old_longsword", "")
+	await put_front.call()
+	await hold.call(Skills.charge_time(hp_) + 0.2)
+	var ls_first: bool = hp_.swing != null and hp_.swing.prof.get("followup", false)
+	await _wait(0.5)
+	await click.call()
+	var f_ok := false
+	for _f in 90:
+		await get_tree().process_frame
+		if hp_.swing != null and hp_.swing.prof.get("side", 0.0) == -1.0 and hp_.swing.prof.get("pierce", false):
+			f_ok = true
+			break
+	await _wait(1.2)
+	# 쌍검: 2타 교차 베기
+	await equip.call("old_sword", "old_sword")
+	await put_front.call()
+	var th1: float = tm.hp
+	await hold.call(Skills.charge_time(hp_) + 0.2)
+	var x_ok: bool = hp_.swing != null and hp_.swing.prof.get("side", 0.0) == 3.0
+	await _wait(0.9)
+	var x_hits: int = int(hp_.swing.get("hi", 0)) if hp_.swing != null else 2
+	var x_dmg: float = th1 - tm.hp
+	await _wait(0.6)
+	# 쌍단검: 앞으로 돌진하며 찌르기
+	await equip.call("old_dagger", "old_dagger")
+	await put_front.call()
+	hp_.pos = game.dungeon.resolve_circle(tm.pos + Vector3(0, 0, 4.5), hp_.radius)
+	hp_.yaw = Actor.yaw_to(tm.pos.x - hp_.pos.x, tm.pos.z - hp_.pos.z)
+	var gap0: float = Vector2(hp_.pos.x - tm.pos.x, hp_.pos.z - tm.pos.z).length()
+	await hold.call(Skills.charge_time(hp_) + 0.2)
+	var d_ok: bool = hp_.swing != null and hp_.swing.prof.get("side", 0.0) == 4.0
+	await _wait(0.4)
+	# 돌진은 적 바로 앞에서 멈춤: 얼마나 다가붙었는지
+	var gap1: float = Vector2(hp_.pos.x - tm.pos.x, hp_.pos.z - tm.pos.z).length()
+	var dashed: float = gap0 - gap1
+	out.append("근접 차지: 반만 차지 = 일반 공격 %s, 완충 = 방어 무시 강공격 %s · 대검 강공격 %s → 좌클릭 두 번째 타격 %s · 쌍검 교차 베기 %s (%d타, 피해 %.0f) · 쌍단검 돌진 찌르기 %s (%.1fm 다가붙음)" % [
+		"O" if half_ok else "X", "O" if full_ok else "X", "O" if ls_first else "X", "O" if f_ok else "X", "O" if x_ok and x_hits >= 2 and x_dmg > 0.0 else "X", x_hits, x_dmg, "O" if d_ok and dashed > 1.0 and gap1 < 2.6 else "X", dashed])
+	game.abandon()
+	while results.visible == false:
+		await get_tree().process_frame
+	_on_results_continue()
+	await get_tree().process_frame
+	# 옥상: 네임드가 옥상에 있음
 	_test_char("fighter")
 	start_raid("clouseau_castle")
 	game.force_act = true
@@ -2036,35 +2170,7 @@ func _autotest() -> void:
 	rp.invuln = 999.0
 	var named := game.actors.filter(func(a): return a.kind == "monster" and a.stay_r > 0.0)
 	var named_ok: bool = named.size() == 3 and named.all(func(a): return a.pos.y > 4.9)
-	for a in game.actors:
-		if a != rp and a.kind != "player":
-			a.pos = Vector3(-1000, 0, -1000)
-	var tgt = game.actors.filter(func(a): return a.kind == "monster")[0]
-	tgt.pos = Vector3(43 * 4.0 + 1.6, 0.0, 26.5 * 4.0) # 안뜰 창고 동쪽 옥상 아래 땅
-	tgt.stun = 0.0
-	tgt.invuln = 0.0
-	var th0: float = tgt.hp
-	rp.pos = Vector3(43 * 4.0 + 0.2, 5.0, 26.5 * 4.0) # 옥상 가장자리에서 막 걸어 나온 공중
-	rp.vy = 0.0
-	rp.fall_top = 5.0
-	rp.swing = null
-	rp.cd.lmb = 0.0
-	rp.draw_t = 0.0
-	await get_tree().process_frame
-	var ev := InputEventAction.new()
-	ev.action = "attack"
-	ev.pressed = true
-	Input.parse_input_event(ev)
-	await get_tree().process_frame
-	await get_tree().process_frame
-	var armed: bool = rp.plunge
-	ev = InputEventAction.new()
-	ev.action = "attack"
-	ev.pressed = false
-	Input.parse_input_event(ev)
-	await _wait(1.0)
-	var pdmg: float = th0 - tgt.hp
-	out.append("옥상 네임드 %d마리 (옥상 위 %s), 뛰어내리며 좌클릭 → 덮치기 준비 %s, 착지 피해 %.0f · 기절 %s" % [named.size(), "O" if named_ok else "X", "O" if armed else "X", pdmg, "O" if tgt.stun > 0.0 else "X"])
+	out.append("옥상 네임드 %d마리 (옥상 위 %s)" % [named.size(), "O" if named_ok else "X"])
 	game.abandon()
 	while results.visible == false:
 		await get_tree().process_frame

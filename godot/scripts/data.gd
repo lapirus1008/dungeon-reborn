@@ -699,8 +699,8 @@ func gear_slots_for(item: Dictionary, cls := "") -> Array:
 			if cat in OFFHAND:
 				return ["w1o", "w2o"]
 			var out := ["w1", "w2"]
-			# 로그 쌍단검: 단검은 보조 손에도
-			if cat == "dagger":
+			# 쌍단검·쌍검: 단검과 한손검은 보조 손에도
+			if cat in ["dagger", "sword"]:
 				out.append_array(["w1o", "w2o"])
 			if cat == "sword" and (cls == "swordmaster" or cls == ""):
 				out.append_array(SWORD_SLOTS)

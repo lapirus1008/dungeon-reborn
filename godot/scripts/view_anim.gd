@@ -64,10 +64,16 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 	# 강공격 준비: 무기를 뒤로 크게 젖히고, 다 모이면 살짝 떨림
 	var hv: float = p.get("heavy_t") if p.get("heavy_t") != null else -1.0
 	if p.swing == null and hv >= Skills.HEAVY_MIN:
-		var hk2 := clampf((hv - Skills.HEAVY_MIN) / (Skills.HEAVY_FULL - Skills.HEAVY_MIN), 0.0, 1.0)
+		var hk2 := clampf((hv - Skills.HEAVY_MIN) / (Skills.charge_time(p) - Skills.HEAVY_MIN), 0.0, 1.0)
 		var e2 := sin(hk2 * PI * 0.5)
 		var shake := (sin(t * 70.0) * 0.006) if hk2 >= 1.0 else 0.0
-		if p.cls == "rogue" and Skills.wcat(p) == "dagger":
+		if Skills.dual_kind(p) == "sword":
+			# 쌍검: 두 팔을 얼굴 앞에서 엇갈려(오른손은 왼쪽 위, 왼손은 오른쪽 위) 두 칼날을 같은 대각선으로 나란히 세움
+			R.position += Vector3(-0.42, 0.24 + shake, 0.05) * e2
+			L.position += Vector3(0.42, 0.2 - shake, 0.1) * e2
+			R.rotation = Vector3(0.5 * e2, 0.0, 0.7 * e2)
+			L.rotation = Vector3(0.5 * e2, 0.0, 0.7 * e2)
+		elif p.cls == "rogue" and Skills.wcat(p) == "dagger" or Skills.dual_kind(p) == "dagger":
 			# 단검: 두 손을 뒤로 당겨 찌를 준비
 			R.position += Vector3(0.04, 0.06 + shake, 0.2) * e2
 			L.position += Vector3(-0.04, 0.06 - shake, 0.2) * e2
@@ -79,15 +85,6 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 			if Skills.wcat(p) in Data.TWO_HANDED:
 				L.position = R.position + R.basis * Vector3(-0.02, -0.11, 0.07)
 				L.rotation = R.rotation
-	# 덮치기: 떨어지는 동안 무기를 머리 위로 높이 들어 내려찍을 준비
-	if p.get("plunge") == true and p.swing == null and p.get("held") == "":
-		R.position = R0 + Vector3(-0.1, 0.34, 0.12)
-		R.rotation = Vector3(1.25, 0.25, -0.35)
-		if Skills.wcat(p) in Data.TWO_HANDED:
-			L.position = R.position + R.basis * Vector3(-0.02, -0.11, 0.07)
-			L.rotation = R.rotation
-		else:
-			L.position = L0 + Vector3(0.06, 0.12, 0.05)
 	# 지팡이 충전(R): 지팡이를 세우고, 왼손을 내밀어 손바닥의 마나(파란 빛)가 지팡이 머리로 흘러 들어감
 	_mana_fx(vm, p.get("staff_charging") == true, t)
 	if p.get("staff_charging") == true:
@@ -103,7 +100,34 @@ static func animate(p, vm: Node3D, bob: float, _dt: float) -> void:
 		var wind := k / hk if k < hk else 1.0
 		var strike := 0.0 if k < hk else (1.0 - (k - hk) / (1.0 - hk))
 		var s: float = sw.side
-		if s >= 1.5:
+		if s == 3.0:
+			# 쌍검 강공격: 얼굴 앞에서 엇갈린 두 칼을 대각선으로 나란히 유지한 채 서로 스쳐 지나가며 양쪽 아래로 그음
+			var a3 := wind if k < hk else 1.0
+			var e3 := 0.0
+			var back3 := 0.0
+			if k >= hk:
+				var u := (k - hk) / (1.0 - hk)
+				e3 = clampf(u / 0.45, 0.0, 1.0)
+				e3 = e3 * e3 * (3.0 - 2.0 * e3)
+				back3 = clampf((u - 0.55) / 0.45, 0.0, 1.0)
+			var r_off: Vector3 = Vector3(-0.42, 0.24, 0.05).lerp(Vector3(0.12, -0.24, -0.14), e3)
+			# 두 칼날은 처음부터 끝까지 같은 각도(나란히)로 기울어진 채 서로 스쳐 지나감
+			var r_rot: Vector3 = Vector3(0.5, 0.0, 0.7).lerp(Vector3(-0.7, 0.0, -0.7), e3)
+			R.position += r_off * a3 * (1.0 - back3)
+			L.position += Vector3(-r_off.x, r_off.y - 0.04, r_off.z + 0.05) * a3 * (1.0 - back3)
+			R.rotation = r_rot * a3 * (1.0 - back3)
+			L.rotation = r_rot * a3 * (1.0 - back3)
+		elif s == 4.0:
+			# 쌍단검 강공격: 두 손을 뒤로 당겼다가 앞으로 돌진하며 함께 찌름
+			var pull4 := wind * 0.14 if k < hk else 0.0
+			var thrust4 := strike * 0.4 if k >= hk else 0.0
+			for arm in [R, L]:
+				arm.position.z += pull4 - thrust4
+				arm.position.y += thrust4 * 0.12
+				arm.rotation.x = -thrust4 * 0.6
+			R.position.x -= thrust4 * 0.12
+			L.position.x += thrust4 * 0.12
+		elif s == 2.0:
 			# 로그 기습: 양손을 머리 위로 들었다가 내려찍기
 			var up := wind if k < hk else 0.0
 			var down := sin(clampf((k - hk) / (1.0 - hk), 0.0, 1.0) * PI) if k >= hk else 0.0

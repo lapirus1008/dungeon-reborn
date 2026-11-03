@@ -920,6 +920,23 @@ func update_hud(dt: float) -> void:
 		pyro_bar.value = 1.0 if p.pyro_ready > 0 else clampf(p.hold_q / t2, 0.0, 1.0)
 		pyro_label.text = ("화염 폭발 %d단계 준비" % st_n) if p.pyro_ready > 0 else ("차지 중 (%d단계)" % st_n if st_n > 0 else "차지 중")
 		(pyro_bar.get_theme_stylebox("fill") as StyleBoxFlat).bg_color = Color(1.0, 0.85, 0.3) if st_n == 2 else Color(1.0, 0.5, 0.12)
+	# 근접 차지: 좌클릭을 누르고 있으면 차오르고, 다 차면 "떼면 강공격" (방어 무시)
+	var hv: float = p.heavy_t
+	if not py_on and hv >= Skills.HEAVY_MIN and Skills.is_melee(p):
+		pyro_box.visible = true
+		var ct := Skills.charge_time(p)
+		var full := hv >= ct
+		pyro_bar.value = clampf((hv - Skills.HEAVY_MIN) / (ct - Skills.HEAVY_MIN), 0.0, 1.0)
+		var extra := ""
+		match Skills.wcat(p):
+			"longsword":
+				extra = " · 이어서 좌클릭 = 두 번째 타격"
+			"sword":
+				extra = " · 쌍검 교차 베기" if Skills.dual_kind(p) == "sword" else ""
+			"dagger":
+				extra = " · 돌진 찌르기" if Skills.dual_kind(p) == "dagger" else ""
+		pyro_label.text = ("강공격 준비 — 떼면 방어 무시" + extra) if full else "차지 중"
+		(pyro_bar.get_theme_stylebox("fill") as StyleBoxFlat).bg_color = Color(1.0, 0.95, 0.75) if full else Color(0.85, 0.75, 0.55)
 	for h in pyro_hints:
 		h.visible = py_on and p.pyro_stage() > 0
 	for k in ["q", "e"]:
