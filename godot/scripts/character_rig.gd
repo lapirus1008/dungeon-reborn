@@ -26,6 +26,23 @@ var _current := ""
 var _walk_phase := 0.0
 var _was_attacking := false
 var _was_dead := false
+var _skel: Skeleton3D
+var _base_weapons: Array = [] # 모델·설정에 원래 붙어 있던 무기 (장비한 무기로 바꿀 때 숨김)
+var _dyn_weapons: Array = []
+var _weapons_key := ""
+
+# 장비 무기 모양 → KayKit 무기 메시 [파일, 메시, 크기]. 손 뼈 기준 위치·회전은 설정 파일의 지팡이·단검과 같은 방식
+const KK := "res://assets/kaykit/characters/"
+const MAIN_WEAPONS := {
+	"sword": [KK + "Knight.glb", "1H_Sword", 0.7], "greatsword": [KK + "Knight.glb", "2H_Sword", 0.72],
+	"longsword": [KK + "Knight.glb", "2H_Sword", 0.72], "dagger": [KK + "Rogue.glb", "Knife", 0.6],
+	"mace": [KK + "Barbarian.glb", "1H_Axe", 0.65], "staff": [KK + "Mage.glb", "2H_Staff", 0.75],
+	"crossbow": [KK + "Rogue.glb", "2H_Crossbow", 0.65],
+}
+const OFF_WEAPONS := {
+	"shield": [KK + "Knight.glb", "Round_Shield", 0.7], "dagger": [KK + "Rogue.glb", "Knife_Offhand", 0.6],
+	"sword": [KK + "Knight.glb", "1H_Sword_Offhand", 0.7],
+}
 
 
 static func create(model_id: String, builder: Callable) -> CharacterRig:
@@ -68,6 +85,12 @@ func _setup_custom(model: Node3D, cfg: Dictionary, model_id := "") -> void:
 	var sks := model.find_children("*", "Skeleton3D", true, false)
 	if sks.size():
 		skel = sks[0]
+	_skel = skel
+	# 모델에 원래 들어 있는 무기·방패 (팔라딘 칼·방패, 아리사 무기)
+	for m in model.find_children("*", "MeshInstance3D", true, false):
+		var nm := String(m.name)
+		if nm.ends_with("_Sword") or nm.ends_with("_Shield") or nm.contains("Weapons"):
+			_base_weapons.append(m)
 	for a in cfg.get("attach", []):
 		if skel == null:
 			break
@@ -94,6 +117,7 @@ func _setup_custom(model: Node3D, cfg: Dictionary, model_id := "") -> void:
 			if a.has("scale"):
 				mi.scale = Vector3.ONE * float(a.scale)
 			holder.add_child(mi)
+			_base_weapons.append(mi)
 	# 다른 Mixamo 모델의 무기(검·방패·활)를 뼈대째 옮겨 붙임: 손 뼈를 따라 움직이므로 어떤 Mixamo 캐릭터에도 맞음
 	for a in cfg.get("attach_skinned", []):
 		if skel == null:
@@ -103,6 +127,7 @@ func _setup_custom(model: Node3D, cfg: Dictionary, model_id := "") -> void:
 			AssetRegistry.add_missing_bones(skel, sm.get_meta("bones", []))
 			skel.add_child(sm)
 			sm.skeleton = NodePath("..")
+			_base_weapons.append(sm)
 	# 색 입히기: "*"는 전체, 그 외는 메시 이름별 (텍스처 색에 곱해짐)
 	var tint: Dictionary = cfg.get("tint", {})
 	for m in model.find_children("*", "MeshInstance3D", true, false):
@@ -140,6 +165,58 @@ func _setup_custom(model: Node3D, cfg: Dictionary, model_id := "") -> void:
 			if clip is String and anim.has_animation(clip):
 				anim.get_animation(clip).loop_mode = Animation.LOOP_LINEAR
 		_play("idle")
+
+
+func _hand(slot: String) -> BoneAttachment3D:
+	var bone := "mixamorig_RightHand" if slot == "r" else "mixamorig_LeftHand"
+	if _skel.find_bone(bone) < 0:
+		bone = "handslot." + slot
+	for b in _skel.find_children("*", "BoneAttachment3D", false, false):
+		if (b as BoneAttachment3D).bone_name == bone:
+			return b
+	var h := BoneAttachment3D.new()
+	h.bone_name = bone
+	_skel.add_child(h)
+	return h
+
+
+# 3인칭 모델이 실제로 장비한 무기를 들게 함 (main: Data.weapon_model, off: 보조 칸 종류).
+# 다른 모험가가 무엇을 들었는지 보이도록 (대검인지, 쌍검인지, 방패가 있는지)
+func set_weapons(main: String, off: String) -> void:
+	if procedural or _skel == null:
+		return
+	var key := main + "|" + off
+	if key == _weapons_key:
+		return
+	_weapons_key = key
+	for m in _base_weapons:
+		if is_instance_valid(m):
+			m.visible = false
+			meshes.erase(m)
+	for m in _dyn_weapons:
+		if is_instance_valid(m):
+			meshes.erase(m)
+			m.queue_free()
+	_dyn_weapons.clear()
+	var put := func(spec: Array, slot: String) -> void:
+		var mi := AssetRegistry.extract_mesh(spec[0], spec[1])
+		if mi == null:
+			return
+		mi.position = Vector3(0, 0.08, 0.02)
+		mi.rotation_degrees = Vector3(0, 0, -90)
+		mi.scale = Vector3.ONE * float(spec[2])
+		_hand(slot).add_child(mi)
+		_dyn_weapons.append(mi)
+		meshes.append(mi)
+	if MAIN_WEAPONS.has(main):
+		put.call(MAIN_WEAPONS[main], "r")
+	if OFF_WEAPONS.has(off) and main not in ["greatsword", "longsword", "staff", "crossbow"]:
+		put.call(OFF_WEAPONS[off], "l")
+	elif off == "orb":
+		var ob := Models.orb(Color(0.45, 0.7, 1.0), 0.09, false)
+		ob.position = Vector3(0, 0.12, 0.04)
+		_hand("l").add_child(ob)
+		_dyn_weapons.append(ob)
 
 
 func set_active(v: bool) -> void:

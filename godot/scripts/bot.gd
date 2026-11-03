@@ -99,6 +99,7 @@ func _init(g, p: Vector3, depth: int, force_cls := "") -> void:
 	aim_err = randf_range(0.03, 0.08)
 	courage = randf()
 	attach_rig(Models.hero_rig(c, Data.weapon_model(c, eq, 1), eq.head != null))
+	rig.set_weapons(Data.weapon_model(c, eq, 1), Data.offhand_cat(eq, 1))
 	if c == "druid":
 		attach_alt_rig(Models.panther_rig())
 

@@ -176,6 +176,7 @@ func describe(a) -> Dictionary:
 		"player", "bot":
 			d["c"] = a.cls
 			d["w"] = Data.weapon_model(a.cls, a.equipment, a.wset)
+			d["o"] = Data.offhand_cat(a.equipment, a.wset)
 			d["hm"] = a.equipment.head != null
 	return d
 
@@ -1645,6 +1646,15 @@ func on_shapeshift(c) -> void:
 func on_weapon_changed(c = null) -> void:
 	if c == null or c == player:
 		_rebuild_view_model()
+	# 3인칭 모습: 다른 모험가에게 바뀐 무기가 보이게
+	if c != null and c.get("equipment") != null and c.kind in ["player", "bot"]:
+		var w := Data.weapon_model(c.cls, c.equipment, c.wset)
+		var o := Data.offhand_cat(c.equipment, c.wset)
+		if c.get("rig") != null:
+			c.rig.set_weapons(w, o)
+		if c.get("puppet") != null and c.puppet.rig != null:
+			c.puppet.rig.set_weapons(w, o)
+		_bc("gear", [c.nid, w, o])
 
 
 func _rebuild_view_model() -> void:
@@ -3466,6 +3476,10 @@ func net_event(n: String, args: Array) -> void:
 	if net != "client" or world == null:
 		return
 	match n:
+		"gear":
+			var ga = net_actors.get(int(args[0]))
+			if ga != null and ga != player and ga.get("rig") != null:
+				ga.rig.set_weapons(str(args[1]), str(args[2]))
 		"hud":
 			# 서버가 보낸 이름으로 HUD 함수를 부르므로, 정해진 화면 알림 함수만 허용
 			if hud != null and args.size() == 2 and args[0] is String and args[1] is Array and args[0] in HUD_EVENTS and hud.has_method(args[0]):

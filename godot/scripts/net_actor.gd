@@ -30,6 +30,7 @@ func _init(g, d: Dictionary) -> void:
 		_:
 			cls = d.c
 			attach_rig(Models.hero_rig(cls, d.w, d.hm))
+			rig.set_weapons(d.w, d.get("o", ""))
 			if cls == "druid":
 				attach_alt_rig(Models.panther_rig())
 	buf.append([g.time, pos, yaw])

@@ -122,6 +122,8 @@ func _ready() -> void:
 		_levelshots.call_deferred(args[args.find("--levelshots") + 1])
 	elif args.has("--mobshots"):
 		_mobshots.call_deferred(args[args.find("--mobshots") + 1])
+	elif args.has("--stuckprobe"):
+		_stuckprobe.call_deferred(args[args.find("--stuckprobe") + 1])
 	elif args.has("--flowshots"):
 		_flowshots.call_deferred(args[args.find("--flowshots") + 1])
 	elif args.has("--chargeshots"):
@@ -959,6 +961,54 @@ func _mobshots(dir: String) -> void:
 # 옥상 건물·나무판자 경사로·돌계단·옥상에서 내려다본 모습
 # 근접 차지 공격: 차지 표시와 무기별 강공격 동작 (대검·쌍검·쌍단검)
 # 게임 흐름 화면: 맵 선택 · 대기방 · 큰 지도(M) · 메뉴(Esc) · 사망 결과 · 3인칭(다른 모험가 모습)
+# AI 점검: 일정 시간 시뮬레이션하며 봇·몬스터가 목표가 있는데도 거의 못 움직이는(끼인) 경우를 셈
+func _stuckprobe(map: String) -> void:
+	await _wait(0.3)
+	_test_char("fighter")
+	start_raid(map)
+	await get_tree().process_frame
+	var g := game
+	g.player.invuln = 1e9
+	g.player.pos = Vector3(-500, 0, -500) # 플레이어는 멀리 (AI끼리만)
+	var last := {}
+	var stuck := {}
+	var chase := {}
+	var oob := 0
+	for i in 60 * 120:
+		g.player.invuln = 1e9
+		g._process(1.0 / 60.0)
+		if i % 120 == 0:
+			for a in g.actors:
+				if a == g.player or not a.alive or a.extracted:
+					continue
+				var busy: bool = (a.kind == "bot" and (a.target != null or a.goal != null)) or (a.kind == "monster" and a.target != null)
+				if last.has(a):
+					var mv: float = Vector2(a.pos.x - last[a].x, a.pos.z - last[a].z).length()
+					if busy:
+						chase[a] = chase.get(a, 0) + 1
+						if mv < 0.4 and (a.kind == "bot" and a.target == null):
+							stuck[a] = stuck.get(a, 0) + 1
+						elif mv < 0.4 and a.kind == "monster" and a.target != null and a.pos.distance_to(a.target.pos) > 4.0 and not a.def.get("rooted", false) and a.def.get("ai", "") not in ["ranged", "caster", "stinger"]:
+							stuck[a] = stuck.get(a, 0) + 1
+				last[a] = a.pos
+				var tx: int = g.dungeon.to_tile(a.pos.x)
+				var tz: int = g.dungeon.to_tile(a.pos.z)
+				if g.dungeon.tile_solid(tx, tz):
+					oob += 1
+					if oob <= 12:
+						print("[stuck]   벽 속: %s(%s) 칸 %d,%d 종류 %d 높이 %.1f 바닥 %.1f" % [a.name, a.kind, tx, tz, g.dungeon.get_t(tx, tz), a.pos.y, g.dungeon.ground_y(a.pos.x, a.pos.z)])
+		if i % 600 == 0:
+			await get_tree().process_frame
+	var worst := []
+	for a in stuck:
+		if stuck[a] >= 5:
+			worst.append("%s(%s) %d/%d @%d,%d y%.1f" % [a.name, a.kind, stuck[a], chase.get(a, 0), g.dungeon.to_tile(a.pos.x), g.dungeon.to_tile(a.pos.z), a.pos.y])
+	print("[stuck] %s: 끼인 AI %d (2초 단위 5번 이상), 벽 속 위치 %d회" % [map, worst.size(), oob])
+	for w in worst:
+		print("[stuck]   ", w)
+	get_tree().quit()
+
+
 func _flowshots(dir: String) -> void:
 	await _wait(0.5)
 	SaveData.data.settings["quality"] = "high"
@@ -1000,6 +1050,14 @@ func _flowshots(dir: String) -> void:
 		p.toggle_torch()
 		await _wait(1.0)
 		await _shot(dir, "flow_5_bot_%s" % bot.cls)
+		# 장비한 무기가 3인칭 모습에 보이는지 (대검 · 쌍검 · 한손검+방패 · 지팡이 · 쌍단검)
+		for gear in [["old_longsword", ""], ["old_sword", "old_sword"], ["old_sword", "old_shield"], ["old_staff", ""], ["old_dagger", "old_dagger"]]:
+			bot.equipment.w1 = Data.make_item(gear[0])
+			bot.equipment.w1o = Data.make_item(gear[1]) if gear[1] != "" else null
+			bot.wset = 1
+			game.on_weapon_changed(bot)
+			await _wait(0.5)
+			await _shot(dir, "flow_5_gear_%s_%s" % [gear[0], gear[1]])
 	p.invuln = 0.0
 	p.hp = 1.0
 	game.hit(null, p, 500.0, {})
