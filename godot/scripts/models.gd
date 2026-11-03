@@ -565,18 +565,28 @@ static var _fire_mat: StandardMaterial3D
 static var _spark_mat: StandardMaterial3D
 
 
-static func _fire_tex(soft: float) -> GradientTexture2D:
-	var g := Gradient.new()
-	g.set_color(0, Color(1, 1, 1, 1))
-	g.set_color(1, Color(1, 1, 1, 0))
-	g.add_point(soft, Color(1, 1, 1, 0.55))
-	var t := GradientTexture2D.new()
-	t.gradient = g
-	t.fill = GradientTexture2D.FILL_RADIAL
-	t.fill_from = Vector2(0.5, 0.5)
-	t.fill_to = Vector2(1.0, 0.5)
-	t.width = 64
-	t.height = 64
+static var _fire_tex_cache := {}
+
+
+# 둥글고 가장자리가 부드러운 입자 텍스처 (가운데 1 → soft 지점 0.55 → 가장자리 0).
+# GradientTexture2D는 처음 그릴 때 늦게 만들어져 첫 화면에 네모로 보일 수 있어 이미지로 바로 만듦
+static func _fire_tex(soft: float) -> ImageTexture:
+	if _fire_tex_cache.has(soft):
+		return _fire_tex_cache[soft]
+	const S := 64
+	var img := Image.create(S, S, false, Image.FORMAT_RGBA8)
+	for y in S:
+		for x in S:
+			var r := Vector2(x + 0.5 - S / 2.0, y + 0.5 - S / 2.0).length() / (S / 2.0)
+			var a := 0.0
+			if r < soft:
+				a = lerpf(1.0, 0.55, r / soft)
+			elif r < 1.0:
+				a = lerpf(0.55, 0.0, (r - soft) / (1.0 - soft))
+			img.set_pixel(x, y, Color(1, 1, 1, a))
+	img.generate_mipmaps()
+	var t := ImageTexture.create_from_image(img)
+	_fire_tex_cache[soft] = t
 	return t
 
 

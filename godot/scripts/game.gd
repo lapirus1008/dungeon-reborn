@@ -2891,7 +2891,7 @@ func _update_view(dt: float) -> void:
 	var fl := sin(time * 13.0) * 0.5 + sin(time * 7.3 + 1.3) * 0.35 + sin(time * 23.0) * 0.15
 	player_light.omni_range = 20.0 if lit else 11.0
 	player_light.light_energy = (1.9 + fl * 0.2) if lit else 1.0
-	player_light.light_volumetric_fog_energy = 1.4 if lit else 0.2
+	player_light.light_volumetric_fog_energy = 0.35 if lit else 0.1 # 눈앞 광원이 안개를 세게 비추면 안개 격자가 네모로 보임
 	player_light.light_color = Color(1.0, 0.62, 0.32) if lit else Color(0.75, 0.72, 0.7)
 	player_light.shadow_enabled = lit and quality != "low"
 	dungeon.animate_torches(time, camera.global_position)

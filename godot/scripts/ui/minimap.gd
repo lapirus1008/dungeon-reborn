@@ -58,6 +58,15 @@ func _draw() -> void:
 				c = Color("#46523a")
 			elif dg.area.size() > i and dg.area[i] == Dungeon.A_CATH:
 				c = Color("#7a7064")
+			# 높낮이: 높은 곳(성벽 위 길·옥상·본성)은 밝게, 낮은 곳(해자·지하 묘지)은 어둡게, 옥상은 나무색
+			if dg.has_levels:
+				var fh: float = dg.floor_h[i] + dg.ramp_rise[i] * 0.5
+				if dg.is_roof(i):
+					c = Color("#8a6a48")
+				elif fh > 0.1:
+					c = c.lightened(clampf(fh / 12.0, 0.08, 0.4))
+				elif fh < -0.1:
+					c = c.darkened(clampf(-fh / 10.0, 0.15, 0.5))
 			draw_rect(Rect2(rx, rz, scale + 0.5, scale + 0.5), c)
 	var dot := func(wx: float, wz: float, col: Color, rad: float):
 		var dx = ox + wx / Dungeon.T * scale

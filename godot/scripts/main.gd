@@ -122,6 +122,8 @@ func _ready() -> void:
 		_levelshots.call_deferred(args[args.find("--levelshots") + 1])
 	elif args.has("--mobshots"):
 		_mobshots.call_deferred(args[args.find("--mobshots") + 1])
+	elif args.has("--flowshots"):
+		_flowshots.call_deferred(args[args.find("--flowshots") + 1])
 	elif args.has("--chargeshots"):
 		_chargeshots.call_deferred(args[args.find("--chargeshots") + 1])
 	elif args.has("--roofshots"):
@@ -956,6 +958,56 @@ func _mobshots(dir: String) -> void:
 # 화염술사 HUD(체력/마나 구슬·지팡이 칸·Q 차징)·화염 폭발·지도 가장자리 확인용 스크린샷
 # 옥상 건물·나무판자 경사로·돌계단·옥상에서 내려다본 모습
 # 근접 차지 공격: 차지 표시와 무기별 강공격 동작 (대검·쌍검·쌍단검)
+# 게임 흐름 화면: 맵 선택 · 대기방 · 큰 지도(M) · 메뉴(Esc) · 사망 결과 · 3인칭(다른 모험가 모습)
+func _flowshots(dir: String) -> void:
+	await _wait(0.5)
+	SaveData.data.settings["quality"] = "high"
+	apply_quality("high")
+	_test_char("swordmaster")
+	SaveData.data.equipment.w1o = Data.make_item("old_sword")
+	open_lobby()
+	await _wait(1.0)
+	lobby._open_maps()
+	await _wait(0.4)
+	await _shot(dir, "flow_1_maps")
+	lobby._enter_map("clouseau_castle")
+	await _wait(0.6)
+	await _shot(dir, "flow_2_wait")
+	lobby._leave_wait()
+	start_raid("clouseau_castle")
+	game.force_act = true
+	await _wait(2.0)
+	var p := game.player
+	p.invuln = 999.0
+	hud.toggle_map()
+	await _wait(0.4)
+	await _shot(dir, "flow_3_bigmap")
+	hud.toggle_map()
+	hud.set_menu_visible(true)
+	await _wait(0.4)
+	await _shot(dir, "flow_4_menu")
+	hud.set_menu_visible(false)
+	# 다른 모험가(봇) 3인칭 모습: 가장 가까운 봇을 앞에 세움
+	var bot = null
+	for a in game.actors:
+		if a.kind == "bot" and a.alive:
+			bot = a
+			break
+	if bot != null:
+		bot.stun = 999.0
+		bot.pos = game.dungeon.resolve_circle(p.pos + Actor.fwd(p.yaw) * 3.5, bot.radius)
+		bot.yaw = Actor.yaw_to(p.pos.x - bot.pos.x, p.pos.z - bot.pos.z)
+		p.toggle_torch()
+		await _wait(1.0)
+		await _shot(dir, "flow_5_bot_%s" % bot.cls)
+	p.invuln = 0.0
+	p.hp = 1.0
+	game.hit(null, p, 500.0, {})
+	await _wait(2.5)
+	await _shot(dir, "flow_6_death")
+	get_tree().quit()
+
+
 func _chargeshots(dir: String) -> void:
 	await get_tree().create_timer(0.5).timeout
 	SaveData.data.settings["quality"] = "high"

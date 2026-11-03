@@ -1468,6 +1468,19 @@ func _in_roof(x: int, z: int) -> bool:
 	return not decor.is_empty() and _in_any(decor.get("roofs", []), x, z)
 
 
+var _roof_mask := PackedByteArray()
+
+
+# 옥상 칸인지 (지도 그리기처럼 자주 묻는 곳용, 처음 한 번 만들어 둠)
+func is_roof(i: int) -> bool:
+	if _roof_mask.is_empty():
+		_roof_mask.resize(W * H)
+		for z in H:
+			for x in W:
+				_roof_mask[idx(x, z)] = 1 if _in_roof(x, z) else 0
+	return _roof_mask[i] == 1
+
+
 # 옥상 건물 바깥면: 지붕 바로 아래 나무 들보 띠, 모서리 기둥, 창문
 func _house_trim(x: int, z: int, c: Vector3, fl: float) -> void:
 	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:

@@ -473,11 +473,13 @@ func _build_bigmap() -> void:
 	bigmap_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var c := CenterContainer.new()
 	c.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	c.offset_bottom = -120 # 아래 단축칸을 가리지 않게
+	c.offset_top = 70 # 위 남은 시간 아래
 	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var v := VBoxContainer.new()
 	bigmap = MiniMap.new()
 	bigmap.big = true
-	bigmap.custom_minimum_size = Vector2(700, 700)
+	bigmap.custom_minimum_size = Vector2(660, 660)
 	bigmap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(bigmap)
 	v.add_child(_centered(UI.label("M 닫기 · 파랑: 탈출 포탈 · 빨강: 심연 포탈", 13, UI.MUTED)))
