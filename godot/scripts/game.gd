@@ -2908,7 +2908,7 @@ const ARC_MAX := 64
 
 func _update_throw_arc() -> void:
 	var it = player.equipment.get(player.held) if player.held in ["c3", "c4", "c5"] else null
-	var show: bool = player.alive and (it != null and Data.base_of(it).has("throw") or player.held == "torch") and player.drink_t <= 0.0
+	var show: bool = player.alive and (it != null and Data.base_of(it).has("throw") or player.held == "torch" and player.torch_aim) and player.drink_t <= 0.0
 	if not show:
 		if arc_dots != null:
 			arc_dots.visible = false
@@ -3143,6 +3143,7 @@ func net_inv(id: int, op: String, args: Array) -> void:
 
 # 스냅샷 한 줄 (float 10개): id, x, y, z, yaw, hp, flags, move, windup_k, attack
 const ACT_STRIDE := 10
+const SNAP_BUDGET := 1150 # 한 패킷에 담을 바이트 (ENet MTU 1392 - RPC 머리말 여유)
 const PROJ_STRIDE := 10
 const PROJ_KINDS := ["arrow", "knife", "blade", "bolt", "firebolt", "pyroblast", "icebolt", "thorn", "poison", "grasp", "fireball", "holy", "spit", "magic_orb", "flask", "torch"]
 
@@ -3185,12 +3186,14 @@ func _send_snapshots() -> void:
 	for d in dungeon.doors:
 		if d.open:
 			door_bits.append(d.id)
-	var zs := []
-	for z in zones:
-		zs.append([z.id, z.kind, z.pos, z.radius])
 	for pl in players:
 		if pl.peer_id <= 1 or pl.done:
 			continue
+		# 지속 구역(불 지면·돌기둥 등)은 가까운 것만
+		var zs := []
+		for z in zones:
+			if absf(z.pos.x - pl.pos.x) + absf(z.pos.z - pl.pos.z) < 80.0:
+				zs.append([z.id, z.kind, z.pos, z.radius])
 		var acts := PackedFloat32Array()
 		for a in actors:
 			if a == pl or a.extracted:
@@ -3198,7 +3201,10 @@ func _send_snapshots() -> void:
 			if absf(a.pos.x - pl.pos.x) + absf(a.pos.z - pl.pos.z) > 75.0 and a.kind != "player":
 				continue
 			_pack_actor(acts, a)
-		var first := ACT_STRIDE * 10
+		# 첫 패킷(내 상태·구역·문)에 실을 액터 수는 남는 크기만큼만 (MTU를 넘으면 조각나 손실이 커짐)
+		var me: Dictionary = pl.net_state()
+		var base_bytes := var_to_bytes([{"t": time_left, "a": PackedFloat32Array(), "z": zs, "dr": door_bits}, me]).size()
+		var first := clampi((SNAP_BUDGET - base_bytes) / (ACT_STRIDE * 4), 0, 10) * ACT_STRIDE
 		var per := ACT_STRIDE * 28
 		# 투사체: 가까운 것부터 최대 28개 (별도 패킷)
 		var near := projectiles.filter(func(p): return absf(p.pos.x - pl.pos.x) + absf(p.pos.z - pl.pos.z) < 70.0)
@@ -3208,7 +3214,7 @@ func _send_snapshots() -> void:
 		var projs := PackedFloat32Array()
 		for p in near:
 			projs.append_array([p.id, PROJ_KINDS.find(p.kind), p.pos.x, p.pos.y, p.pos.z, p.vel.x, p.vel.y, p.vel.z, 1.0 if p.stuck > 0.0 else 0.0, p.gravity])
-		Net.send_snap(pl.peer_id, {"t": time_left, "a": acts.slice(0, first), "z": zs, "dr": door_bits}, pl.net_state())
+		Net.send_snap(pl.peer_id, {"t": time_left, "a": acts.slice(0, first), "z": zs, "dr": door_bits}, me)
 		Net.send_projs(pl.peer_id, projs)
 		var i := first
 		while i < acts.size():

@@ -1,8 +1,26 @@
 {
- "source": "res://assets/mixamo/characters/erika_bow.fbx",
+ "source": "res://assets/mixamo/characters/erika.fbx",
  "tint": {
   "*": "#a8c49a"
  },
+ "attach": [
+  {
+   "from": "res://assets/kaykit/characters/Mage.glb",
+   "mesh": "2H_Staff",
+   "slot": "r",
+   "pos": [
+    0,
+    0.08,
+    0.02
+   ],
+   "rot": [
+    0,
+    0,
+    -90
+   ],
+   "scale": 0.75
+  }
+ ],
  "scale": 1.05,
  "anim_dir": [
   "res://assets/mixamo/anims/human",

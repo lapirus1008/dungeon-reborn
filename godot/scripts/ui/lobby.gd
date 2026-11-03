@@ -135,7 +135,7 @@ func _ready() -> void:
 	var howto := RichTextLabel.new()
 	howto.bbcode_enabled = true
 	howto.fit_content = true
-	howto.text = "[color=#e6dccb][b]조작법[/b][/color]\n[color=#9a8e7a][font_size=13]WASD 이동 · Space 점프\n좌클릭 공격 · 우클릭 보조 · Q/E 스킬\n1·2 무기 세트 선택 · 3·4 소모품 칸 (물약·붕대·플라스크)\nF 상호작용/줍기 · Tab 인벤토리 · M 지도 · Esc 메뉴 (게임은 계속 진행)[/font_size][/color]"
+	howto.text = "[color=#e6dccb][b]조작법[/b][/color]\n[color=#9a8e7a][font_size=13]WASD 이동 · Space 점프\n좌클릭 공격 (누르고 있으면 차지 → 다 차면 떼서 방어 무시 강공격) · 우클릭 방어 · Q/E 스킬\n1·2 무기 세트 · 3·4·5 소모품 (물약·붕대·플라스크) · G 횃불 · R 재장전/지팡이 충전\nF 상호작용/줍기 · Tab 인벤토리 · M 지도 · Esc 메뉴 (게임은 계속 진행)[/font_size][/color]"
 	lv.add_child(howto)
 	body.add_child(left)
 

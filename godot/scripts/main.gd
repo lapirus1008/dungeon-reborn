@@ -1190,8 +1190,11 @@ func _fpshots(dir: String) -> void:
 	await _shot(dir, "fp_5_flask_arc")
 	p.torch_t = 60.0
 	p.set_held("torch")
+	Input.action_press("secondary") # 우클릭을 누르고 있는 동안만 던질 포물선
 	await get_tree().create_timer(0.6).timeout
 	await _shot(dir, "fp_6_torch_arc")
+	Input.action_release("secondary")
+	await get_tree().process_frame
 	p.throw_torch()
 	await get_tree().create_timer(1.5).timeout
 	p.pitch = -0.35

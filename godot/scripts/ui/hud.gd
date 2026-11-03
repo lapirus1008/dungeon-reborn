@@ -53,6 +53,7 @@ var channel_label: Label
 var channel_bar: ProgressBar
 var channel_t := 0.0
 var announce_box: VBoxContainer
+var top: VBoxContainer # 상단 중앙 지도 이름·남은 시간·포탈
 var announce_title: Label
 var announce_sub: Label
 var skills_row: HBoxContainer
@@ -112,7 +113,7 @@ func _ready() -> void:
 	root.add_child(fps_label)
 
 	# 상단 중앙: 층, 타이머, 포탈
-	var top := VBoxContainer.new()
+	top = VBoxContainer.new()
 	top.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	top.position = Vector2(-150, 8)
 	top.custom_minimum_size = Vector2(300, 0)
@@ -902,6 +903,12 @@ func update_hud(dt: float) -> void:
 	status_label.text = " · ".join(sts)
 	var tl := maxf(0.0, g.time_left)
 	timer_label.text = "%d:%02d" % [int(tl / 60.0), int(tl) % 60]
+	# 인벤토리·상자 창이 열리면 상단 글자·지역 안내가 창 뒤로 비치지 않게 숨기고, 남은 시간은 내 이름 줄에
+	var panel_up := is_panel_open()
+	top.visible = not panel_up
+	announce_box.visible = not panel_up
+	if panel_up and p.cls != "":
+		inv_name.text = "%s · %s %s · ⏳ %s" % [p.name, Data.CLASSES[p.cls].icon, Data.CLASSES[p.cls].name, timer_label.text]
 	timer_label.add_theme_color_override("font_color", Color("#ff4a3a") if tl < 120.0 else UI.TEXT)
 	depth_label.text = Data.MAPS.get(g.map_id, {}).get("name", "던전")
 	var ex: int = g.exit_portals().size()

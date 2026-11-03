@@ -1492,21 +1492,21 @@ static func view_model(cls: String, wmodel: String, panther := false, off := "")
 				R.add_child(w)
 			"longsword":
 				w = weapon("longsword")
-				w.position = Vector3(-0.08, 0.0, -0.14)
-				w.rotation = Vector3(-0.45, 0, 0.15)
+				w.position = Vector3(-0.06, 0.0, -0.12)
+				w.rotation = Vector3(-0.3, 0, -0.5)
 				w.scale = Vector3.ONE * 0.55
 				R.add_child(w)
-				# 양손 무기: 두 손을 몸 가운데 쪽으로 모아 손잡이를 위아래로 잡음
-				R.position = Vector3(0.2, -0.34, -0.58)
-				L.position = Vector3(0.18, -0.45, -0.51)
+				# 양손 무기: 두 손을 오른쪽 아래에 모아 손잡이를 위아래로 잡고, 칼날은 오른쪽 위로 비스듬히 (조준점을 가리지 않게)
+				R.position = Vector3(0.3, -0.36, -0.56)
+				L.position = Vector3(0.26, -0.47, -0.5)
 			"greatsword":
 				w = weapon("greatsword")
-				w.position = Vector3(-0.08, 0.0, -0.12)
-				w.rotation = Vector3(-0.35, 0, 0.3)
+				w.position = Vector3(-0.06, 0.0, -0.1)
+				w.rotation = Vector3(-0.25, 0, -0.45)
 				w.scale = Vector3.ONE * 0.5
 				R.add_child(w)
-				R.position = Vector3(0.2, -0.34, -0.58)
-				L.position = Vector3(0.18, -0.45, -0.51)
+				R.position = Vector3(0.3, -0.36, -0.56)
+				L.position = Vector3(0.26, -0.47, -0.5)
 			"dagger":
 				w = weapon("dagger")
 				w.position = Vector3(0, 0, -0.14)

@@ -39,7 +39,7 @@ const CLASSES := {
 		"desc": "한손검과 방패, 또는 양손검으로 전열을 지키는 전사. 소용돌이로 다수를 상대한다.",
 		"q": ["fighter_whirlwind", "fighter_warcry"], "e": ["fighter_charge", "fighter_inspire"],
 		"skills": {
-			"lmb": {"name": "베기", "desc": "무기 근접 공격 (연속 콤보)", "cd": 0.0},
+			"lmb": {"name": "베기", "desc": "무기 근접 공격. 누르고 있다가 다 차면 방어 무시 강공격", "cd": 0.0},
 			"rmb": {"name": "방어", "desc": "누르는 동안 정면 피해 감소 (방패 97~100%, 무기 75%)", "cd": 0.0},
 		},
 	},
@@ -49,7 +49,7 @@ const CLASSES := {
 		"desc": "검 슬롯의 검으로 영검을 소환해 싸우는 검객. 패링으로 적의 공격을 받아친다.",
 		"q": ["sm_psionic"], "e": ["sm_blade_dance"],
 		"skills": {
-			"lmb": {"name": "연속 베기", "desc": "빠르고 넓은 검 베기", "cd": 0.0},
+			"lmb": {"name": "연속 베기", "desc": "빠르고 넓은 검 베기. 쌍검 강공격은 양쪽 교차 베기", "cd": 0.0},
 			"rmb": {"name": "패링", "desc": "짧은 순간 모든 공격을 막고, 근접 공격자를 기절시킨다", "cd": 1.2},
 		},
 	},
@@ -59,7 +59,7 @@ const CLASSES := {
 		"desc": "쌍단검과 독, 은신을 쓰는 암살자. 등 뒤와 은신 상태의 일격이 치명적이다.",
 		"q": ["rogue_petrify", "rogue_blades"], "e": ["rogue_stealth", "rogue_quick_conceal", "rogue_shadow_veil"],
 		"skills": {
-			"lmb": {"name": "찌르기", "desc": "빠른 단검 공격. 등 뒤에서 1.6배", "cd": 0.0},
+			"lmb": {"name": "찌르기", "desc": "양손 번갈아 빠른 찌르기. 강공격은 돌진 찌르기, 등 뒤에서는 기습", "cd": 0.0},
 			"rmb": {"name": "단검 투척", "desc": "단검을 던진다", "cd": 1.5},
 		},
 	},
@@ -69,7 +69,7 @@ const CLASSES := {
 		"desc": "영혼 에너지를 다루는 언데드 기사. 쓰러진 적의 영혼을 흡수하고 적을 끌어당긴다.",
 		"q": ["dk_wraith_guard", "dk_soul_storm"], "e": ["dk_soul_chain"],
 		"skills": {
-			"lmb": {"name": "내려베기", "desc": "느리지만 강한 공격. 피해의 10% 흡혈", "cd": 0.0},
+			"lmb": {"name": "내려베기", "desc": "느리지만 강한 공격, 피해의 10% 흡혈. 대검 강공격 뒤 좌클릭 = 두 번째 타격", "cd": 0.0},
 			"rmb": {"name": "방어", "desc": "누르는 동안 정면 피해 감소", "cd": 0.0},
 		},
 	},

@@ -70,6 +70,7 @@ var last_guard := -10.0
 var psi_rmb := true
 var combo_i := 0 # 로그 단검: 다음 찌르기 손 (0 = 오른손, 1 = 왼손)
 var heavy_t := -1.0 # 근접 좌클릭을 누르고 있는 시간 (강공격 준비, -1 = 안 누름)
+var torch_aim := false # 횃불을 든 채 우클릭을 누르고 있음 (던질 포물선 표시)
 var follow_q := false # 대검 차지 공격 중 좌클릭: 끝나면 두 번째 타격
 var follow_t := 0.0 # 대검 차지 공격이 끝난 뒤 두 번째 타격을 넣을 수 있는 남은 시간
 var staff_charging := false # R을 누르고 있어 지팡이 에너지 충전 중
@@ -597,8 +598,12 @@ func _combat(dt: float, act: bool) -> void:
 			attack_anim = 0.25
 			game.sfx("swing", pos)
 			game.melee_hit(self, 6.0 * dmg_mul(), 2.4, 1.6, {"knock": 1.0})
-		elif rmb_pressed and free:
-			throw_torch()
+		elif rmb_held and free:
+			torch_aim = true # 우클릭을 누르고 있는 동안 포물선으로 조준
+		elif torch_aim:
+			torch_aim = false
+			if free and act:
+				throw_torch() # 떼면 던짐
 	elif held != "":
 		blocking = false
 		if equipment.get(held) == null:
@@ -782,6 +787,7 @@ func pyro_stage() -> int:
 func set_held(k: String) -> void:
 	if held == k:
 		return
+	torch_aim = false
 	if drink_t > 0.0 and k != drink_slot:
 		cancel_drink() # 다른 것을 꺼내면 마시기/붕대 감기 취소
 	held = k
@@ -1100,7 +1106,7 @@ func net_state() -> Dictionary:
 		"cd": [cd.lmb, cd.rmb, cd.q, cd.e, cd.potion, cd.util, cd.flask],
 		"chg": charges, "hold": [hold_q, hold_e],
 		"s": [stun, slow, root, stealth, frozen, parry, immune, dr, spin_t, channel_t, charge_t, cast],
-		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "chr": channel_ready, "dw": draw_t, "ld": active_crossbow() != null and active_crossbow().get("loaded", false), "rl": reload_t, "ct": counter_t, "dk": drink_t, "dkm": drink_max, "dkk": drink_kind, "mf": mimic_form, "hv": heavy_t,
+		"sm2": slow_mul, "dot": dots.size(), "bl": blocking, "pa": panther, "hd": held, "tt": torch_t, "psi": psi_n if psi_on else -1, "chr": channel_ready, "dw": draw_t, "ld": active_crossbow() != null and active_crossbow().get("loaded", false), "rl": reload_t, "ct": counter_t, "dk": drink_t, "dkm": drink_max, "dkk": drink_kind, "mf": mimic_form, "hv": heavy_t, "ta": torch_aim,
 		"k": [kills, pvp_kills], "ch": ch,
 	}
 
@@ -1125,6 +1131,7 @@ func apply_net_state(d: Dictionary) -> void:
 	staff_charging = d.get("scg", false)
 	pyro_ready = d.get("pr", 0)
 	heavy_t = d.get("hv", -1.0)
+	torch_aim = d.get("ta", false)
 	if absf(stamina - d.sta) > 4.0:
 		stamina = d.sta
 	exhausted = d.ex
