@@ -1,0 +1,20 @@
+"AppBuild"
+{
+	"AppID" "__APP_ID__"
+	"Desc" "__DESC__"
+	"ContentRoot" "__CONTENT__"
+	"BuildOutput" "__OUTPUT__"
+	"Depots"
+	{
+		"__DEPOT_ID__"
+		{
+			"FileMapping"
+			{
+				"LocalPath" "windows/*"
+				"DepotPath" "."
+				"recursive" "1"
+			}
+			"FileExclusion" "*.pdb"
+		}
+	}
+}

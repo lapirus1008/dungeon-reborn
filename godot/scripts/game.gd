@@ -249,6 +249,7 @@ func build_level(d: int) -> void:
 				var si := i if pvp else 0
 				var p := Player.new(self, spawn_at.call(si, 0 if pvp else i), h.cls, h.equipment, h.bag, h.name, ("player_%d" % h.peer) if pvp else "player", h.peer, h.get("skills", {}), int(h.get("wset", 1)))
 				p.char_id = h.get("char", "")
+				p.acct = str(h.get("acct", ""))
 				players.append(p)
 				if h.peer == 1 and net == "host":
 					player = p
@@ -2384,6 +2385,9 @@ func finish_player(p, success: bool, killer := "") -> void:
 		Net.send_ev(p.peer_id, "result", [r])
 		Net.on_player_result(p.peer_id, r)
 		Net.player_left_raid(p.peer_id)
+	elif p.acct != "":
+		# 연결이 끊긴 채 끝남 (돌아오지 않았거나 그동안 죽음): 계정에 바로 반영
+		Net.apply_result_acct(p.acct, r)
 	var all_done := true
 	for h in players:
 		if not h.done:
@@ -2398,12 +2402,50 @@ func end_raid(success: bool, killer := "") -> void:
 
 
 # 접속이 끊긴 친구는 사망 처리
-func on_peer_left(id: int) -> void:
+# 전용 서버: 레이드 중 연결이 끊기면 바로 죽이지 않고 RECONNECT_SEC 동안 그 자리에 남겨 둠
+# (그동안 같은 계정으로 다시 접속하면 이어서 플레이). 시간이 지나면 예전처럼 사망 처리.
+# 돌려주는 값: 다시 붙을 수 있게 남겨 뒀으면 true (그 계정은 서버에서 내리지 않음)
+const RECONNECT_SEC := 90.0
+
+
+func on_peer_left(id: int) -> bool:
 	for p in players:
 		if p.peer_id == id and not p.done:
+			if net == "server" and p.alive and p.acct != "":
+				p.peer_id = -id
+				p.link_lost = RECONNECT_SEC
+				p.inp.set_held_bits(0) # 누르던 키를 떼고 제자리에 멈춤
+				p.inp.pending = {}
+				for h in players:
+					if h != p and h.peer_id > 1:
+						notify(h, "killfeed", ["%s 연결 끊김 (%d초 안에 돌아오면 이어서)" % [p.name, int(RECONNECT_SEC)], false, false])
+				return true
 			p.hp = 0.0
 			p.alive = false
 			finish_player(p, false, "연결 끊김")
+	return false
+
+
+# 같은 계정이 다시 접속: 남겨 둔 캐릭터에 새 연결을 붙임
+func reattach(acct: String, id: int):
+	for p in players:
+		if p.acct == acct and p.link_lost > 0.0 and not p.done and p.alive:
+			p.peer_id = id
+			p.link_lost = 0.0
+			p.has_net = false
+			return p
+	return null
+
+
+func _tick_link_lost(dt: float) -> void:
+	for p in players:
+		if p.link_lost > 0.0 and not p.done:
+			p.link_lost -= dt
+			if p.link_lost <= 0.0 or not p.alive:
+				p.link_lost = 0.0
+				p.hp = 0.0
+				p.alive = false
+				finish_player(p, false, "연결 끊김")
 
 
 # ------------------------------------------------------------------ 입력
@@ -2667,6 +2709,8 @@ func _process(delta: float) -> void:
 		return
 	time += dt
 	level_time += dt
+	if net == "server":
+		_tick_link_lost(dt)
 	if not over:
 		time_left -= dt
 	if time_left <= 120.0 and not warned:

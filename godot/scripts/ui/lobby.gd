@@ -117,6 +117,7 @@ func _ready() -> void:
 	# 설정 · 게임 종료 (전체 화면에서도 나갈 수 있게)
 	var sys := VBoxContainer.new()
 	sys.add_child(UI.button("⚙ 설정", func(): open_settings.emit(), 13))
+	sys.add_child(UI.button("ⓘ 정보", _show_credits, 13))
 	sys.add_child(UI.button("⏻ 게임 종료", func(): get_tree().quit(), 13))
 	top.add_child(sys)
 	root.add_child(top)
@@ -554,6 +555,26 @@ func _mp_host() -> void:
 	_mp_save_settings()
 	mp_msg = Net.host(mp_port, mp_name)
 	refresh()
+
+
+# 정보 창: 만든 이·에셋 라이선스, 엔진 라이선스, 빌드 번호
+func _show_credits() -> void:
+	var d := AcceptDialog.new()
+	d.title = "정보"
+	d.ok_button_text = "닫기"
+	d.theme = UI.theme
+	var sc := ScrollContainer.new()
+	sc.custom_minimum_size = Vector2(720, 460)
+	var t := RichTextLabel.new()
+	t.fit_content = true
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	t.text = Credits.TEXT + "\n빌드 " + BuildInfo.BUILD + "\n\n" + Engine.get_license_text()
+	sc.add_child(t)
+	d.add_child(sc)
+	add_child(d)
+	d.popup_centered()
+	d.confirmed.connect(d.queue_free)
+	d.canceled.connect(d.queue_free)
 
 
 func _steam_join() -> void:

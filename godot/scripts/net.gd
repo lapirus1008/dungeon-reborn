@@ -37,6 +37,9 @@ var prepare_left := 0.0
 var accounts: AccountStore = null # 서버: 계정 DB
 var peer_acct := {} # 서버: peer_id -> 계정 이름
 var pin := "" # 클라이언트: 로그인 PIN
+var last_join := {} # 클라이언트: 마지막 접속 정보 (끊겼을 때 자동 재접속)
+var last_was_account := false # 클라이언트: 마지막 접속이 서버 계정 로그인이었음
+var lost_raids := {} # 전용 서버: 레이드 중 끊긴 계정 -> 그 레이드 (다시 접속하면 이어서)
 var account_mode := false # 클라이언트: 접속한 서버가 계정 서버
 var rooms := {} # 맵 id -> {"members": [peer id], "t": 경과 초} (서버가 관리, 모두에게 복사)
 var raid_map := "" # 서버: 시작할 레이드의 맵
@@ -139,6 +142,7 @@ func join(address: String, port: int, pname: String, pin_code := "") -> String:
 	mode = "client"
 	my_name = pname
 	pin = pin_code
+	last_join = {"addr": address, "port": port, "name": pname, "pin": pin_code}
 	roster = {}
 	_set_status("%s:%d 에 접속 중..." % [address, port])
 	return ""
@@ -261,8 +265,11 @@ func _on_peer_disconnected(id: int) -> void:
 		return
 	var nm: String = roster.get(id, {}).get("name", "?")
 	var g = _game_of(id)
+	var kept := false
 	if g != null and is_instance_valid(g):
-		g.on_peer_left(id) # 계정 결과(사망) 반영 후 정리
+		kept = g.on_peer_left(id) # 계정 결과(사망) 반영 후 정리, 또는 다시 접속을 기다림
+	if kept and peer_acct.has(id):
+		lost_raids[peer_acct[id]] = g
 	peer_game.erase(id)
 	_pending_auth.erase(id)
 	_rate.erase(id)
@@ -272,9 +279,10 @@ func _on_peer_disconnected(id: int) -> void:
 	loadouts.erase(id)
 	_room_remove(id)
 	if peer_acct.has(id):
-		accounts.unload(peer_acct[id])
+		if not kept:
+			accounts.unload(peer_acct[id]) # 다시 접속을 기다리는 계정은 결과 반영 때까지 메모리에 둠
 		peer_acct.erase(id)
-	_set_status("%s 님이 나갔습니다" % nm)
+	_set_status("%s 님이 나갔습니다%s" % [nm, " (레이드 재접속 대기)" if kept else ""])
 	push_roster()
 
 
@@ -338,6 +346,19 @@ func hello(pname: String, cls: String, ver: String, pin_code: String) -> void:
 		peer_acct[id] = r.get("acct", nm)
 		cls = r.data.cls
 		account_sync.rpc_id(id, nm, r.data, {"msg": "새 계정을 만들었습니다 (서버에 저장됩니다)" if r.created else "%s 계정으로 로그인했습니다" % nm})
+		# 레이드 중에 끊겼던 계정: 남아 있던 캐릭터로 바로 돌아감
+		var lg = lost_raids.get(peer_acct[id])
+		if lg != null:
+			lost_raids.erase(peer_acct[id])
+			if is_instance_valid(lg) and lg.running:
+				var rp = lg.reattach(peer_acct[id], id)
+				if rp != null:
+					peer_game[id] = lg
+					roster[id] = {"name": nm, "cls": cls, "state": "raid"}
+					_set_status("%s 님이 레이드에 다시 들어왔습니다" % nm)
+					push_roster()
+					send_begin(id, lg.client_info(rp))
+					return
 	elif not Data.CLASSES.has(cls):
 		cls = "fighter"
 	roster[id] = {"name": nm, "cls": cls, "state": "lobby"}
@@ -798,6 +819,7 @@ func _sync_account(id: int, res: Dictionary) -> void:
 @rpc("authority", "reliable")
 func account_sync(nm: String, d: Dictionary, res: Dictionary) -> void:
 	account_mode = true
+	last_was_account = true
 	SaveData.use_account(nm, d)
 	SaveData.show_result(res)
 
@@ -824,6 +846,26 @@ func c_account_op(op: String, args: Array) -> void:
 			roster[id].cls = d.cls
 			push_roster()
 	_sync_account(id, res)
+
+
+# 서버: 연결이 끊긴 채 끝난 레이드 결과를 계정에 반영 (계정이 다시 로그인해 있으면 화면도 갱신)
+func apply_result_acct(acct: String, r: Dictionary) -> void:
+	lost_raids.erase(acct)
+	if accounts == null:
+		return
+	var d = accounts.get_data(acct)
+	if d == null:
+		return
+	Account.apply_result(d, r)
+	accounts.save(acct)
+	var online_id := -1
+	for id in peer_acct:
+		if peer_acct[id] == acct:
+			online_id = id
+	if online_id > 0:
+		_sync_account(online_id, {"msg": "끊긴 레이드: 돌아오지 못해 사망 처리되었습니다"})
+	else:
+		accounts.unload(acct)
 
 
 # 서버: 레이드 결과를 계정에 반영 (탈출 전리품 / 사망 손실)

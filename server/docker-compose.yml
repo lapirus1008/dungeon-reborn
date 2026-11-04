@@ -9,6 +9,11 @@ services:
       - "7777:7777/udp"
     volumes:
       - ./data:/data
+    # 스팀 계정 로그인 (선택): server/.env 파일에 STEAM_WEBAPI_KEY=... 와 STEAM_APP_ID=... 를 적으면 켜짐
+    # (없으면 이름 + PIN 로그인만). 키는 절대 저장소에 올리지 말 것 — docs/STEAM_RELEASE.md 참고
+    environment:
+      - STEAM_WEBAPI_KEY=${STEAM_WEBAPI_KEY:-}
+      - STEAM_APP_ID=${STEAM_APP_ID:-}
     # 보안: 권한 최소화 (시작할 때 /data 소유자만 맞추고 바로 일반 사용자로 내려감)
     cap_drop: [ALL]
     cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]

@@ -332,7 +332,7 @@ func _on_server_begin(loadouts: Dictionary) -> void:
 	for id in ids:
 		var lo: Dictionary = loadouts[id]
 		hs.append({"peer": id, "name": Net.roster.get(id, {}).get("name", "모험가"), "cls": lo.cls, "equipment": lo.equipment, "bag": lo.bag,
-			"skills": lo.get("skills", {}), "wset": int(lo.get("wset", 1)), "char": lo.get("char", "")})
+			"skills": lo.get("skills", {}), "wset": int(lo.get("wset", 1)), "char": lo.get("char", ""), "acct": Net.peer_acct.get(id, "")})
 	if dedicated:
 		game = Game.new()
 		add_child(game)
@@ -365,6 +365,19 @@ func _on_raid_over(g) -> void:
 func _on_net_disconnected(reason: String) -> void:
 	_restore_loadout()
 	UI.toast(reason)
+	# 전용 서버 레이드 중 갑자기 끊김: 서버가 캐릭터를 90초 동안 남겨 두므로 자동으로 다시 접속
+	var lost_raid: bool = mode == "raid" and game != null and game.net == "client" and game.result == null
+	if lost_raid and Net.last_was_account and not Net.last_join.is_empty() and not _reconnecting and not OS.get_cmdline_user_args().has("--mptest") \
+			and not (reason.contains("버전") or reason.contains("PIN") or reason.contains("가득") or reason.contains("제한") or reason.contains("요청")):
+		Net.game = null
+		game.queue_free()
+		game = null
+		if hud:
+			hud.queue_free()
+			hud = null
+		open_lobby()
+		_auto_reconnect()
+		return
 	if mode == "raid" and game != null and game.net == "client":
 		# 레이드 중 끊기면 사망과 같음 (소지품 손실)
 		if game.result == null and not SaveData.online:
@@ -379,6 +392,38 @@ func _on_net_disconnected(reason: String) -> void:
 		open_lobby()
 	elif lobby != null and lobby.visible:
 		lobby.refresh()
+
+
+var _reconnecting := false
+
+
+func _auto_reconnect() -> void:
+	_reconnecting = true
+	var info: Dictionary = Net.last_join.duplicate()
+	for attempt in 5:
+		UI.toast("연결이 끊겼습니다 — 레이드로 돌아가는 중... (%d/5)" % (attempt + 1))
+		await get_tree().create_timer(3.0).timeout
+		var pin_code: String = info.pin
+		if pin_code.begins_with("steam:"):
+			# 스팀 표는 한 번만 쓰므로 새로 받음
+			var hex := [""]
+			var got := [false]
+			SteamGlue.request_ticket(func(h): hex[0] = h; got[0] = true)
+			while not got[0]:
+				await get_tree().process_frame
+			if hex[0] == "":
+				continue
+			pin_code = "steam:" + hex[0]
+		Net.join(info.addr, int(info.port), info.name, pin_code)
+		var t := 0.0
+		while t < 8.0 and not SaveData.online:
+			await get_tree().create_timer(0.2).timeout
+			t += 0.2
+		if SaveData.online:
+			_reconnecting = false
+			return # 서버가 레이드를 이어서 보내 줌 (돌아갈 레이드가 없으면 로비에 머묾)
+	_reconnecting = false
+	UI.toast("다시 접속하지 못했습니다. 90초가 지나면 레이드는 사망 처리됩니다")
 
 
 # 전용 서버: godot --headless -- --server [--port 7777]
@@ -2452,6 +2497,8 @@ func _mptest(role: String) -> void:
 		await _mptest_account(port)
 	elif role == "raidjoin":
 		await _mptest_raidjoin(port)
+	elif role == "reconnect":
+		await _mptest_reconnect(port)
 	elif role == "sec":
 		await _mptest_sec(port)
 	else:
@@ -2719,7 +2766,7 @@ func _mptest_account(port: int) -> void:
 	SaveData.op("buy", ["short_bow"]) # 없는 물건: 서버가 거부해야 함
 	await _wait(1.0)
 	print("[mptest] 서버 상점 구매: 골드 %d -> %d (로컬 저장 골드 %d 그대로: %s)" % [g0, SaveData.data.gold, local_gold, SaveData.local_data.gold == local_gold])
-	# 레이드 시작 후 접속 끊기 -> 서버가 사망 처리, 장비 손실
+	# 레이드 시작 후 접속 끊기 -> 서버가 90초 동안 캐릭터를 남겨 둠 (그 안에 다시 로그인하면 복귀)
 	start_raid("clouseau_castle")
 	var t := 0.0
 	while (game == null or not game.running) and t < 30.0:
@@ -2740,7 +2787,8 @@ func _mptest_account(port: int) -> void:
 	print("[mptest] 틀린 PIN 로그인 거부: %s (%s)" % [not ok, Net.status])
 	await _wait(0.5)
 	ok = await login.call("123456")
-	print("[mptest] 재로그인 %s: 사망 %d, 입장 %d, 무기 %s, 골드 %d" % [ok, SaveData.data.stats.deaths, SaveData.data.stats.raids, SaveData.data.equipment.w1, SaveData.data.gold])
+	# 레이드 중 끊긴 계정은 90초 안에 다시 로그인하면 사망이 아니라 그 레이드로 돌아감
+	print("[mptest] 재로그인 %s: 사망 %d (끊긴 레이드로 복귀: %s), 입장 %d, 골드 %d" % [ok, SaveData.data.stats.deaths, game != null and game.running, SaveData.data.stats.raids, SaveData.data.gold])
 	Net.leave()
 	await _wait(0.5)
 
@@ -2786,6 +2834,47 @@ func _mptest_raidjoin(port: int) -> void:
 		print("[mptest] 높이: 내 캐릭터-땅 %s, 몬스터 %d/%d 어긋남, 상자 %d/%d 어긋남, 언덕 %s" % [ys, bad_a, na, bad_c, game.chests.size(), not dg.hv.is_empty()])
 	await _wait(3.0)
 	print("[mptest] 레이드 유지 %s" % (game != null and game.running))
+	Net.leave()
+	await _wait(0.5)
+
+
+# 전용 서버 재접속: 레이드 중 연결이 끊겨도 90초 안에 같은 계정으로 들어오면 같은 캐릭터로 이어서
+func _mptest_reconnect(port: int) -> void:
+	var nm := "재접속%d" % (randi() % 100000)
+	Net.join("127.0.0.1", port, nm, "123456")
+	var t := 0.0
+	while not SaveData.online and t < 10.0:
+		await _wait(0.1)
+		t += 0.1
+	start_raid("sinners_end_1")
+	t = 0.0
+	while (game == null or not game.running) and t < 40.0:
+		await _wait(0.1)
+		t += 0.1
+	if game == null or not game.running:
+		print("[mptest] 재접속: 레이드 입장 실패")
+		return
+	await _wait(2.0)
+	var nid0: int = game.player.nid
+	var w0 = game.player.equipment.w1
+	var w0b: String = w0.base if w0 != null else ""
+	print("[mptest] 재접속: 레이드 입장 true (내 번호 %d)" % nid0)
+	var g_old = game
+	Net.leave() # 갑자기 끊김
+	await _wait(2.0)
+	Net.join("127.0.0.1", port, nm, "123456")
+	t = 0.0
+	var back := false
+	while t < 20.0:
+		await _wait(0.2)
+		t += 0.2
+		if game != null and game != g_old and is_instance_valid(game) and game.running and game.net == "client" and game.player != null and game.player.nid == nid0:
+			back = true
+			break
+	var w1 = game.player.equipment.w1 if back else null
+	var same_gear: bool = back and (w1.base if w1 != null else "") == w0b
+	print("[mptest] 재접속: 같은 캐릭터로 레이드 복귀 %s (%.1f초), 장비 그대로 %s" % [back, t, same_gear])
+	await _wait(2.0)
 	Net.leave()
 	await _wait(0.5)
 
