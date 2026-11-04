@@ -10,6 +10,9 @@ const RAID_TIME := 900.0 # 15분
 var loadout: Dictionary
 var quality := "mid"
 var sensitivity := 0.0022
+var base_fov := 75.0 # 설정: 시야각
+var invert_y := false # 설정: 마우스 상하 반전
+var shake_mul := 1.0 # 설정: 화면 흔들림 세기
 var world: Node3D
 var camera: Camera3D
 var env: WorldEnvironment
@@ -378,7 +381,7 @@ func _reset_lists(d: int) -> void:
 # 카메라, 손전등, 1인칭 뷰모델 (로컬 플레이어가 있을 때만)
 func _make_view() -> void:
 	camera = Camera3D.new()
-	camera.fov = 75.0
+	camera.fov = base_fov
 	camera.near = 0.05
 	camera.far = 90.0
 	world.add_child(camera)
@@ -2408,7 +2411,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not running or player == null or hud == null:
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and player.alive and not player.done:
-		player.look(event.relative, sensitivity)
+		player.look(Vector2(event.relative.x, -event.relative.y if invert_y else event.relative.y), sensitivity)
 
 
 # 상호작용 대상 (상자, 전리품)

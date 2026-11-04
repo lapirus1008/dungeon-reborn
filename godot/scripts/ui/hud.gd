@@ -5,6 +5,7 @@ extends CanvasLayer
 signal menu_resume
 signal menu_abandon
 signal setting_changed(key: String, value)
+signal menu_settings
 
 var game
 var container = null # 열려 있는 상자/전리품 Dictionary
@@ -504,39 +505,7 @@ func _build_menu() -> void:
 	v.add_child(_centered(UI.title("메뉴")))
 	v.add_child(_centered(UI.label("⚠ 게임은 계속 진행 중입니다", 15, Color("#ff8a6a"))))
 	v.add_child(UI.button("돌아가기 (Esc)", func(): menu_resume.emit()))
-	var sh := HBoxContainer.new()
-	sh.add_child(UI.label("마우스 감도", 14, UI.MUTED))
-	sens_slider = HSlider.new()
-	sens_slider.min_value = 0.3
-	sens_slider.max_value = 3.0
-	sens_slider.step = 0.1
-	sens_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sens_slider.value = SaveData.setting("sensitivity", 1.0)
-	sens_slider.value_changed.connect(func(v2): setting_changed.emit("sensitivity", v2))
-	sh.add_child(sens_slider)
-	v.add_child(sh)
-	var qh := HBoxContainer.new()
-	qh.add_child(UI.label("그래픽 품질", 14, UI.MUTED))
-	quality_opt = OptionButton.new()
-	quality_opt.add_item("낮음 (빠름)")
-	quality_opt.add_item("보통")
-	quality_opt.add_item("높음 (선명)")
-	quality_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	quality_opt.selected = ["low", "mid", "high"].find(SaveData.setting("quality", "low" if UI.touch else "mid"))
-	quality_opt.item_selected.connect(func(i): setting_changed.emit("quality", ["low", "mid", "high"][i]))
-	qh.add_child(quality_opt)
-	v.add_child(qh)
-	# 화면 동기화 / 프레임 제한
-	var fh := HBoxContainer.new()
-	fh.add_child(UI.label("프레임", 14, UI.MUTED))
-	var fps_opt := OptionButton.new()
-	for t in FPS_MODES:
-		fps_opt.add_item(t[1])
-	fps_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	fps_opt.selected = maxi(0, FPS_MODES.map(func(t): return t[0]).find(SaveData.setting("fps", "60" if UI.touch else "adaptive")))
-	fps_opt.item_selected.connect(func(i): setting_changed.emit("fps", FPS_MODES[i][0]))
-	fh.add_child(fps_opt)
-	v.add_child(fh)
+	v.add_child(UI.button("⚙ 설정 (화면 · 소리 · 조작 · 키)", func(): menu_settings.emit()))
 	v.add_child(UI.button("레이드 포기 (소지품 상실)", func(): menu_abandon.emit(), 13))
 	c.add_child(p)
 	menu.visible = false
@@ -1070,6 +1039,7 @@ func update_hud(dt: float) -> void:
 			SaveData.setting("quality", "low" if UI.touch else "mid"), " · 디버그 실행(에디터)" if OS.is_debug_build() else ""]
 	else:
 		fps_label.text = "%d FPS (F3: 자세히)" % Engine.get_frames_per_second()
+	fps_label.visible = perf_detail or bool(SaveData.setting("show_fps", false))
 
 
 # 단축칸 컬러 그림 (무기 세트는 주/보조 2개). 그림이 없는 아이템은 이름 칸에 이모지

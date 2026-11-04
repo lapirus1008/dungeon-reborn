@@ -18,6 +18,7 @@ var master_volume := 0.8
 func _ready() -> void:
 	for i in POOL:
 		var p := AudioStreamPlayer.new()
+		p.bus = &"SFX" # 설정의 효과음 크기 (버스는 Main이 만듦, 없으면 Master)
 		add_child(p)
 		players.append(p)
 	_build()

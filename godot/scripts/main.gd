@@ -2,6 +2,7 @@
 extends Node
 
 var lobby: Lobby
+var settings_panel: SettingsPanel
 var game: Game
 var hud: Hud
 var results: Control
@@ -59,6 +60,12 @@ func _ready() -> void:
 	drag.theme = UI.theme
 	overlay.add_child(drag)
 	overlay.move_child(drag, overlay.get_child_count() - 2)
+	# 설정 창 (로비·레이드 공용, 모든 화면 위)
+	settings_panel = SettingsPanel.new()
+	settings_panel.theme = UI.theme
+	settings_panel.setting_changed.connect(_on_setting)
+	settings_panel.closed.connect(_update_mouse)
+	overlay.add_child(settings_panel)
 	if UI.touch:
 		var tc := TouchControls.new()
 		tc.main = self
@@ -78,6 +85,9 @@ func _ready() -> void:
 		return
 	apply_quality(SaveData.setting("quality", default_quality()))
 	apply_fps(SaveData.setting("fps", "60" if UI.touch else "adaptive"))
+	apply_window(SaveData.setting("window", "borderless"))
+	apply_audio()
+	apply_keys()
 	_build_results()
 	open_lobby()
 	_warmup_models.call_deferred()
@@ -140,13 +150,16 @@ func _ready() -> void:
 		_screenshots.call_deferred(args[args.find("--screenshots") + 1])
 
 
+const DEFAULT_KEYS := {
+	"move_forward": [KEY_W], "move_back": [KEY_S], "move_left": [KEY_A], "move_right": [KEY_D],
+	"jump": [KEY_SPACE], "walk": [KEY_SHIFT], "crouch": [KEY_CTRL, KEY_C], "skill_q": [KEY_Q], "skill_e": [KEY_E],
+	"interact": [KEY_F], "inventory": [KEY_TAB, KEY_I], "map": [KEY_M],
+	"weapon1": [KEY_1], "weapon2": [KEY_2], "use3": [KEY_3], "use4": [KEY_4], "use5": [KEY_5], "torch": [KEY_G], "reload": [KEY_R], "menu": [KEY_ESCAPE],
+}
+
+
 func _setup_input() -> void:
-	var keys := {
-		"move_forward": [KEY_W], "move_back": [KEY_S], "move_left": [KEY_A], "move_right": [KEY_D],
-		"jump": [KEY_SPACE], "walk": [KEY_SHIFT], "crouch": [KEY_CTRL, KEY_C], "skill_q": [KEY_Q], "skill_e": [KEY_E],
-		"interact": [KEY_F], "inventory": [KEY_TAB, KEY_I], "map": [KEY_M],
-		"weapon1": [KEY_1], "weapon2": [KEY_2], "use3": [KEY_3], "use4": [KEY_4], "use5": [KEY_5], "torch": [KEY_G], "reload": [KEY_R], "menu": [KEY_ESCAPE],
-	}
+	var keys := DEFAULT_KEYS
 	for action in keys:
 		if not InputMap.has_action(action):
 			InputMap.add_action(action)
@@ -202,6 +215,11 @@ func apply_quality(q: String) -> void:
 			vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR
 			vp.scaling_3d_scale = 0.85
 			vp.msaa_3d = Viewport.MSAA_DISABLED
+	# 설정에서 3D 해상도를 직접 정했으면 그 값 (1 미만이면 FSR로 키움)
+	if not bool(SaveData.setting("render_auto", true)):
+		var rs := clampf(float(SaveData.setting("render_scale", 1.0)), 0.5, 1.0)
+		vp.scaling_3d_scale = rs
+		vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR if rs < 0.99 else Viewport.SCALING_3D_MODE_BILINEAR
 	if game and is_instance_valid(game):
 		game.quality = q
 		if game.player_light:
@@ -226,6 +244,7 @@ func open_lobby() -> void:
 	if lobby == null:
 		lobby = Lobby.new()
 		lobby.start_raid.connect(start_raid)
+		lobby.open_settings.connect(open_settings)
 		lobby.theme = UI.theme
 		add_child(lobby)
 		lobby.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -275,6 +294,7 @@ func _create_game() -> void:
 	game = Game.new()
 	game.quality = SaveData.setting("quality", default_quality())
 	game.sensitivity = 0.0022 * float(SaveData.setting("sensitivity", 1.0))
+	_apply_game_settings.call_deferred()
 	add_child(game)
 	hud = Hud.new()
 	add_child(hud)
@@ -283,6 +303,7 @@ func _create_game() -> void:
 		_close_menu()
 		game.abandon())
 	hud.setting_changed.connect(_on_setting)
+	hud.menu_settings.connect(open_settings)
 	game.raid_ended.connect(_on_raid_ended)
 	game.raid_over.connect(_on_raid_over.bind(game))
 
@@ -388,10 +409,97 @@ func _on_setting(key: String, value) -> void:
 	SaveData.set_setting(key, value)
 	if key == "sensitivity" and game:
 		game.sensitivity = 0.0022 * float(value)
-	elif key == "quality":
-		apply_quality(value)
+	elif key == "quality" or key == "render_scale" or key == "render_auto":
+		apply_quality(SaveData.setting("quality", default_quality()))
 	elif key == "fps":
 		apply_fps(value)
+	elif key == "window":
+		apply_window(value)
+	elif key in ["vol_master", "vol_sfx", "mute_unfocused"]:
+		apply_audio()
+	elif key == "keys":
+		apply_keys()
+	elif game != null and is_instance_valid(game):
+		_apply_game_settings()
+	SaveData.save()
+
+
+# 레이드 안에서 바로 쓰는 설정: 시야각, 상하 반전, 화면 흔들림, FPS 표시
+func _apply_game_settings() -> void:
+	if game == null or not is_instance_valid(game):
+		return
+	game.sensitivity = 0.0022 * float(SaveData.setting("sensitivity", 1.0))
+	game.base_fov = float(SaveData.setting("fov", 75.0))
+	game.invert_y = bool(SaveData.setting("invert_y", false))
+	game.shake_mul = float(SaveData.setting("shake", 1.0))
+	if hud != null:
+		hud.fps_label.visible = bool(SaveData.setting("show_fps", false)) or hud.perf_detail
+
+
+# 화면 모드: 기본은 테두리 없는 전체 화면 (알트탭이 빠름). 휴대폰·자동 테스트는 건드리지 않음
+func apply_window(mode: String) -> void:
+	if UI.touch or DisplayServer.get_name() == "headless" or _test_run():
+		return
+	match mode:
+		"fullscreen":
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN)
+		"windowed":
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		_:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+
+
+static func _test_run() -> bool:
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--") and (a.ends_with("shots") or a.ends_with("test") or a.ends_with("probe")):
+			return true
+	return false
+
+
+# 소리: 전체(Master)와 효과음(SFX 버스) 크기, 창이 뒤로 가면 끄기
+func apply_audio() -> void:
+	if AudioServer.get_bus_index("SFX") < 0:
+		AudioServer.add_bus()
+		AudioServer.set_bus_name(AudioServer.bus_count - 1, "SFX")
+		AudioServer.set_bus_send(AudioServer.bus_count - 1, "Master")
+	var vm := float(SaveData.setting("vol_master", 0.8))
+	var vs := float(SaveData.setting("vol_sfx", 1.0))
+	var muted := bool(SaveData.setting("mute_unfocused", true)) and not _focused
+	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(vm, 0.0001)))
+	AudioServer.set_bus_mute(0, muted or vm <= 0.001)
+	var si := AudioServer.get_bus_index("SFX")
+	AudioServer.set_bus_volume_db(si, linear_to_db(maxf(vs, 0.0001)))
+	AudioServer.set_bus_mute(si, vs <= 0.001)
+
+
+var _focused := true
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		_focused = false
+		apply_audio()
+	elif what == NOTIFICATION_APPLICATION_FOCUS_IN:
+		_focused = true
+		apply_audio()
+
+
+# 키 바꾸기: 저장된 키로 각 동작의 첫 키를 바꿈 (나머지 보조 키는 기본값 유지)
+func apply_keys() -> void:
+	var keys: Dictionary = SaveData.setting("keys", {})
+	for b in SettingsPanel.BINDABLE:
+		var action: String = b[0]
+		if not InputMap.has_action(action):
+			continue
+		var evs := InputMap.action_get_events(action).filter(func(e): return e is InputEventKey)
+		var want: int = int(keys.get(action, DEFAULT_KEYS[action][0]))
+		if evs.size():
+			(evs[0] as InputEventKey).physical_keycode = want
+
+
+func open_settings() -> void:
+	settings_panel.open()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func _open_menu() -> void:
@@ -1017,6 +1125,12 @@ func _flowshots(dir: String) -> void:
 	SaveData.data.equipment.w1o = Data.make_item("old_sword")
 	open_lobby()
 	await _wait(1.0)
+	open_settings()
+	for ti in 4:
+		settings_panel._tabs.current_tab = ti
+		await _wait(0.3)
+		await _shot(dir, "flow_0_settings_%d" % ti)
+	settings_panel.close()
 	lobby._open_maps()
 	await _wait(0.4)
 	await _shot(dir, "flow_1_maps")
@@ -2572,6 +2686,16 @@ func _mptest_sec(port: int) -> void:
 		await _wait(0.1)
 		t += 0.1
 	print("[mptest] 4자리 PIN 새 계정 거부 %s (%s)" % [not SaveData.online or not Net.online(), reason])
+	# 스팀 로그인: 웹 API 키가 없는 서버는 정중히 거절 (가짜 표로 로그인 불가)
+	reason = ""
+	Net.leave()
+	await _wait(0.5)
+	Net.join("127.0.0.1", port, "스팀가짜", "steam:" + "ab".repeat(100))
+	t = 0.0
+	while Net.online() and t < 6.0:
+		await _wait(0.1)
+		t += 0.1
+	print("[mptest] 스팀 키 없는 서버에서 스팀 로그인 거절 %s (%s)" % [not SaveData.online and Net.status.contains("스팀"), Net.status])
 	Net.disconnected.disconnect(cb)
 
 
@@ -2805,6 +2929,15 @@ func _inv_checks() -> Array:
 	store.login("새계정3", "111111", "1.2.3.4")
 	var capped: bool = not store.login("새계정4", "111111", "1.2.3.4").ok and store.login("새계정5", "111111", "5.6.7.8").ok
 	ok.call("서버 계정 보호 (PIN 5회 실패 잠금 %s, 주소당 새 계정 3개 %s)" % [locked, capped], locked and capped)
+	# 스팀 계정: 스팀 ID로 저장, 다시 들어오면 같은 계정 (닉네임이 바뀌어도 그대로), PIN 계정과 섞이지 않음
+	var s1 := store.login_steam("76561198000000001", "스팀용사")
+	s1.data.gold = 777
+	store.save(s1.acct)
+	store.cache.clear()
+	var s2 := store.login_steam("76561198000000001", "새닉네임")
+	var s3 := store.login_steam("76561198000000002", "다른사람")
+	var steam_ok: bool = s1.created and not s2.created and int(s2.data.gold) == 777 and s2.name == "새닉네임" and s3.created and s3.acct != s1.acct
+	ok.call("스팀 계정 로그인 (새 계정 %s, 다시 로그인 시 그대로 %s, 닉네임 갱신 %s)" % [s1.created, int(s2.data.gold) == 777, s2.name == "새닉네임"], steam_ok)
 	# 1세트 검/방패 · 2세트 장검: 가방의 방패 우클릭 → 1세트 보조 칸과 교체
 	var seq := Account.empty_equipment()
 	seq.w1 = Data.make_item("old_sword") if Data.ITEM_BASES.has("old_sword") else Data.make_item("old_longsword")

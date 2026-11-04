@@ -84,6 +84,31 @@ func login(nm: String, pin: String, ip := "") -> Dictionary:
 	return {"ok": true, "data": rec.data, "name": rec.name, "created": false}
 
 
+# 스팀 계정 로그인 (서버가 스팀에서 표 확인을 마친 뒤 부름): 계정 키는 스팀 ID, 이름은 스팀 닉네임
+# 반환 acct = 이 계정을 가리키는 내부 이름 ("steam:<id>", 저장·불러오기에 씀)
+func login_steam(steamid: String, persona: String) -> Dictionary:
+	var acct := "steam:" + steamid
+	var k := key_of(acct)
+	var rec = cache.get(k)
+	if rec == null:
+		rec = _read(k)
+	var shown := persona.strip_edges().left(16)
+	if shown.length() < 2:
+		shown = "모험가" + steamid.right(4)
+	var created := false
+	if rec == null:
+		rec = {"name": shown, "salt": "", "hash": "steam", "steamid": steamid, "data": Account.fresh(), "created": Time.get_datetime_string_from_system(true)}
+		rec.data.erase("settings")
+		created = true
+	else:
+		rec.name = shown
+		rec.data = Account.normalize(rec.data)
+		rec.data.erase("settings")
+	cache[k] = rec
+	_write(k, rec)
+	return {"ok": true, "data": rec.data, "name": shown, "acct": acct, "created": created}
+
+
 func get_data(nm: String):
 	var rec = cache.get(key_of(nm))
 	return rec.data if rec != null else null

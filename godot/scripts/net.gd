@@ -289,7 +289,8 @@ func hello(pname: String, cls: String, ver: String, pin_code: String) -> void:
 	# 이미 로그인한 연결의 재로그인(다른 계정으로 바꿔치기)과 비정상적으로 긴 값은 거부
 	if roster.has(id) or peer_acct.has(id):
 		return
-	if pname.length() > 64 or cls.length() > 32 or ver.length() > 64 or pin_code.length() > 64:
+	var steam_login := pin_code.begins_with("steam:")
+	if pname.length() > 64 or cls.length() > 32 or ver.length() > 64 or pin_code.length() > (STEAM_TICKET_MAX if steam_login else 64):
 		_kick_peer(id, "잘못된 접속 정보")
 		return
 	if ver != version:
@@ -313,12 +314,28 @@ func hello(pname: String, cls: String, ver: String, pin_code: String) -> void:
 			var pp: ENetPacketPeer = mp.get_peer(id)
 			if pp != null:
 				ip = pp.get_remote_address()
-		var r := accounts.login(nm, pin_code, ip)
+		var r: Dictionary
+		if steam_login:
+			# 스팀: 서버가 스팀에 표(티켓)를 보내 진짜 그 스팀 계정인지 확인 (PIN 없음)
+			_pending_auth.erase(id) # 확인하는 몇 초 동안 '로그인 안 함'으로 끊지 않게
+			var v: Dictionary = await _steam_verify(pin_code.substr(6))
+			if not _alive(id) or roster.has(id) or peer_acct.has(id):
+				return
+			if not v.ok:
+				kicked.rpc_id(id, v.msg)
+				return
+			for other in peer_acct:
+				if peer_acct[other] == "steam:" + str(v.steamid):
+					kicked.rpc_id(id, "이미 접속 중인 계정입니다")
+					return
+			r = accounts.login_steam(str(v.steamid), nm)
+		else:
+			r = accounts.login(nm, pin_code, ip)
 		if not r.ok:
 			kicked.rpc_id(id, r.msg)
 			return
 		nm = r.name
-		peer_acct[id] = nm
+		peer_acct[id] = r.get("acct", nm)
 		cls = r.data.cls
 		account_sync.rpc_id(id, nm, r.data, {"msg": "새 계정을 만들었습니다 (서버에 저장됩니다)" if r.created else "%s 계정으로 로그인했습니다" % nm})
 	elif not Data.CLASSES.has(cls):
@@ -326,6 +343,41 @@ func hello(pname: String, cls: String, ver: String, pin_code: String) -> void:
 	roster[id] = {"name": nm, "cls": cls, "state": "lobby"}
 	_set_status("%s 님이 들어왔습니다" % nm)
 	push_roster()
+
+
+# 스팀 로그인 확인 (전용 서버): 스팀 웹 API로 클라이언트가 보낸 표(티켓)를 검사해 스팀 ID를 얻음.
+# 서버 환경 변수 STEAM_WEBAPI_KEY(스팀웍스 퍼블리셔 웹 API 키)와 STEAM_APP_ID 가 있어야 함
+const STEAM_TICKET_MAX := 4096
+const STEAM_IDENTITY := "dungeonreborn" # 클라이언트 GetAuthTicketForWebApi 와 같은 값
+
+
+func _steam_verify(ticket_hex: String) -> Dictionary:
+	var key := OS.get_environment("STEAM_WEBAPI_KEY")
+	var app := OS.get_environment("STEAM_APP_ID")
+	if key == "" or app == "":
+		return {"ok": false, "msg": "이 서버는 스팀 로그인이 설정되지 않았습니다 (이름 + PIN으로 접속하세요)"}
+	if ticket_hex.length() < 16 or not ticket_hex.is_valid_hex_number():
+		return {"ok": false, "msg": "스팀 인증 정보가 올바르지 않습니다"}
+	var http := HTTPRequest.new()
+	http.timeout = 10.0
+	add_child(http)
+	var url := "https://partner.steam-api.com/ISteamUserAuth/AuthenticateUserTicket/v1/?key=%s&appid=%s&ticket=%s&identity=%s" % [key, app, ticket_hex, STEAM_IDENTITY]
+	if http.request(url) != OK:
+		http.queue_free()
+		return {"ok": false, "msg": "스팀 인증 서버에 연결하지 못했습니다"}
+	var res: Array = await http.request_completed
+	http.queue_free()
+	if res[0] != HTTPRequest.RESULT_SUCCESS or res[1] != 200:
+		return {"ok": false, "msg": "스팀 인증에 실패했습니다 (잠시 후 다시 시도하세요)"}
+	var j = JSON.parse_string((res[3] as PackedByteArray).get_string_from_utf8())
+	if not (j is Dictionary) or not j.has("response") or not j.response.has("params"):
+		return {"ok": false, "msg": "스팀 인증에 실패했습니다"}
+	var prm: Dictionary = j.response.params
+	if str(prm.get("result", "")) != "OK" or not prm.has("steamid"):
+		return {"ok": false, "msg": "스팀 인증에 실패했습니다"}
+	if prm.get("publisherbanned", false) or prm.get("vacbanned", false):
+		return {"ok": false, "msg": "이용이 제한된 계정입니다"}
+	return {"ok": true, "steamid": str(prm.steamid)}
 
 
 @rpc("authority", "reliable")
@@ -739,7 +791,8 @@ func s_evu(n: String, args: Array) -> void:
 # ------------------------------------------------------------------ 온라인 서버 계정
 func _sync_account(id: int, res: Dictionary) -> void:
 	if peer_acct.has(id) and _alive(id):
-		account_sync.rpc_id(id, peer_acct[id], accounts.get_data(peer_acct[id]), res)
+		var shown: String = roster[id].name if roster.has(id) else peer_acct[id]
+		account_sync.rpc_id(id, shown, accounts.get_data(peer_acct[id]), res)
 
 
 @rpc("authority", "reliable")

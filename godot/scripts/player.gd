@@ -1046,8 +1046,8 @@ func update_camera(cam: Camera3D, vm: Node3D, bubble: MeshInstance3D, dt: float)
 	var sy := 0.0
 	if shake > 0.0:
 		shake -= dt
-		sx = randf_range(-0.5, 0.5) * shake * 0.15
-		sy = randf_range(-0.5, 0.5) * shake * 0.15
+		sx = randf_range(-0.5, 0.5) * shake * 0.15 * game.shake_mul
+		sy = randf_range(-0.5, 0.5) * shake * 0.15 * game.shake_mul
 	var spin_roll := sin(spin_t * 18.0) * 0.03 if spin_t > 0.0 else 0.0
 	# 휘두르는 방향으로 화면이 아주 살짝 따라 돔 (몸통을 쓰는 느낌)
 	var swing_roll := 0.0
@@ -1055,7 +1055,7 @@ func update_camera(cam: Camera3D, vm: Node3D, bubble: MeshInstance3D, dt: float)
 		var sk: float = clampf(swing.t / swing.prof.dur, 0.0, 1.0)
 		swing_roll = sin(sk * PI) * 0.025 * signf(swing.side) * (1.6 if swing.prof.get("power", false) else 1.0)
 	cam.rotation = Vector3(pitch + sx + flinch, yaw + sy, spin_roll + roll + swing_roll)
-	var target_fov := 82.0 if (sprinting and moving) or panther else 75.0
+	var target_fov: float = game.base_fov + (7.0 if (sprinting and moving) or panther else 0.0)
 	cam.fov = lerpf(cam.fov, target_fov, minf(1.0, dt * 10.0))
 
 	# 보호막 구체

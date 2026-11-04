@@ -3,6 +3,7 @@ class_name Lobby
 extends Control
 
 signal start_raid(map: String)
+signal open_settings
 
 const SHOP := Account.SHOP
 
@@ -113,6 +114,11 @@ func _ready() -> void:
 	gold_label = UI.label("", 22, UI.GOLD)
 	gold_panel.add_child(gold_label)
 	top.add_child(gold_panel)
+	# 설정 · 게임 종료 (전체 화면에서도 나갈 수 있게)
+	var sys := VBoxContainer.new()
+	sys.add_child(UI.button("⚙ 설정", func(): open_settings.emit(), 13))
+	sys.add_child(UI.button("⏻ 게임 종료", func(): get_tree().quit(), 13))
+	top.add_child(sys)
 	root.add_child(top)
 
 	var body := HBoxContainer.new()
@@ -202,7 +208,8 @@ func _ready() -> void:
 	scroll.add_child(right_box)
 	rv.add_child(scroll)
 	body.add_child(right)
-	mp_name = SaveData.setting("mp_name", "모험가%d" % randi_range(10, 99))
+	# 스팀으로 실행하면 기본 이름은 스팀 닉네임
+	mp_name = SaveData.setting("mp_name", SteamGlue.persona.left(16) if SteamGlue.available else "모험가%d" % randi_range(10, 99))
 	mp_addr = SaveData.setting("mp_addr", "127.0.0.1")
 	Net.roster_changed.connect(func(): if visible: refresh())
 	SaveData.changed.connect(func(): if visible: refresh())
@@ -475,6 +482,9 @@ func _render_online() -> void:
 		port_edit.text_changed.connect(func(t): mp_port = int(t) if t.is_valid_int() else Net.PORT)
 		nh.add_child(port_edit)
 		v.add_child(nh)
+		if SteamGlue.available:
+			# 스팀으로 실행: 스팀 계정으로 바로 로그인 (PIN 없음, 서버가 스팀에 확인)
+			v.add_child(UI.big_button("🎮 스팀 계정으로 온라인 접속 (%s)" % SteamGlue.persona, _steam_join))
 		v.add_child(UI.button("☁ 공식 온라인 서버 접속 (이름 + PIN 필요)", func():
 			mp_addr = Net.OFFICIAL_SERVER
 			mp_port = Net.PORT
@@ -544,6 +554,17 @@ func _mp_host() -> void:
 	_mp_save_settings()
 	mp_msg = Net.host(mp_port, mp_name)
 	refresh()
+
+
+func _steam_join() -> void:
+	mp_msg = "스팀 인증 준비 중..."
+	refresh()
+	SteamGlue.request_ticket(func(hex: String):
+		if hex == "":
+			mp_msg = "스팀 인증 표를 받지 못했습니다. 이름 + PIN으로 접속하세요"
+		else:
+			mp_msg = Net.join(Net.OFFICIAL_SERVER, Net.PORT, SteamGlue.persona, "steam:" + hex)
+		refresh())
 
 
 func _mp_join() -> void:
